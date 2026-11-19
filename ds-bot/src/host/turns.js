@@ -11,6 +11,7 @@ import { absoluteLinks } from './links.js'
 import { splitRef, textOf } from './text.js'
 import { threadCurrentOfPart } from './threads.js'
 import { viaOf } from '../shared/im-platforms.js'
+import { isForbiddenQuota } from '../shared/provider-quota.js'
 import { reminderText } from './schedules.js'
 import { usageChunk } from './usage.js'
 
@@ -38,6 +39,10 @@ const requestIdOf = (message) => {
 export function turnFailure(error) {
   const rawCode = typeof error?.code === 'string' && error.code !== '' ? error.code : 'UNKNOWN'
   const raw = typeof error?.message === 'string' ? error.message.trim() : ''
+  if (isForbiddenQuota(error)) {
+    return { code: 'QUOTA', status: 403, message: '',
+      ...(typeof error.requestId === 'string' && error.requestId !== '' ? { requestId: error.requestId } : {}) }
+  }
   const contentPolicy = rawCode === 'AUTH' && error?.status === 403 && CONTENT_POLICY.test(raw)
   const code = contentPolicy ? 'CONTENT_POLICY' : rawCode
   const message = code === 'AUTH' || raw === '' ? '' : cleanText(raw).slice(0, 500)
@@ -748,12 +753,13 @@ export function install(rt) {
   // (roster.js). Never the message: a provider may echo part of the key. The provider
   // is the failing route's, which is the Session's last request, else the model the
   // Bot runs on.
-  const blockBot = (id, session, failure) => {
+  const blockBot = (id, session, turn, failure) => {
     const bot = rt.botOf(rt.selfOf(id))
     if (bot === undefined || !BLOCKING_CODES.has(failure.code)) return false
     const provider = session?.requestHeader?.()?.config?.provider ?? splitRef(bot.appliedModel)?.provider
     bot.blocked = {
       code: failure.code,
+      ...(Number.isSafeInteger(turn) ? { sessionId: id, turn } : {}),
       ...(failure.status === undefined ? {} : { status: failure.status }),
       ...(failure.requestId === undefined ? {} : { requestId: failure.requestId }),
       ...(provider ? { provider } : {}),
@@ -966,7 +972,14 @@ export function install(rt) {
     const decision = await next()
     if (decision.kind === 'reject' || signal.aborted || !rt.isBotSession(agent.id)) return decision
     const entry = live.get(agent.id)
-    if (entry === undefined || entry.turn === undefined || entry.recoveryInjected) return decision
+    if (entry === undefined || entry.turn === undefined || entry.recoveryStepHandled) return decision
+    // A periodic review must keep its own trigger through every step. A
+    // prepended business recovery would claim the turn and its completion.
+    if (decision.messages.some(({ source }) => source?.kind === SOURCE_KIND && source.reviewId
+      && (source.role === 'goal' || source.role === 'room'))) {
+      entry.recoveryStepHandled = true
+      return decision
+    }
     await reconcilePending(agent.id, signal)
     if (signal.aborted) return decision
     const pending = state.pendingInputs?.[agent.id] ?? []
@@ -978,10 +991,10 @@ export function install(rt) {
     const currentIds = new Set([...(entry.turnInputs ?? []).map(item => item.id), ...(entry.recoveryIds ?? [])])
     const recoveryIds = pending.map(item => item.id).filter(id => !currentIds.has(id))
     if (recoveryIds.length === 0) {
-      entry.recoveryInjected = inStep.length > 0
+      entry.recoveryStepHandled = inStep.length > 0
       return decision
     }
-    entry.recoveryInjected = true
+    entry.recoveryStepHandled = true
     entry.turnRecoveryKey = randomUUID()
     const recovery = createUserMessage({
       content: [{ type: 'text', text: RECOVERY_TEXT }],
@@ -1073,7 +1086,7 @@ export function install(rt) {
         entry.turn = event.data.turn
         entry.turnInputs = []
         entry.recoveryIds = []
-        entry.recoveryInjected = false
+        entry.recoveryStepHandled = false
         entry.turnRecoveryKey = undefined
         entry.since = event.time ?? Date.now()
         entry.texts = []
@@ -1391,7 +1404,11 @@ export function install(rt) {
         entry.usage = undefined
         const later = entry.later ?? []
         entry.later = []
-        if (steerCut || suppressedSubagent) break
+        // A queued patrol filtered out at the first step can end in an empty
+        // DSH turn. It cannot settle a group task or clear an earlier failure.
+        const skippedPatrol = rt.consumeSkippedPatrolTurn?.(id, event.data?.turn)
+        if (steerCut || suppressedSubagent || (skippedPatrol && event.data?.reason?.kind === 'completed'
+          && info === undefined && !wroteText && !toolCount && !later.length && !joined.length)) break
         for (const result of later) {
           const targetSessionId = laterTarget(id)
           if (targetSessionId === undefined && (rt.groupOwners.has(id) || rt.pastOwners?.has(id))) continue
@@ -1442,7 +1459,7 @@ export function install(rt) {
         entry.turnInputs = []
         entry.recoveryIds = []
         entry.turnRecoveryKey = undefined
-        entry.recoveryInjected = false
+        entry.recoveryStepHandled = false
         const owner = rt.chatOwners.get(id)
         // A turn cut off at the output limit is not a finish: whoever reads its answer
         // is told, and the diagnostics record it. Nothing written at all, twice in a
@@ -1458,7 +1475,7 @@ export function install(rt) {
         if (cutOff) noteCutOffTurn(id, { session, wroteNothing, ...(premature ? { outputTokens } : {}) })
         if (failure !== undefined) {
           if (watched) rememberFailure(id, turn, failure, session)
-          if (blockBot(id, session, failure) && owner !== undefined && info?.role === 'kickoff') rt.holdKickoffAgain(owner)
+          if (blockBot(id, session, event.data.turn ?? turn, failure) && owner !== undefined && info?.role === 'kickoff') rt.holdKickoffAgain(owner)
         } else if (reason?.kind === 'completed') {
           forgetFailure(id)
           unblockBot(rt.selfOf(id))

@@ -485,8 +485,10 @@ var JA = {
   "Models and API keys": "モデルと API キー",
   "{name}'s model has no API key yet.": "{name} のモデルにはまだ API キーが設定されていません。",
   "This API key is not in the right format.": "この API キーの形式が正しくありません。",
-  "{provider} did not accept the current API key.": "{provider} で現在の API キーが拒否されました。",
-  "{provider} did not accept the current API key ({status}).": "{provider} で現在の API キーが拒否されました（{status}）。",
+  "{provider} denied access for this request.": "{provider} はこのリクエストへのアクセスを拒否しました。",
+  "{provider} rejected the credentials used for this request ({status}).": "{provider} はこのリクエストで使用した認証情報を拒否しました（{status}）。",
+  "{provider} reported insufficient balance or quota for this request.": "{provider} から、このリクエストの残高または利用枠が不足していると報告されました。",
+  "Check your balance and limits with this provider before retrying.": "再試行する前に、このプロバイダーで残高と利用上限を確認してください。",
   "The model service blocked the content": "モデルサービスのコンテンツフィルターが内容をブロックしました",
   "{provider} blocked this request with its content filter. The API key is not the problem; edit the input or start a new chat.": "{provider} のコンテンツフィルターがこのリクエストをブロックしました。API キーの問題ではありません。入力を変更するか、新しいチャットを始めてください。",
   "{provider} blocked this request with its content filter ({status}). The API key is not the problem; edit the input or start a new chat.": "{provider} のコンテンツフィルターがこのリクエストをブロックしました（{status}）。API キーの問題ではありません。入力を変更するか、新しいチャットを始めてください。",
@@ -1486,7 +1488,7 @@ var JA = {
   "The DeepSeek account needs a sign-in": "DeepSeek アカウントへのサインインが必要です",
   "The DeepSeek account is signed out": "DeepSeek アカウントからサインアウトしています",
   "The DeepSeek account sign-in has expired": "DeepSeek アカウントのサインイン有効期限が切れました",
-  "The API key was rejected": "API キーが拒否されました",
+  "The model service denied access to this request": "モデルサービスがこのリクエストへのアクセスを拒否しました",
   "The account is out of quota": "アカウントの利用枠または残高が不足しています",
   "Too many requests to the model": "モデルへのリクエストが多すぎます",
   "The conversation is too long for the model": "会話が長すぎてモデルの上限を超えています",
@@ -2907,8 +2909,10 @@ var KO = {
   // A failed turn in a Bot's chat
   "{name}'s model has no API key yet.": "{name}의 모델에 아직 API 키가 설정되지 않았습니다.",
   "This API key is not in the right format.": "이 API 키의 형식이 올바르지 않습니다.",
-  "{provider} did not accept the current API key.": "{provider}에서 현재 API 키를 승인하지 않았습니다.",
-  "{provider} did not accept the current API key ({status}).": "{provider}에서 현재 API 키를 승인하지 않았습니다 ({status}).",
+  "{provider} denied access for this request.": "{provider}에서 이 요청에 대한 접근을 거부했습니다.",
+  "{provider} rejected the credentials used for this request ({status}).": "{provider}에서 이 요청에 사용한 인증 정보를 거부했습니다({status}).",
+  "{provider} reported insufficient balance or quota for this request.": "{provider}에서 이 요청의 잔액 또는 할당량이 부족하다고 보고했습니다.",
+  "Check your balance and limits with this provider before retrying.": "다시 시도하기 전에 이 제공업체에서 잔액과 한도를 확인하세요.",
   "The model service blocked the content": "모델 서비스의 콘텐츠 필터가 내용을 차단했습니다",
   "{provider} blocked this request with its content filter. The API key is not the problem; edit the input or start a new chat.": "{provider}의 콘텐츠 필터가 이 요청을 차단했습니다. API 키 문제가 아닙니다. 입력을 수정하거나 새 대화를 시작하세요.",
   "{provider} blocked this request with its content filter ({status}). The API key is not the problem; edit the input or start a new chat.": "{provider}의 콘텐츠 필터가 이 요청을 차단했습니다 ({status}). API 키 문제가 아닙니다. 입력을 수정하거나 새 대화를 시작하세요.",
@@ -3941,7 +3945,7 @@ var KO = {
   "The DeepSeek account needs a sign-in": "DeepSeek 계정 로그인이 필요합니다",
   "The DeepSeek account is signed out": "DeepSeek 계정에서 로그아웃되었습니다",
   "The DeepSeek account sign-in has expired": "DeepSeek 계정 로그인이 만료되었습니다",
-  "The API key was rejected": "API 키가 거부되었습니다",
+  "The model service denied access to this request": "모델 서비스에서 이 요청에 대한 접근을 거부했습니다",
   "The account is out of quota": "계정 할당량이 소진되었습니다",
   "Too many requests to the model": "모델 요청이 너무 많습니다",
   "The conversation is too long for the model": "대화가 모델 허용 한도를 초과했습니다",
@@ -5368,8 +5372,10 @@ var ES = {
   // A failed turn in a Bot's chat
   "{name}'s model has no API key yet.": "El modelo de {name} aún no tiene clave API.",
   "This API key is not in the right format.": "Esta clave API no tiene el formato correcto.",
-  "{provider} did not accept the current API key.": "{provider} no aceptó la clave API actual.",
-  "{provider} did not accept the current API key ({status}).": "{provider} no aceptó la clave API actual ({status}).",
+  "{provider} denied access for this request.": "{provider} denegó el acceso para esta solicitud.",
+  "{provider} rejected the credentials used for this request ({status}).": "{provider} rechazó las credenciales utilizadas en esta solicitud ({status}).",
+  "{provider} reported insufficient balance or quota for this request.": "{provider} indicó que el saldo o la cuota eran insuficientes para esta solicitud.",
+  "Check your balance and limits with this provider before retrying.": "Comprueba tu saldo y tus límites con este proveedor antes de volver a intentarlo.",
   "The model service blocked the content": "El filtro de contenido del servicio de modelos bloqueó el contenido",
   "{provider} blocked this request with its content filter. The API key is not the problem; edit the input or start a new chat.": "El filtro de contenido de {provider} bloqueó esta solicitud. La clave API no es el problema; edita la entrada o inicia un chat nuevo.",
   "{provider} blocked this request with its content filter ({status}). The API key is not the problem; edit the input or start a new chat.": "El filtro de contenido de {provider} bloqueó esta solicitud ({status}). La clave API no es el problema; edita la entrada o inicia un chat nuevo.",
@@ -6402,7 +6408,7 @@ var ES = {
   "The DeepSeek account needs a sign-in": "La cuenta de DeepSeek requiere iniciar sesión",
   "The DeepSeek account is signed out": "Se cerró la sesión de la cuenta de DeepSeek",
   "The DeepSeek account sign-in has expired": "La sesión de la cuenta de DeepSeek ha caducado",
-  "The API key was rejected": "La clave API fue rechazada",
+  "The model service denied access to this request": "El servicio del modelo denegó el acceso para esta solicitud",
   "The account is out of quota": "La cuenta se quedó sin cuota",
   "Too many requests to the model": "Demasiadas solicitudes al modelo",
   "The conversation is too long for the model": "La conversación es demasiado larga para el modelo",
@@ -7823,8 +7829,10 @@ var FR = {
   "Models and API keys": "Modèles et clés API",
   "{name}'s model has no API key yet.": "Le modèle de {name} n’a pas encore de clé API.",
   "This API key is not in the right format.": "Cette clé API n’est pas au bon format.",
-  "{provider} did not accept the current API key.": "{provider} a refusé la clé API actuelle.",
-  "{provider} did not accept the current API key ({status}).": "{provider} a refusé la clé API actuelle ({status}).",
+  "{provider} denied access for this request.": "{provider} a refusé l’accès pour cette demande.",
+  "{provider} rejected the credentials used for this request ({status}).": "{provider} a refusé les identifiants utilisés pour cette demande ({status}).",
+  "{provider} reported insufficient balance or quota for this request.": "{provider} a signalé un solde ou un quota insuffisant pour cette demande.",
+  "Check your balance and limits with this provider before retrying.": "Vérifiez votre solde et vos limites auprès de ce fournisseur avant de réessayer.",
   "The model service blocked the content": "Le filtre de contenu du service de modèles a bloqué le contenu",
   "{provider} blocked this request with its content filter. The API key is not the problem; edit the input or start a new chat.": "Le filtre de contenu de {provider} a bloqué cette requête. La clé API n’est pas en cause ; modifiez la saisie ou démarrez une nouvelle discussion.",
   "{provider} blocked this request with its content filter ({status}). The API key is not the problem; edit the input or start a new chat.": "Le filtre de contenu de {provider} a bloqué cette requête ({status}). La clé API n’est pas en cause ; modifiez la saisie ou démarrez une nouvelle discussion.",
@@ -8824,7 +8832,7 @@ var FR = {
   "The DeepSeek account needs a sign-in": "Le compte DeepSeek nécessite une connexion",
   "The DeepSeek account is signed out": "Le compte DeepSeek est déconnecté",
   "The DeepSeek account sign-in has expired": "La session du compte DeepSeek a expiré",
-  "The API key was rejected": "La clé API a été refusée",
+  "The model service denied access to this request": "Le service du modèle a refusé l’accès pour cette demande",
   "The account is out of quota": "Le quota du compte est épuisé",
   "Too many requests to the model": "Trop de requêtes envoyées au modèle",
   "The conversation is too long for the model": "La discussion est trop longue pour le modèle",
@@ -10245,8 +10253,10 @@ var DE = {
   // A failed turn in a Bot's chat
   "{name}'s model has no API key yet.": "Für das Modell von {name} ist noch kein API-Schlüssel hinterlegt.",
   "This API key is not in the right format.": "Dieser API-Schlüssel hat nicht das richtige Format.",
-  "{provider} did not accept the current API key.": "{provider} hat den aktuellen API-Schlüssel nicht akzeptiert.",
-  "{provider} did not accept the current API key ({status}).": "{provider} hat den aktuellen API-Schlüssel nicht akzeptiert ({status}).",
+  "{provider} denied access for this request.": "{provider} hat den Zugriff für diese Anfrage verweigert.",
+  "{provider} rejected the credentials used for this request ({status}).": "{provider} hat die für diese Anfrage verwendeten Anmeldedaten abgelehnt ({status}).",
+  "{provider} reported insufficient balance or quota for this request.": "{provider} hat für diese Anfrage ein unzureichendes Guthaben oder Kontingent gemeldet.",
+  "Check your balance and limits with this provider before retrying.": "Prüfe dein Guthaben und deine Limits bei diesem Anbieter, bevor du es erneut versuchst.",
   "The model service blocked the content": "Der Inhaltsfilter des Modelldienstes hat den Inhalt blockiert",
   "{provider} blocked this request with its content filter. The API key is not the problem; edit the input or start a new chat.": "Der Inhaltsfilter von {provider} hat diese Anfrage blockiert. Der API-Schlüssel ist nicht das Problem; ändere die Eingabe oder starte einen neuen Chat.",
   "{provider} blocked this request with its content filter ({status}). The API key is not the problem; edit the input or start a new chat.": "Der Inhaltsfilter von {provider} hat diese Anfrage blockiert ({status}). Der API-Schlüssel ist nicht das Problem; ändere die Eingabe oder starte einen neuen Chat.",
@@ -11279,7 +11289,7 @@ var DE = {
   "The DeepSeek account needs a sign-in": "Anmeldung beim DeepSeek-Konto erforderlich",
   "The DeepSeek account is signed out": "Vom DeepSeek-Konto abgemeldet",
   "The DeepSeek account sign-in has expired": "Die Anmeldung beim DeepSeek-Konto ist abgelaufen",
-  "The API key was rejected": "Der API-Schlüssel wurde abgelehnt",
+  "The model service denied access to this request": "Der Modelldienst hat den Zugriff für diese Anfrage verweigert",
   "The account is out of quota": "Das Kontokontingent ist aufgebraucht",
   "Too many requests to the model": "Zu viele Anfragen an das Modell",
   "The conversation is too long for the model": "Der Chatverlauf ist zu lang für das Modell",
@@ -13208,8 +13218,10 @@ var ZH = {
   // A failed turn in a Bot's chat
   "{name}'s model has no API key yet.": "{name} 用的模型还没有 API Key。",
   "This API key is not in the right format.": "这个 API Key 的格式不对。",
-  "{provider} did not accept the current API key.": "{provider} 不接受现在的 API Key。",
-  "{provider} did not accept the current API key ({status}).": "{provider} 不接受现在的 API Key（{status}）。",
+  "{provider} denied access for this request.": "{provider} 拒绝了这次请求。",
+  "{provider} rejected the credentials used for this request ({status}).": "{provider} 拒绝了这次请求使用的凭据（{status}）。",
+  "{provider} reported insufficient balance or quota for this request.": "{provider} 报告这次请求的余额或额度不足。",
+  "Check your balance and limits with this provider before retrying.": "请在该服务商处检查账户余额和额度，再重试。",
   "The model service blocked the content": "模型服务的内容审核拦截了这条内容",
   "{provider} blocked this request with its content filter. The API key is not the problem; edit the input or start a new chat.": "{provider} 的内容审核拦截了这次请求。问题不在 API Key；请修改输入内容或新开一个对话。",
   "{provider} blocked this request with its content filter ({status}). The API key is not the problem; edit the input or start a new chat.": "{provider} 的内容审核拦截了这次请求（{status}）。问题不在 API Key；请修改输入内容或新开一个对话。",
@@ -13264,6 +13276,27 @@ var ZH = {
   "Counts exclude items in transfer and may include control events.": "不含转移中的项；可能包含控制事件。",
   "Attachments: {n}": "附件：{n}",
   "Group posts awaiting dispatch: {n}": "群聊待派发消息：{n} 条",
+  "Read Bot inboxes": "查看 Bot 收件箱",
+  "Ended {time}": "结束于 {time}",
+  "Bot inbox snapshot at {time}": "Bot 收件箱采样时间：{time}",
+  "Earlier inboxes sampled without Bot messages: {n}": "本次未发现 Bot 往来消息的历史收件箱：{n} 个",
+  "Checked {read} of {total} inboxes": "已检查 {read} / {total} 个收件箱",
+  "Session not found": "找不到该会话",
+  "Session needs migration": "该会话需要迁移",
+  "Could not read this inbox": "此次未能读取这个收件箱",
+  "Session identity could not be confirmed": "无法确认该收件箱的会话归属",
+  "Private inbox": "私聊收件箱",
+  "Group inbox": "群收件箱",
+  "Current conversation": "当前会话",
+  "Reading inboxes…": "正在读取收件箱…",
+  "Inbox scope changed. Start a new read.": "收件箱范围已变化，请从头读取。",
+  "Inbox read failed. You can retry.": "此次读取失败，可以重试。",
+  "Read from the start": "从头读取",
+  "Retry this page": "重试本页",
+  "No Bot messages at the time of this read": "读取时无 Bot 往来消息",
+  "Retry this read": "重试本次读取",
+  "Read next inboxes": "继续读取",
+  "Refresh inbox snapshots": "重新读取收件箱",
   "Group inbox unavailable": "群收件箱暂不可读取",
   "Private inbox unavailable": "私聊收件箱暂不可读取",
   "Earlier conversation": "历史会话",
@@ -14290,7 +14323,7 @@ var ZH = {
   "The DeepSeek account needs a sign-in": "DeepSeek 账号需要登录",
   "The DeepSeek account is signed out": "DeepSeek 账号已退出登录",
   "The DeepSeek account sign-in has expired": "DeepSeek 账号的登录失效了",
-  "The API key was rejected": "API 密钥无效",
+  "The model service denied access to this request": "模型服务拒绝了这次请求",
   "The account is out of quota": "账户额度已用尽",
   "Too many requests to the model": "模型请求太频繁",
   "The conversation is too long for the model": "对话太长，超出模型上限",
@@ -15144,7 +15177,7 @@ function clientFacts() {
 var FAILURES = {
   MISSING_CREDENTIAL: "The model has no API key",
   INVALID_CREDENTIAL: "The API key is not in the right format",
-  AUTH: "The API key was rejected",
+  AUTH: "The model service denied access to this request",
   CONTENT_POLICY: "The model service blocked the content",
   QUOTA: "The account is out of quota",
   ACCOUNT_QUOTA: "The account is out of quota",
@@ -46104,18 +46137,21 @@ var ACCOUNT_MODELS_WAIT_MS = 2e4;
 var SIGNED_OUT = /* @__PURE__ */ new Set(["ACCOUNT_SIGN_IN_REQUIRED", "ACCOUNT_SIGNED_OUT", "ACCOUNT_TOKEN_INVALID"]);
 var KEY_CODES = /* @__PURE__ */ new Set(["MISSING_CREDENTIAL", "INVALID_CREDENTIAL", "AUTH"]);
 var CREDENTIAL_CODES = /* @__PURE__ */ new Set([...KEY_CODES, ...SIGNED_OUT]);
-function failureText2(code, { name, provider, status }) {
+function failureText2(code, { name, provider, status, current: current2 = true, externalQuota = false }) {
   switch (code) {
     case "MISSING_CREDENTIAL":
       return t("{name}'s model has no API key yet.", { name });
     case "INVALID_CREDENTIAL":
       return t("This API key is not in the right format.");
     case "AUTH":
-      return status === void 0 ? t("{provider} did not accept the current API key.", { provider }) : t("{provider} did not accept the current API key ({status}).", { provider, status });
+      return status === 401 ? t("{provider} rejected the credentials used for this request ({status}).", { provider, status }) : t("{provider} denied access for this request.", { provider });
     case "CONTENT_POLICY":
       return status === void 0 ? t("{provider} blocked this request with its content filter. The API key is not the problem; edit the input or start a new chat.", { provider }) : t("{provider} blocked this request with its content filter ({status}). The API key is not the problem; edit the input or start a new chat.", { provider, status });
-    case "QUOTA":
-      return status === void 0 ? t("{provider} is out of balance or quota.", { provider }) : t("{provider} is out of balance or quota ({status}).", { provider, status });
+    case "QUOTA": {
+      if (!current2) return t("{provider} reported insufficient balance or quota for this request.", { provider });
+      const reason = status === void 0 ? t("{provider} is out of balance or quota.", { provider }) : t("{provider} is out of balance or quota ({status}).", { provider, status });
+      return externalQuota ? reason + " " + t("Check your balance and limits with this provider before retrying.") : reason;
+    }
     case "ACCOUNT_QUOTA":
       return t("The DeepSeek account balance is too low.");
     case "ACCOUNT_SIGN_IN_REQUIRED":
@@ -46137,7 +46173,7 @@ function failureText2(code, { name, provider, status }) {
       return knownFailure(code) ?? t("This turn failed.");
   }
 }
-function fixesFor(code, { canSignIn, official, topUp, onAccount = false }) {
+function fixesFor(code, { canSignIn, official, topUp, onAccount = false, status }) {
   if (onAccount && KEY_CODES.has(code)) return [];
   if (SIGNED_OUT.has(code)) return canSignIn ? ["sign-in-again"] : ["model"];
   switch (code) {
@@ -46146,12 +46182,12 @@ function fixesFor(code, { canSignIn, official, topUp, onAccount = false }) {
     case "INVALID_CREDENTIAL":
       return ["rekey", "model"];
     case "AUTH":
-      return ["rekey", canSignIn ? "use-account" : null, "model"].filter(Boolean);
+      return status === 401 ? ["rekey", canSignIn ? "use-account" : null, "model"].filter(Boolean) : ["model"];
     // A content audit is about the input, not the credentials; no key action helps.
     case "CONTENT_POLICY":
       return [];
     case "QUOTA":
-      return official ? ["top-up"] : [];
+      return official ? ["top-up"] : ["model"];
     case "ACCOUNT_QUOTA":
       return topUp ? ["top-up"] : [];
     case "MODEL_SWITCH_COMPACTION_FAILED":
@@ -46232,8 +46268,9 @@ function FailureCell({ node, sessionId, useRoster, useTurnClock, actions }) {
     actions.noteTurnVisible?.(sessionId, failRow.turn);
   }, [actions, sessionId, failRow.turn]);
   const bot = roster.byId?.[sessionId];
-  const host = bot?.failures?.[sessionId];
-  const data = host !== void 0 && host.turn === failRow.turn ? { ...failRow, ...host } : failRow;
+  const latest = bot?.failures?.[sessionId];
+  const host = latest !== void 0 && latest.turn === failRow.turn ? latest : void 0;
+  const data = host === void 0 ? failRow : { ...failRow, ...host };
   const later = useTurnClock((state) => Object.keys(state[sessionId] ?? {}).some((turn) => Number(turn) > data.turn));
   const account = useAccountView(actions);
   const signedIn = account?.status === "credential-stored";
@@ -46242,11 +46279,21 @@ function FailureCell({ node, sessionId, useRoster, useTurnClock, actions }) {
   const [retry, setRetry] = (0, import_react59.useState)("idle");
   const [error, setError] = (0, import_react59.useState)("");
   const [joining, setJoining] = (0, import_react59.useState)(null);
-  const blocked = bot?.blocked?.code === data.code ? bot.blocked : void 0;
-  const provider = blocked?.provider ?? host?.provider ?? providerOf(bot, roster);
-  const text = failureText2(data.code, { name: bot?.name ?? t("This Bot"), provider: providerName(roster, provider), status: data.status ?? blocked?.status });
+  const block = bot?.blocked;
+  const bound2 = block !== void 0 && block.sessionId === sessionId && block.turn === data.turn;
+  const legacyMatch = block?.sessionId === void 0 && host?.requestId && host.requestId === block?.requestId;
+  const blocked = block?.code === data.code && (bound2 || legacyMatch) ? block : void 0;
+  const current2 = bot !== void 0 && currentPart(bot) === sessionId && !later && !(latest?.turn > data.turn);
+  const provider = data.provider ?? blocked?.provider;
+  const status = data.status ?? blocked?.status;
+  const text = failureText2(data.code, {
+    name: bot?.name ?? t("This Bot"),
+    provider: providerName(roster, provider),
+    status,
+    current: current2,
+    externalQuota: provider !== void 0 && provider !== OFFICIAL && provider !== ACCOUNT
+  });
   const facts = failureFacts(data, blocked);
-  const current2 = bot !== void 0 && currentPart(bot) === sessionId && !later;
   const moveToAccount = () => {
     const model = accountModel(roster);
     if (model === void 0) {
@@ -46304,7 +46351,7 @@ function FailureCell({ node, sessionId, useRoster, useTurnClock, actions }) {
     model: actions.showDetails ? () => actions.showDetails(sessionId) : void 0,
     "model-settings": manageModels(actions)
   };
-  const fixes = fixesFor(data.code, { canSignIn, official, topUp: topUp !== void 0, onAccount: provider === ACCOUNT }).filter((fix) => fix === "top-up" || runs[fix] !== void 0);
+  const fixes = fixesFor(data.code, { canSignIn, official, topUp: topUp !== void 0, onAccount: providerOf(bot, roster) === ACCOUNT, status }).filter((fix) => fix === "top-up" || runs[fix] !== void 0);
   const asked = isHiddenTurn(roster, sessionId, data.turn);
   const retrying = !asked && typeof actions.resume === "function" && retryShown(data.code, blocked);
   const retryFirst = retrying && (fixes.length === 0 || CREDENTIAL_CODES.has(data.code));
@@ -51753,7 +51800,119 @@ function combineRoomPosts(projection, host, sessionId, available) {
   if (sessions.size > 1 && rows2.some((item) => !item.exchangeId)) uncertain = true;
   return { rows: rows2, uncertain };
 }
-function QueueDock({ sessionId, useSession, useProjection, useRoster, useWork, updateQueue, loadImage, renderFactorySlot, actions }) {
+var sourceStatusLabel = {
+  missing: "Session not found",
+  migration: "Session needs migration",
+  unavailable: "Could not read this inbox",
+  ambiguous: "Session identity could not be confirmed"
+};
+function InboxSnapshotPage({ page, retry, busy }) {
+  const time = new Date(page.readAt);
+  const empty = page.sources.filter((source) => source.earlier && source.status === "ready" && !source.rows.length).length;
+  return (0, import_react75.createElement)(
+    "section",
+    { className: "bt-inbox-snapshot" },
+    (0, import_react75.createElement)("time", { dateTime: time.toISOString() }, t("Bot inbox snapshot at {time}", { time: time.toLocaleString() })),
+    empty > 0 && (0, import_react75.createElement)("div", null, t("Earlier inboxes sampled without Bot messages: {n}", { n: empty })),
+    page.sources.filter((source) => !source.earlier || source.status !== "ready" || source.rows.length > 0).map((source) => (0, import_react75.createElement)(
+      "div",
+      { key: source.sessionId, className: "bt-bot-queue-row" },
+      (0, import_react75.createElement)(
+        "div",
+        { className: "bt-bot-queue-meta", title: source.sessionId },
+        (0, import_react75.createElement)("strong", null, source.roomName || t(source.kind === "private" ? "Private inbox" : "Group inbox")),
+        (0, import_react75.createElement)("span", null, t(source.earlier ? "Earlier conversation" : "Current conversation")),
+        source.earlier && Number.isFinite(source.endedAt) && (0, import_react75.createElement)(
+          "time",
+          { className: "bt-inbox-part-date", dateTime: new Date(source.endedAt).toISOString() },
+          t("Ended {time}", { time: new Date(source.endedAt).toLocaleString() })
+        ),
+        source.earlier && (0, import_react75.createElement)("code", null, source.sessionId.slice(-8))
+      ),
+      source.status === "ready" && !source.rows.length && (0, import_react75.createElement)("div", null, t("No Bot messages at the time of this read")),
+      source.status !== "ready" && (0, import_react75.createElement)("div", null, t(sourceStatusLabel[source.status] ?? "Could not read this inbox")),
+      source.rows.map((row) => (0, import_react75.createElement)(
+        "div",
+        { key: row.id, className: "bt-inbox-sample-message" },
+        row.senderName && (0, import_react75.createElement)("strong", null, row.senderName),
+        row.text && (0, import_react75.createElement)("div", { className: "bt-bot-queue-text" }, row.text),
+        row.attachments > 0 && (0, import_react75.createElement)("span", null, t("Attachments: {n}", { n: row.attachments }))
+      ))
+    )),
+    page.sources.some((source) => source.status !== "ready") && (0, import_react75.createElement)("button", { className: "bt-inbox-retry", type: "button", disabled: busy, onClick: retry }, t("Retry this page"))
+  );
+}
+function InboxInspection({ read }) {
+  const [open, setOpen] = (0, import_react75.useState)(false);
+  const [pages, setPages] = (0, import_react75.useState)([]);
+  const [busy, setBusy] = (0, import_react75.useState)(false);
+  const [failure, setFailure] = (0, import_react75.useState)(null);
+  const pending = (0, import_react75.useRef)(null);
+  const panelId = (0, import_react75.useId)();
+  (0, import_react75.useEffect)(() => () => pending.current?.abort(), []);
+  async function load(cursor, replaceFrom = null) {
+    if (pending.current) return;
+    const request = new AbortController();
+    pending.current = request;
+    setBusy(true);
+    setFailure(null);
+    try {
+      const page = await read(cursor, request.signal);
+      if (!request.signal.aborted) setPages((prior) => {
+        const sample = { page, cursor };
+        if (replaceFrom === null) return cursor ? [...prior, sample] : [sample];
+        const original = prior[replaceFrom].page;
+        const sameRange = page.nextCursor === original.nextCursor && page.total === original.total;
+        return [...prior.slice(0, replaceFrom), sample, ...sameRange ? prior.slice(replaceFrom + 1) : []];
+      });
+    } catch (error) {
+      if (!request.signal.aborted) setFailure({ cursor, replaceFrom, restart: error?.code === "bot/invalid" });
+    } finally {
+      if (pending.current === request) {
+        pending.current = null;
+        if (!request.signal.aborted) setBusy(false);
+      }
+    }
+  }
+  function toggle() {
+    if (!open && !pages.length) void load();
+    if (open && pending.current) {
+      pending.current.abort();
+      pending.current = null;
+      setBusy(false);
+    }
+    setOpen(!open);
+  }
+  const last = pages.at(-1)?.page;
+  const sourcesRead = pages.reduce((count, sample) => count + sample.page.sources.length, 0);
+  return (0, import_react75.createElement)(
+    "div",
+    { className: "bt-queue-panel bt-inbox-inspection", "data-inbox-inspection": "" },
+    (0, import_react75.createElement)(
+      "button",
+      { type: "button", className: "bt-queue-head", "aria-controls": panelId, "aria-expanded": open, onClick: toggle },
+      (0, import_react75.createElement)("span", { className: "bt-queue-lead", "aria-hidden": true }, (0, import_react75.createElement)(QueueIcon)),
+      (0, import_react75.createElement)("span", { className: "bt-queue-count" }, t("Read Bot inboxes")),
+      (0, import_react75.createElement)("span", { className: "bt-queue-chev", "aria-hidden": true }, open ? (0, import_react75.createElement)(ChevronUpIcon) : (0, import_react75.createElement)(ChevronDownIcon))
+    ),
+    open && (0, import_react75.createElement)(
+      "div",
+      { id: panelId, className: "bt-inbox-inspection-body" },
+      last && (0, import_react75.createElement)("div", { className: "bt-inbox-sample-count" }, t("Checked {read} of {total} inboxes", { read: sourcesRead, total: last.total })),
+      pages.map(({ page, cursor }, i) => (0, import_react75.createElement)(InboxSnapshotPage, { key: i, page, busy, retry: () => load(cursor, i) })),
+      busy && (0, import_react75.createElement)("div", { role: "status" }, t("Reading inboxes…")),
+      failure && (0, import_react75.createElement)("div", { role: "status" }, t(failure.restart ? "Inbox scope changed. Start a new read." : "Inbox read failed. You can retry.")),
+      (0, import_react75.createElement)(
+        "div",
+        { className: "bt-inbox-inspect-actions" },
+        failure && (0, import_react75.createElement)("button", { type: "button", disabled: busy, onClick: () => failure.restart ? load() : load(failure.cursor, failure.replaceFrom) }, t(failure.restart ? "Read from the start" : "Retry this read")),
+        !failure && last?.nextCursor && (0, import_react75.createElement)("button", { type: "button", disabled: busy, onClick: () => load(last.nextCursor) }, t("Read next inboxes")),
+        last && !failure && (0, import_react75.createElement)("button", { type: "button", disabled: busy, onClick: () => load() }, t("Refresh inbox snapshots"))
+      )
+    )
+  );
+}
+function QueueDock({ sessionId, useSession, useProjection, useRoster, useWork, updateQueue, inspectQueue, loadImage, renderFactorySlot, actions }) {
   const inbox = useProjection?.("inbox");
   const botId = useRoster?.((roster) => roster.byId?.[sessionId]?.id) ?? null;
   const roomId = useRoster?.((roster) => roster.roomsById?.[sessionId]?.id) ?? null;
@@ -51827,7 +51986,8 @@ function QueueDock({ sessionId, useSession, useProjection, useRoster, useWork, u
     if (rowCount === 0 && !collapsed) setCollapsed(true);
     if (editing !== null && (!queueMutable || !queue.some((row) => row.id === editing.id))) setEditing(null);
   }, [collapsed, editing, queue, queueMutable, rowCount]);
-  if (rowCount === 0 && botTitle === "" && (!isRoom || roomTitle === "")) return null;
+  const canInspect = typeof inspectQueue === "function" && (isRoom || botId !== null);
+  if (!canInspect && rowCount === 0 && botTitle === "" && (!isRoom || roomTitle === "")) return null;
   const interactionActive = queueMutable && (editing !== null || busy !== null);
   const expanded = !collapsed || interactionActive;
   const listVisible = rowCount === 1 || expanded;
@@ -51925,8 +52085,8 @@ function QueueDock({ sessionId, useSession, useProjection, useRoster, useWork, u
             text !== "" && (0, import_react75.createElement)("div", { className: "bt-bot-queue-text" }, text)
           );
         }),
-        !botCollapsed && privateUnknown && !inboxAvailable && (0, import_react75.createElement)("li", { className: "bt-bot-queue-row" }, t("Private inbox unavailable")),
-        !botCollapsed && earlierPrivate.map((item) => (0, import_react75.createElement)(
+        !botCollapsed && !canInspect && privateUnknown && !inboxAvailable && (0, import_react75.createElement)("li", { className: "bt-bot-queue-row" }, t("Private inbox unavailable")),
+        !botCollapsed && earlierPrivate.filter((item) => !canInspect || !item.unavailable).map((item) => (0, import_react75.createElement)(
           "li",
           { key: item.id, className: "bt-bot-queue-row", "data-bot-earlier-private-queue-row": "" },
           (0, import_react75.createElement)(
@@ -51937,7 +52097,7 @@ function QueueDock({ sessionId, useSession, useProjection, useRoster, useWork, u
           ),
           item.text && (0, import_react75.createElement)("div", { className: "bt-bot-queue-text" }, item.text)
         )),
-        !botCollapsed && groupQueue.map((item) => (0, import_react75.createElement)(
+        !botCollapsed && groupQueue.filter((item) => !canInspect || !item.unavailable).map((item) => (0, import_react75.createElement)(
           "li",
           { key: `${item.roomId}:${item.id}`, className: "bt-bot-queue-row", "data-bot-group-queue-row": "" },
           (0, import_react75.createElement)(
@@ -51950,6 +52110,7 @@ function QueueDock({ sessionId, useSession, useProjection, useRoster, useWork, u
         ))
       )
     ),
+    canInspect && (0, import_react75.createElement)(InboxInspection, { key: sessionId, read: inspectQueue }),
     rowCount > 0 && (0, import_react75.createElement)(
       "div",
       { className: "bt-queue-panel" },
@@ -52030,6 +52191,11 @@ var QUEUE_CSS = `
 .bt-queue-panel:before{z-index:-1;border-radius:inherit;background:var(--dsw-specific-menu,var(--bt-main));backdrop-filter:var(--dsw-menu-backdrop-filter,none);content:"";pointer-events:none;position:absolute;inset:0}
 .bt-queue-panel:after{border:.5px solid var(--bt-line-2);border-bottom:none;border-radius:inherit;content:"";pointer-events:none;position:absolute;inset:0}
 .bt-queue-head{box-sizing:border-box;width:100%;height:36px;border:0;border-radius:var(--dsw-radius-md,10px);background:none;color:var(--bt-ink);text-align:left;font:inherit;cursor:pointer;display:flex;align-items:center;gap:10px;padding:4px 12px}
+.bt-inbox-inspection-body{max-height:clamp(140px,32vh,320px);overflow:auto;padding:5px 12px 10px;line-height:1.5;font-size:12px;color:var(--bt-ink-2)}
+.bt-inbox-snapshot{margin-top:6px}.bt-inbox-snapshot>time{display:block;color:var(--bt-ink-3)}
+.bt-inbox-snapshot .bt-bot-queue-row{padding:6px 0}.bt-inbox-sample-message+.bt-inbox-sample-message{margin-top:5px}
+.bt-inbox-inspect-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.bt-inbox-inspect-actions button,.bt-inbox-retry{border:1px solid var(--bt-line);border-radius:6px;padding:3px 8px;font:inherit;background:var(--bt-main);color:var(--bt-ink);cursor:pointer}
 .bt-queue-head:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}
 .bt-queue-head:disabled{cursor:default}
 .bt-queue-lead{color:var(--bt-ink-3);flex:none;display:grid;place-items:center}
@@ -53362,6 +53528,7 @@ function apply(ctx) {
   const queueFace = (sessionId) => ({
     ...face(),
     sessionId,
+    inspectQueue: (cursor, signal) => call("queue-inspect", { sessionId, ...cursor ? { cursor } : {} }, signal),
     updateQueue: async (itemId, action) => await ctx.sessions.binding(sessionId)?.session?.updateQueue(itemId, action) ?? { ok: false },
     loadImage: (attachment) => ctx.uiConversation.imageUrl(sessionId, attachment)
   });

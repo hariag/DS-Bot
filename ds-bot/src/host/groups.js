@@ -166,6 +166,7 @@ export const referenceNote = references => (references?.length
   : '')
 
 const ROOM_REPLY = 'Reply with your message for the group, no name prefix: in a discussion, one or two short messages. When you are asked to do something, call your first tool in the same step as your opening note — if you stop without a tool call, your turn ends and no work runs. The group does not wait for you and sees what you write while you work: say what you will do, write again only when something matters, and end with the result, never a promise to do it later. Reply [PASS] to stay silent when you have nothing new to add or the message is for someone else.'
+const ROOM_INSPECTION_REPLY = 'This scheduled goal inspection requires action even if there are no new group messages. First call group_goal show for this group. If show fails, report the failure. Only after successfully reading the current goal may you reply [PASS] when nothing changed; follow the scoped inspection duties above.'
 const ROOM_CALLS = 'Writing "@Name" calls that member at once, to answer or to do what you ask, as soon as your message is posted: call members before you start on your own part. Members called in one message start together and do not see each other\'s replies until they post, so when one needs another\'s result, call the first and ask it to call the next. When a member finishes work you gave it, you answer its result. To only mention a member, write its name without "@".'
 
 const slotLabel = (slot, self) => {
@@ -196,6 +197,25 @@ const ROOM_READ_MAX = 30
 // reports a corrupt log only in the message of a generic failure.
 const lostSession = error => error?.code === 'session/not-found' || /\bis corrupt\b|\bcorrupt session log\b/i.test(String(error?.message ?? ''))
 const fileLine = file => `[File "${file.name}" (${file.bytes} bytes) attached]`
+
+// Inspect only the current group sessions. A goal may stay active between rounds,
+// and the same Bot can work independently in a private chat or in another group.
+export function roomBusyForPatrol(rt, room, ignoreMessageId, openingSessionId) {
+  if (rt.roomActive(room.id) || rt.roomInbox.get(room.id)?.length || rt.roomLaterCount(room.id)) return true
+  // An unanswered batch survives a restart, sometimes for hours. A live waiter
+  // protects an in-flight handoff; the historical batch alone cannot prove one.
+  for (const waiter of rt.roomWaiters.values()) if (waiter.roomId === room.id) return true
+  const agents = rt.ctx.get?.('agents')
+  const queued = message => ignoreMessageId === undefined || message.id !== ignoreMessageId
+  const sessions = [rt.sessionOfRoom(room), ...room.members.map(id => room.sessions?.[id])]
+  return sessions.some(id => {
+    if (!id) return false
+    const agent = agents?.get?.(id)
+    if (id !== openingSessionId && (rt.live.get(id)?.turn !== undefined || agent?.status === 'running')) return true
+    return rt.hasSubagents(id) || rt.waitsForApproval(id)
+      || agent?.inbox?.nextStep?.some(queued) || agent?.inbox?.nextTurn?.some(queued)
+  })
+}
 
 export function install(rt) {
   const { ctx } = rt
@@ -506,11 +526,11 @@ export function install(rt) {
       quiet.length ? `Finished without a closing message: ${quiet.join(' and ')}. What they said while they worked is their result; read_group_chat reads it.` : '',
       current.length
         ? `This round so far${spokeThisRound ? ', since your last message' : ', starting with the new message'} (oldest first):\n${transcript(current, memberText(room))}`
-        : 'Nothing new in this round since your last message.',
+        : round.reviewInspect && leads ? 'There are no new group messages; the scheduled goal inspection still requires group_goal show.' : 'Nothing new in this round since your last message.',
       round.shown?.includes(member.id) ? '' : referenceNote(round.references),
       working.length > 0 ? `Still at work on what they were asked; each posts here when done: ${working.map(item => `${item.bot.name} (${minutesSince(item.since)} min${item.unread > 0 ? `, with ${item.unread} group message(s) it has not read yet` : ''})`).join(', ')}.` : '',
       ...placeLines(round, slot),
-      ROOM_REPLY,
+      round.reviewInspect && leads ? ROOM_INSPECTION_REPLY : ROOM_REPLY,
     ].filter(Boolean).join('\n\n')
     const shown = [...earlier, ...owed.flatMap(result => result.line ?? []), ...current]
     return { text, images: shown.flatMap(line => line.images ?? []), files: shown.flatMap(line => line.files ?? []) }
@@ -1283,6 +1303,8 @@ let final = typeof reply === 'string' && !isPass(reply) ? reply : undefined
   const roundRuns = new Map()
   rt.roomRounds = roomId => [...(roundRuns.get(roomId) ?? [])]
   const runningRound = roomId => [...rt.roomProgress.values()].find(round => round.roomId === roomId)
+  const periodicReviewPost = post => post.goal === 'nudge' && Boolean(post.reviewId)
+  rt.roomBusyForPatrol = (room, ignoreMessageId, openingSessionId) => roomBusyForPatrol(rt, room, ignoreMessageId, openingSessionId)
   const rowRun = randomUUID()
   rt.groupRowKey = roomId => {
     const book = rt.ledger.cursor(bookOf(roomId))
@@ -1608,15 +1630,28 @@ let final = typeof reply === 'string' && !isPass(reply) ? reply : undefined
       const anchor = randomUUID()
       rt.ledger.append(bookOf(room.id), { event: 'anchor', id: anchor, from, time: Date.now() })
       const running = runningRound(room.id)
-      if (running !== undefined) await joinRound(room, running, queued, exec.agent)
-      else if (finalizing.has(room.id)) laterPosts.set(room.id, [...(laterPosts.get(room.id) ?? []), ...queued])
-      else {
+      // A periodic check may have reached the root just before business arrived.
+      // Do not let it join that work or wait behind it as the next round's opener.
+      const checks = queued.filter(periodicReviewPost)
+      const skip = checks.length > 0 && (checks.length < queued.length || rt.roomBusyForPatrol(room, undefined, exec.agent.id))
+      const posts = skip ? queued.filter(post => !periodicReviewPost(post)) : queued
+      const retired = skip ? checks.map(post => {
+        const attempt = room.goal?.reviewAttempt
+        if (attempt?.id !== post.reviewId || attempt.state !== 'admitting' || attempt.adminCompleted || running?.goalReviewId === post.reviewId) return
+        return rt.goalReviewNotOpened(room, post.reviewId).catch(error => rt.warn('ds-bot: retiring a busy group review in %s failed: %s', room.name, error))
+      }) : []
+      if (running !== undefined) {
+        if (posts.length || !skip) await joinRound(room, running, posts, exec.agent)
+      } else if (finalizing.has(room.id)) {
+        if (posts.length) laterPosts.set(room.id, [...(laterPosts.get(room.id) ?? []), ...posts])
+      } else {
         // What a stopped round left waiting goes first.
         const left = laterPosts.get(room.id) ?? []
         laterPosts.delete(room.id)
-        startRound(room, [...left, ...queued], exec.agent, exec.callId)
+        if (left.length || posts.length || !skip) startRound(room, [...left, ...posts], exec.agent, exec.callId)
       }
       exec.concludeTurn?.()
+      if (retired.length) await Promise.all(retired)
       return JSON.stringify({ from, anchor })
     },
   }))

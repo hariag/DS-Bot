@@ -1577,6 +1577,22 @@ test('an unchanged recovery snapshot still detects an outside edit', async t => 
   assert.equal(readFileSync(file, 'utf8'), external)
 })
 
+test('recovery compares the original bytes when different input decodes to the same text', async t => {
+  const home = freshHome(t), host = await start(home)
+  const file = join(home, 'inflight.json')
+  await host.tool('message_bot', { to:'Writer', message:'Queued \uFFFD', when:'queue' }, 'a')
+  await settle(() => notes(home).queued?.b?.length === 1)
+  const original = readFileSync(file)
+  const marker = Buffer.from('\uFFFD')
+  const offset = original.indexOf(marker)
+  assert.notEqual(offset, -1)
+  const external = Buffer.concat([original.subarray(0, offset), Buffer.from([0xff]), original.subarray(offset + marker.length)])
+  assert.equal(external.toString('utf8'), original.toString('utf8'))
+  writeFileSync(file, external)
+  await assert.rejects(host.tool('message_bot', { to:'Writer', message:'Second', when:'queue' }, 'a'), /ECONFLICT/)
+  assert.deepEqual(readFileSync(file), external)
+})
+
 test('a lost team lock prevents recovery notes from overwriting the previous file', async (t) => {
   const home = freshHome(t)
   const file = join(home, 'inflight.json')

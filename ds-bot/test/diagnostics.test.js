@@ -205,6 +205,30 @@ test('turnFailure drops AUTH messages and keeps the facts', () => {
   assert.equal(failureLine({ code: 'SERVER', status: 503, message: 'busy' }), 'SERVER 503: busy')
 })
 
+test('a forbidden provider subscription quota is reported without the gateway text', () => {
+  const detail = { message: 'Subscription quota insufficient, group=private (request id: private-value)', type: 'error', param: '', code: 'insufficient_user_quota' }
+  const body = JSON.stringify(detail)
+  const prefix = 'fanttec API error (403): '
+  const expected = { code: 'QUOTA', message: '', status: 403 }
+  assert.deepEqual(turnFailure({ code: 'AUTH', message: prefix + body }), expected)
+  assert.deepEqual(turnFailure({ code: 'AUTH', status: 403, message: body, requestId: 'r1' }), { ...expected, requestId: 'r1' })
+  assert.deepEqual(turnFailure({ code: 'AUTH', message: prefix + "{'message':'subscription quota insufficient','code':'insufficient_user_quota'}" }), expected)
+
+  for (const error of [
+    { status: 401, message: prefix + body },
+    { message: 'fanttec API error (401): ' + body },
+    { message: body },
+    { message: prefix + JSON.stringify({ code: 'invalid_api_key', message: body }) },
+    { message: prefix + JSON.stringify({ error: { code: detail.code } }) },
+    { message: prefix + '{"code":"insufficient_user_quota"' },
+    { message: prefix + "{'message':\"'code':'insufficient_user_quota'\",'code':'invalid_api_key'}" },
+  ]) {
+    const failure = turnFailure({ code: 'AUTH', ...error })
+    assert.equal(failure.code, 'AUTH')
+    assert.equal(failure.message, '')
+  }
+})
+
 test('a 403 content audit is not an AUTH failure, and keeps its body and request id', () => {
   const body = 'upstream 403 request-id=00000000-0000-4000-8000-000000000000: {"error":{"message":"内容审计命中风险规则，请调整输入后重试","type":"content_policy_violation"}}'
   assert.deepEqual(turnFailure({ code: 'AUTH', status: 403, message: body }), {
@@ -284,6 +308,22 @@ test('the failures that block a Bot are the ones only the user can fix', () => {
   assert.deepEqual([...BLOCKING_CODES], ['MISSING_CREDENTIAL', 'INVALID_CREDENTIAL', 'AUTH', 'QUOTA', 'ACCOUNT_QUOTA', 'ACCOUNT_SIGN_IN_REQUIRED', 'ACCOUNT_SIGNED_OUT', 'ACCOUNT_TOKEN_INVALID', 'LOCAL_AGENT_MISSING', 'LOCAL_AGENT_SIGNIN', 'LOCAL_AGENT_QUOTA', 'LOCAL_AGENT_EXIT'])
 })
 
+test('an empty skipped patrol turn does not settle a previous business failure', () => {
+  const { rt, emit } = turnsHost()
+  emit('b', 'turn/start', { turn: 1 })
+  emit('b', 'turn/end', { turn: 1, reason: { kind: 'error', error: { code: 'QUOTA', status: 403 } } })
+  const blocked = rt.bots.b.blocked
+  const failure = rt.bots.b.failures.b
+  rt.consumeSkippedPatrolTurn = (id, turn) => id === 'b' && turn === 2
+  emit('b', 'turn/start', { turn: 2 })
+  emit('b', 'turn/end', { turn: 2, reason: { kind: 'completed' } })
+  assert.equal(rt.bots.b.blocked, blocked)
+  assert.equal(rt.bots.b.failures.b, failure)
+  emit('b', 'turn/start', { turn: 3 })
+  emit('b', 'turn/end', { turn: 3, reason: { kind: 'completed' } })
+  assert.equal(rt.bots.b.blocked, undefined)
+})
+
 test('a failure only the user can fix blocks its Bot with the facts, never the message, until a turn completes', () => {
   const { rt, emit } = turnsHost()
   const fail = (turn, error, session) => {
@@ -293,13 +333,13 @@ test('a failure only the user can fix blocks its Bot with the facts, never the m
   rt.bots.b.appliedModel = 'deepseek-official/deepseek-v4-flash'
   fail(1, { code: 'AUTH', message: 'bad key sk-12***34', status: 401, requestId: 'r1' })
   const { at, ...facts } = rt.bots.b.blocked
-  assert.deepEqual(facts, { code: 'AUTH', status: 401, requestId: 'r1', provider: 'deepseek-official' })
+  assert.deepEqual(facts, { code: 'AUTH', sessionId: 'b', turn: 1, status: 401, requestId: 'r1', provider: 'deepseek-official' })
   assert.equal(typeof at, 'number')
   // The route of the request that failed names the provider.
   const account = { id: 'b', requestHeader: () => ({ config: { provider: 'deepseek-account', model: 'deepseek-v4-flash' } }) }
   fail(2, { code: 'ACCOUNT_TOKEN_INVALID', message: '' }, account)
-  assert.deepEqual(Object.keys(rt.bots.b.blocked), ['code', 'provider', 'at'])
-  assert.equal(rt.bots.b.blocked.provider, 'deepseek-account')
+  assert.deepEqual({ ...rt.bots.b.blocked, at: typeof rt.bots.b.blocked.at },
+    { code: 'ACCOUNT_TOKEN_INVALID', sessionId: 'b', turn: 2, provider: 'deepseek-account', at: 'number' })
   // A failure a retry can fix, or a stopped turn, leaves the block as it is.
   fail(3, { code: 'SERVER', message: 'busy', status: 503 })
   emit('b', 'turn/start', { turn: 4 })

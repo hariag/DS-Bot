@@ -6,6 +6,7 @@ import { install as installSide } from './side.js'
 import { handoffReply, questionReply, viewReply } from './parts.js'
 import { threadCurrentOfPart } from './threads.js'
 import { validateViewAnswer } from 'deep-view/core'
+import { createQueueInspector } from './queue-inspect.mjs'
 import { COLORS, EXTRA_COLORS, ROUTE } from './constants.js'
 
 const STAGED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
@@ -90,7 +91,11 @@ export function earlierPrivateQueueView(bots, getAgent, unreadOf) {
   for (const bot of Object.values(bots ?? {})) {
     const seen = new Set()
     let unknown
-    for (const sessionId of new Set((bot.segments ?? []).map(segment => segment.sessionId).filter(Boolean))) {
+    const otherParts = [
+      ...(bot.segments ?? []).map(segment => segment.sessionId),
+      ...(bot.openParts ?? []).flatMap(part => [part.sessionId, ...(part.segments ?? []).map(segment => segment.sessionId)]),
+    ]
+    for (const sessionId of new Set(otherParts.filter(id => id && id !== (bot.sessionId ?? bot.id)))) {
       const inbox = getAgent?.(sessionId)?.inbox
       const available = Array.isArray(inbox?.nextStep) && Array.isArray(inbox?.nextTurn)
       if (!available) {
@@ -147,6 +152,7 @@ export function install(rt) {
   installBtw(rt)
   installSide(rt)
   const { ctx, state } = rt
+  const inspectQueue = createQueueInspector(rt)
 
   // The DSH interface language of the last browser that asked for the team.
   let uiLocale
@@ -345,7 +351,7 @@ export function install(rt) {
   }
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
-const READS = new Set(['board-list', 'board-release-list', 'board-release-report', 'board-proposal-list', 'board-history', 'board-operation', 'board-image', 'secret-store', 'secret-unlock', 'state', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'group-rows', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'avatar-library', 'computer-system-status', 'computer-shot', 'local-agents', 'local-agent-models', 'browser-frame', 'hello', 'notices', 'avatar', 'room-chat', 'usage-summary', 'image', 'markdown-image', 'file-download', 'changes-check', 'changes-summary', 'changes-diff'])
+const READS = new Set(['queue-inspect', 'board-list', 'board-release-list', 'board-release-report', 'board-proposal-list', 'board-history', 'board-operation', 'board-image', 'secret-store', 'secret-unlock', 'state', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'group-rows', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'avatar-library', 'computer-system-status', 'computer-shot', 'local-agents', 'local-agent-models', 'browser-frame', 'hello', 'notices', 'avatar', 'room-chat', 'usage-summary', 'image', 'markdown-image', 'file-download', 'changes-check', 'changes-summary', 'changes-diff'])
 
   async function setPrefs(body) {
     if (body.theme !== undefined) {
@@ -418,6 +424,8 @@ const READS = new Set(['board-list', 'board-release-list', 'board-release-report
       const readOnly = rt.readOnly()
       if (readOnly !== undefined && !READS.has(endpoint)) return fail(readOnly, 'bot/read-only')
       switch (endpoint) {
+        case 'queue-inspect':
+          return ok(await inspectQueue(body, signal))
         // This handler is reached only through the authenticated instance-owner
         // route; these endpoints record review notes and never dispatch work.
         case 'legacy-review-list':
@@ -1113,7 +1121,9 @@ const READS = new Set(['board-list', 'board-release-list', 'board-release-report
 
   // Neither carrier supplies the authenticated owner identity used by boards.
   // Reject those calls rather than letting a remote peer inherit that identity.
-  const carrierCall = (endpoint, payload, signal) => endpoint.startsWith('legacy-review-') || endpoint.startsWith('board-')
+  const carrierCall = (endpoint, payload, signal) => endpoint === 'queue-inspect'
+    ? Promise.resolve(fail('Use the authenticated owner connection to inspect inboxes.', 'bot/refused'))
+    : endpoint.startsWith('legacy-review-') || endpoint.startsWith('board-')
     ? Promise.resolve(fail('Use the authenticated owner connection for this board.', 'bot/refused'))
     : handle(endpoint, payload, signal)
   rt.channelCall = carrierCall

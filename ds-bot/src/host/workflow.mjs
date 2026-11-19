@@ -191,7 +191,12 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       caller, args, store, direct, sharedProjection, goalCards,
     })
     if (args?.action === 'register') {
-      if (!caller.roomId || !id(args.taskId) || !id(args.operationId) || !args.change?.value) throw refused()
+      const required = []
+      if (!caller.roomId) required.push('room_id for a private chat')
+      if (!id(args.taskId)) required.push('a valid task_id')
+      if (!id(args.operationId)) required.push('a stable operation_id')
+      if (!args.change?.value) required.push('change.value with the card fields')
+      if (required.length) throw new Error(`board_task register requires ${required.join(', ')}`)
       const request = prepareBoardIntake({actor:caller.actor, scope:`room:${caller.roomId}`, taskId:args.taskId,
         operationId:args.operationId, parentTaskId:args.parentTaskId, releaseId:args.releaseId, value:args.change.value})
       if (!intakeAllowed(caller, request.task)) throw refused()
@@ -256,7 +261,10 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       }
       if (goal && args.action === 'show') return {task:{id:goal.id, revision:goal.revision, title:goal.title, owner:goal.owner, status:goal.legacy.originalStatus,
         scope:`room:${goal.originRoomId}`, acceptance:goal.acceptance, description:goal.description,
-        goalNote:goal.goalNote, parentTaskId:goal.parentTaskId, releaseId:goal.releaseId, legacy:goal.legacy, replies:goal.comments.slice(-12)}}
+        labels:goal.labels.filter(label => typeof label === 'string'), dueDate:goal.dueDate,
+        checklist:goal.checklist.filter(item => item && typeof item.text === 'string').map(item => ({text:item.text, checked:item.checked === true})),
+        goalNote:goal.goalNote, goalEvents:goal.goalEvents, parentTaskId:goal.parentTaskId, releaseId:goal.releaseId, legacy:goal.legacy,
+        replies:goal.comments.filter(comment=>comment.source!=='retained-goal-event').slice(-12)}}
     }
     if (!task) throw refused()
     if (args.action === 'show') {
