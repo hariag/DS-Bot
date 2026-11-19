@@ -8,6 +8,7 @@ import { carrierKeyOf } from '@deepseek-ai/dsh-scope'
 import { HANDOFF_ACK, HISTORY_TIMEOUT_MS, LATE_ANSWER, MESSAGE_INLINE_MAX, REFERENCE_KIND, REPLY_KIND, SOURCE_KIND, STEER_CUT } from './constants.js'
 import { cleanText } from './diagnostics.js'
 import { absoluteLinks } from './links.js'
+import { answersLocally } from './handoffs.js'
 import { splitRef, textOf } from './text.js'
 import { threadCurrentOfPart } from './threads.js'
 import { viaOf } from '../shared/im-platforms.js'
@@ -483,9 +484,6 @@ export function install(rt) {
     void rt.save().catch(() => {})
   }
 
-  // A request whose audience is the user is answered in the recipient's own chat: that
-  // turn stays visible there and its reply is not routed back to the sender.
-  const answersUser = info => info.role === 'request' && info.audience === 'user'
   // Roles whose turn owes the sender a reply: a 'stopped' notice asks the Bot to
   // acknowledge, exactly like a request.
   const expectsReply = info => info.role === 'request' || info.role === 'stopped'
@@ -528,7 +526,7 @@ export function install(rt) {
         held.push(...[...(agent?.inbox?.nextStep ?? []), ...(agent?.inbox?.nextTurn ?? [])].map(message => message.source))
       }
       for (const source of held) {
-        if (source?.kind === SOURCE_KIND && expectsReply(source) && !answersUser(source)) waiting.set(source.exchangeId, [id, source])
+        if (source?.kind === SOURCE_KIND && expectsReply(source) && !answersLocally(source)) waiting.set(source.exchangeId, [id, source])
       }
       live.delete(id)
       setActivity(id, undefined)
@@ -549,7 +547,7 @@ export function install(rt) {
       entry.joined = info.joined.filter(item => item?.info !== undefined && item.info !== null)
     }
     if (rt.groupOwners.has(sessionId)) return
-    if ((expectsReply(info) && !answersUser(info)) || info.role === 'room' || (info.role === 'handoff' && info.resume !== true)) {
+    if ((expectsReply(info) && !answersLocally(info)) || info.role === 'room' || (info.role === 'handoff' && info.resume !== true)) {
       markExchangeTurn(sessionId, entry.turn)
     }
   }
@@ -1130,7 +1128,7 @@ export function install(rt) {
           // place, the same as a request that joins a running turn.
           if (carry.info !== undefined && claimedPending !== undefined
             && claimedPending.exchangeId !== carry.info.exchangeId
-            && (expectsReply(claimedPending) || claimedPending.role === 'room') && !answersUser(claimedPending)) {
+            && (expectsReply(claimedPending) || claimedPending.role === 'room') && !answersLocally(claimedPending)) {
             entry.joined = [...carry.joined, { info: claimedPending, text: claimedPendingText }]
           }
         }
@@ -1260,7 +1258,7 @@ export function install(rt) {
             // A result for other work than this turn's informs it, and comes back in a
             // turn of its own once this one ends, which goes on with that work.
             entry.later = [...(entry.later ?? []), { info: source, text: textOf(event.data.content).replace(/^\[(?:[^\r\n]*\]\r?\n|[^\]\r\n]*\])/, '') }]
-          } else if ((expectsReply(source) || source.role === 'room') && !answersUser(source)
+          } else if ((expectsReply(source) || source.role === 'room') && !answersLocally(source)
             && source.exchangeId !== entry.info?.exchangeId
             && !(entry.joined ?? []).some(joined => joined.info.exchangeId === source.exchangeId)) {
             // A request that lands inside a running turn steers that work but is
@@ -1516,7 +1514,7 @@ export function install(rt) {
         // the turn's text (or a stopped-before-answer line), or nothing.
         const name = rt.botOf(rt.selfOf(id))?.name ?? 'The other Bot'
         const answer = (source, reply) => {
-          if (!expectsReply(source) || answersUser(source)) return
+          if (!expectsReply(source) || answersLocally(source)) return
           if (failure !== undefined) {
             // The sender was told a reply comes later; without this it would wait forever.
             tellSender(id, source, `${name} could not answer your message: its model call failed (${failureLine(failure)}). Tell the user if it matters; do not retry right away.`)
