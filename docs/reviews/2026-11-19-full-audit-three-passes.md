@@ -1,18 +1,18 @@
 # 2026-11-19 三轮全面审核与修复
 
-- 审核基线：`main` @ `e751eda2`（拉取最新后），随后合并当时最新 `main`（`65095ca3`）再复验。
+- 审核基线：`main` @ `e751eda2`（拉取最新后），随后合并 `65095ca3`、`4504e75e` 两次最新 `main` 再复验。
 - 方式：三轮不同视角的审核，均以可复现证据为准；只修真实缺陷，不做风格重构。
 
 ## 第一轮：自动化门禁
 
 - `build-client --check`、lint：通过。
-- 完整 `npm test`（合并最新 `main` 后）：3565 tests，3546 passed，3 failed，16 skipped。
-  - `test/install.test.js`「apply registers listeners and effects in a fixed order」：真实的过期断言。最新代码新增了 `on session/event`、`on agent-preset/selected`、`cancel Fanttec quota retries`、`schedule/changed`、`schedule/resolve-agent`、`on agent/pre-step (prepend)` 等注册；更新期望顺序后 9/9 通过。
-  - 合并最新 main 后 `run-mode` / `switch-keeps-input` / `work-dir` / `scoped-tools-creation` 共 42 个子测试失败：不是产品回归，而是测试用 `ctx.listeners.get('agent/pre-step').at(-1)` 假定“最后一个注册的 pre-step 就是 run-mode/目录监听器”；新增的 pre-step 注册改变了顺序。给 `parts.js` 的监听器命名 `followRunModeStep`，相关测试按名字取监听器后 157 tests、156 passed、0 failed（1 skipped）。
+- 完整 `npm test`（最终合并树）：3646 tests，3628 passed，2 failed，16 skipped。
+  - `test/install.test.js`「apply registers listeners and effects in a fixed order」：真实的过期断言。最新代码新增了 `on session/event`、`on agent-preset/selected`、`cancel Fanttec quota retries`、`schedule/changed`、`schedule/resolve-agent`、`on agent/pre-step (prepend)` 等注册，并把周期复核 effect 改名为 `scheduled group checks`；更新期望顺序后 9/9 通过。
+  - 合并最新 main 后 `run-mode` / `switch-keeps-input` / `work-dir` / `scoped-tools-creation` 共 42 个子测试失败：不是产品回归，而是测试用 `ctx.listeners.get('agent/pre-step').at(-1)` 假定“最后一个注册的 pre-step 就是 run-mode/目录监听器”；新增的 pre-step 注册改变了顺序。给 `parts.js` 的监听器命名 `followRunModeStep`，相关测试按名字取监听器后 157 tests、156 passed、0 failed（1 skipped）；`scoped-tools-creation` 最终改用完整 waterfall 链。
+  - `test/scoped-tools-creation.test.js` 的 `board-project-bind` 在 Windows 上需要私有 ACL；测试 home 改为 `privateTempDir`。`TEAM_TOOLS` 增加 `project_coordination`，并对未启用项目协调的 scope 在期望列表中排除该条件工具。
   - `test/repository-sync.test.js` 的 NUL-safe 路径测试在 Windows 上无法创建带换行的文件名；标记 `skip`（Windows 文件系统限制），其余 8/8 通过。
-  - `test/connectors-gateway.test.js`、`test/local-agents-mcp-races.test.js`：Node 24.14 + Windows `--test-force-exit` 的 libuv `UV_HANDLE_CLOSING` 环境断言；去掉 force-exit 后两文件 9/9 通过。
-  - `test/connectors-gateway-egress.test.js` 在整套并发下偶发 body-timeout 时序失败；单独运行 16/16 通过。
-  - `test/roster.test.js` 的一条时序断言在整套并发下偶发失败；单独运行 65/65 通过。
+  - 最终 2 个失败：`test/connectors-gateway.test.js`、`test/local-agents-mcp-races.test.js`，均为 Node 24.14 + Windows `--test-force-exit` 的 libuv `UV_HANDLE_CLOSING` 环境断言；去掉 force-exit 后两文件 9/9 通过。
+  - 中间的 `connectors-gateway-egress` / `roster` 时序失败在最终跑次均已通过；单独运行分别 16/16、65/65。
 
 ## 第二轮：Host / 领域审核
 
@@ -42,9 +42,9 @@
 
 ## 验证
 
-- 浏览器 fixture：**355 assertions, 0 failed**（含团队表单空初值/保存禁用、Auto-fill 路径）。
-- Board e2e：**22/22 passed**，run `20261119013717`。
+- 浏览器 fixture：**360 assertions, 0 failed**（含团队表单空初值/保存禁用、Auto-fill 路径，以及最新 main 的项目协调断言）。
+- Board e2e：**22/22 passed**，run `20261119102251`。
 - Lifecycle e2e：PASS，11 done，发布报告生成并发布。
-- Host + i18n：290 tests，288 passed（2 skipped），0 failed。
-- 完整测试套件：3565 tests，3546 passed，3 failed，16 skipped；3 个失败均为上述环境/并发时序问题，单独运行均通过。
+- 定向 host / pre-step / i18n：455 tests，452 passed（3 skipped），0 failed。
+- 完整测试套件：3646 tests，3628 passed，2 failed（仅上述 Windows force-exit 环境断言），16 skipped。
 - `build-client --check`、lint：通过（0 errors）。
