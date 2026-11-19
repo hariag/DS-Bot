@@ -1142,6 +1142,11 @@ test('a chat instruction becomes a scoped board card, with child work, human ste
   const call = async (sid, args) => JSON.parse(await tool.execute(args, {agent:{id:sid}}))
   const register = {action:'register', room_id:'group', operation_id:'intake-feature', task_id:'feature-123',
     change:{value:{title:'Improve project search', type:'feature', owner:'one', reviewer:'two', acceptance:'A query returns a result'}}}
+  const missingFields = {action:'register', task_id:register.task_id, change:register.change}
+  await assert.rejects(call('chat-one', missingFields), /register requires room_id for a private chat, a stable operation_id/)
+  await assert.rejects(call('chat-one', {...missingFields, room_id:'group'}), /register requires a stable operation_id/)
+  await assert.rejects(call('chat-one', {...missingFields, room_id:'unknown'}), /not authorized/)
+  assert.deepEqual((await call('chat-one', {action:'list', room_id:'group', query:register.task_id})).items, [])
   await assert.rejects(call('chat-one', {...register,room_id:'unknown'}))
   const card = (await call('chat-one', register)).task
   assert.equal(card.scope, 'room:group')
