@@ -661,6 +661,7 @@ const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-re
           const { room, changes } = await rt.updateRoom(body.id, {
             name: body.name,
             notice: body.notice,
+            expectedNotice: body.expectedNotice,
             mode: body.mode,
             admin: body.admin,
             members: Array.isArray(body.members) ? body.members : undefined,
