@@ -972,7 +972,14 @@ export function install(rt) {
     const decision = await next()
     if (decision.kind === 'reject' || signal.aborted || !rt.isBotSession(agent.id)) return decision
     const entry = live.get(agent.id)
-    if (entry === undefined || entry.turn === undefined || entry.recoveryInjected) return decision
+    if (entry === undefined || entry.turn === undefined || entry.recoveryStepHandled) return decision
+    // A periodic review must keep its own trigger through every step. A
+    // prepended business recovery would claim the turn and its completion.
+    if (decision.messages.some(({ source }) => source?.kind === SOURCE_KIND && source.reviewId
+      && (source.role === 'goal' || source.role === 'room'))) {
+      entry.recoveryStepHandled = true
+      return decision
+    }
     await reconcilePending(agent.id, signal)
     if (signal.aborted) return decision
     const pending = state.pendingInputs?.[agent.id] ?? []
@@ -984,10 +991,10 @@ export function install(rt) {
     const currentIds = new Set([...(entry.turnInputs ?? []).map(item => item.id), ...(entry.recoveryIds ?? [])])
     const recoveryIds = pending.map(item => item.id).filter(id => !currentIds.has(id))
     if (recoveryIds.length === 0) {
-      entry.recoveryInjected = inStep.length > 0
+      entry.recoveryStepHandled = inStep.length > 0
       return decision
     }
-    entry.recoveryInjected = true
+    entry.recoveryStepHandled = true
     entry.turnRecoveryKey = randomUUID()
     const recovery = createUserMessage({
       content: [{ type: 'text', text: RECOVERY_TEXT }],
@@ -1079,7 +1086,7 @@ export function install(rt) {
         entry.turn = event.data.turn
         entry.turnInputs = []
         entry.recoveryIds = []
-        entry.recoveryInjected = false
+        entry.recoveryStepHandled = false
         entry.turnRecoveryKey = undefined
         entry.since = event.time ?? Date.now()
         entry.texts = []
@@ -1452,7 +1459,7 @@ export function install(rt) {
         entry.turnInputs = []
         entry.recoveryIds = []
         entry.turnRecoveryKey = undefined
-        entry.recoveryInjected = false
+        entry.recoveryStepHandled = false
         const owner = rt.chatOwners.get(id)
         // A turn cut off at the output limit is not a finish: whoever reads its answer
         // is told, and the diagnostics record it. Nothing written at all, twice in a

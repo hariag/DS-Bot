@@ -1282,6 +1282,53 @@ test('confirmed inspection recovery remains read-only while legacy notes remain 
   assert.equal(host.agentOf('gb').calls.length, 0)
 })
 
+test('an admin inspection preserves pending business inputs for a later ordinary turn', async t => {
+  const host = await start(t)
+  const g = await parkForReview(host)
+  const admin = 'ga'
+  const agent = { ...host.agentOf(admin), id:admin }
+  const preStep = async (messages, turn, step) => {
+    const input = { agent, messages, turn, step, signal:new AbortController().signal, modelSelection:{} }
+    const chain = host.ctx.listeners.get('agent/pre-step')
+    const run = i => i === chain.length ? { kind:'enter', messages } : chain[i](input, () => run(i + 1))
+    return (await run(0)).messages
+  }
+  const previous = [{ id:'ga:9', seq:9, turn:1, ownerId:'a' }]
+  host.rt.state.pendingInputs = { ...host.rt.state.pendingInputs, [admin]:previous }
+  const original = host.ctx.sessionController.resolveAgent
+  host.ctx.sessionController.resolveAgent = async id => { if (id === 'gb') throw new Error('legacy note'); return original(id) }
+  await assert.rejects(host.rt.deliver({ toId:'b', sessionId:'gb', role:'room', roomId:'r1', text:'old assignment' }))
+  host.ctx.sessionController.resolveAgent = original
+  await host.rt.goalReviewPoll(g.reviewAt)
+  const rootPost = host.takeGoal()
+  host.agentOf('r1').inbox.nextTurn.length = 0
+  const round = host.round('protected-inspection', rootPost)
+  await settle(() => host.agentOf(admin).calls.length === 1)
+  const inspection = host.agentOf(admin).calls[0]
+  assert.equal(inspection.source.reviewInspect, true)
+  host.agentOf(admin).inbox.nextTurn.length = 0
+  host.emit(admin, 'turn/start', { turn:2 })
+  const inspectionMessages = await preStep([inspection], 2, 1)
+  assert.ok(inspectionMessages.some(m => m.source?.reviewId === rootPost.source.reviewId))
+  assert.ok(!inspectionMessages.some(m => m.source?.recoveryIds))
+  for (const message of inspectionMessages) host.emit(admin, 'user/message', message)
+  assert.equal(host.rt.live.get(admin).info.reviewId, rootPost.source.reviewId)
+  await host.tool('group_goal', { group:'Ops', action:'show' }, admin)
+  assert.ok(Number.isFinite(g.reviewAttempt.inspectionLedgerAt))
+  assert.ok(!(await preStep([], 2, 2)).some(m => m.source?.recoveryIds))
+  host.emit(admin, 'turn/end', { turn:2, reason:{ kind:'completed' } })
+  await settle(() => round() !== undefined)
+  assert.equal(g.reviewAttempt, undefined)
+  assert.deepEqual(host.rt.state.pendingInputs[admin], previous)
+
+  host.emit(admin, 'turn/start', { turn:3 })
+  const normal = await preStep([host.say('Continue the business task')], 3, 1)
+  assert.deepEqual(normal.find(m => m.source?.recoveryIds)?.source.recoveryIds, ['ga:9'])
+  for (const message of normal) host.emit(admin, 'user/message', message)
+  host.emit(admin, 'turn/end', { turn:3, reason:{ kind:'completed' } })
+  assert.equal(host.rt.state.pendingInputs[admin], undefined)
+})
+
 test('a user request arriving during inspection waits for its own normal round', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
