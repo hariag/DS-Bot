@@ -1,3 +1,4 @@
+import { projectJournal } from './project-coordination.mjs'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { lstatSync, openSync, closeSync, readSync, fsyncSync, constants } from 'node:fs'
@@ -156,7 +157,7 @@ const applyCardDetails = (target, value) => {
 }
 
 /** Open a private task journal. The containing directory must be private. */
-export function openTaskStore(path, { authorize = () => false, verifyRegistration = () => false, verifyEvidence = () => false, verifyGoalItems = () => false, verifyReceipt = () => false, verifyInvalidation = () => false, verifyAttachment = () => false, verifyShare = () => false, verifyDependency = () => false, verifyAdmission = () => false, assertWriteLock = () => { throw new Error('write lock required') } } = {}) {
+export function openTaskStore(path, { conversationKind = () => 'group', onProjectEvent, authorize = () => false, verifyRegistration = () => false, verifyEvidence = () => false, verifyGoalItems = () => false, verifyReceipt = () => false, verifyInvalidation = () => false, verifyAttachment = () => false, verifyShare = () => false, verifyDependency = () => false, verifyAdmission = () => false, assertWriteLock = () => { throw new Error('write lock required') } } = {}) {
   if (!isAbsolute(path)) throw new Error('database path must be absolute')
   const dir = lstatSync(dirname(path))
   if (!isPrivateDirectory(dirname(path), dir)) throw new Error('database directory must be private')
@@ -234,6 +235,7 @@ export function openTaskStore(path, { authorize = () => false, verifyRegistratio
     if (before) {
       if (db.prepare('UPDATE releases SET revision=?,body=? WHERE id=? AND revision=?').run(after.revision, JSON.stringify(after), before.id, before.revision).changes !== 1) throw new Error('release revision conflict')
     } else db.prepare('INSERT INTO releases(id,revision,body) VALUES(?,?,?)').run(after.id, after.revision, JSON.stringify(after))
+    coordination.releaseChanged(before,after,audit)
   }
   const releaseItems = id => getAll().filter(task => task.releaseId === id).sort((left, right) => {
     const a = typeof left.releasePosition === 'string' ? left.releasePosition : undefined
@@ -363,6 +365,7 @@ const releaseIsDone = release => {
     }
     if (!audit) throw new Error('missing audit context')
     addHistory.run(audit.operationId, audit.actor, before.id, JSON.stringify(before), JSON.stringify(after))
+    coordination.taskChanged(before,after,audit)
     if (after.parentTaskId && before.status === 'done' && !before.stale && !before.blocked
       && (after.status !== 'done' || after.stale || after.blocked)) {
       const parent = getTask(after.parentTaskId)
@@ -385,13 +388,23 @@ const releaseIsDone = release => {
     assertWriteLock()
     const dirNow = lstatSync(dirname(path)), fileNow = lstatSync(path)
     if (dirNow.dev !== dir.dev || dirNow.ino !== dir.ino || fileNow.dev !== file.dev || fileNow.ino !== file.ino) throw new Error('task database identity changed')
+    coordination.assertIdentity()
     db.exec('BEGIN IMMEDIATE'); let committing = false; inTransaction = true
-    try { const value = fn(); assertWriteLock(); committing = true; db.exec('COMMIT'); return value } catch (e) { try { db.exec('ROLLBACK') } catch { poisoned = true }; if (committing) poisoned = true; throw e } finally { inTransaction = false }
+    coordination.begin()
+    let value
+    try { value = fn(); assertWriteLock(); committing = true; db.exec('COMMIT') } catch (e) { try { db.exec('ROLLBACK') } catch { poisoned = true }; if (committing) poisoned = true; throw e } finally { inTransaction = false }
+    coordination.committed()
+    return value
   }
+  let coordination
+  try { coordination = projectJournal(db, path, {tx,assertWriteLock,getTask,getRelease,conversationKind,onCommit:onProjectEvent}) }
+  catch (error) { db.close(); throw error }
   const transact = (op, actor, payload, permission, work) => tx(() => {
-    if (authorize(permission()) !== true) throw new Error('not authorized')
+    const subject = permission()
+    if (authorize(subject) !== true) throw new Error('not authorized')
     requireId(op, 'operation id'); const fingerprint = digest(payload); const existing = getOp.get(op)
     if (existing) { if (existing.fingerprint !== fingerprint) throw new Error('operation id conflict'); return JSON.parse(existing.result) }
+    if (actor !== 'user' && actor !== 'scheduler') coordination.requireAcknowledged(subject.parentTaskId ? {...subject.task,parentTaskId:subject.parentTaskId} : subject.task,actor)
     audit = { operationId: op, actor }; try { const result = work(); addOp.run(op, fingerprint, result.id, JSON.stringify(result)); return result } finally { audit = undefined }
   })
   const getSubjectOp = db.prepare('SELECT * FROM operations WHERE operation_id=?')
@@ -464,6 +477,7 @@ const releaseIsDone = release => {
     return start.operation_id
   }
   return {
+    projectCoordination:coordination,
     close() { db.close() },
     holdInterruptedAdmissions() {
       return tx(() => {
@@ -947,7 +961,7 @@ const releaseIsDone = release => {
           ...(intake !== undefined ? { intake:{ kind:'chat', actor, at:Date.now() } } : {}), ...(parentTaskId ? { parentTaskId } : {}),
           ...(releaseId && !parentTaskId ? { releaseId, releasePosition:releasePositionAfter(releaseId, null, id) } : {}) }
         db.prepare('INSERT INTO tasks(id,revision,body) VALUES(?,?,?)').run(id, 1, JSON.stringify(record)); insertEdges(record)
-        addHistory.run(operationId, actor, id, null, JSON.stringify(record)); return record
+        addHistory.run(operationId, actor, id, null, JSON.stringify(record)); coordination.taskChanged(null,record,{operationId,actor}); return record
       })
     },
     proposeChange({ operationId, actor, taskId, expectedRevision, value }) {
@@ -989,7 +1003,7 @@ const releaseIsDone = release => {
           actionRevision:null, status:'waiting', type:parent && !attachToParent ? parent.type : after.type ?? old.type ?? 'other', authority:{kind:'personal',reference:boardRegistrationReference({id,revision:1})}, evidence:null, blocked:null, stale:false,
           position:appendPosition(old.scope), change }
         db.prepare('INSERT INTO tasks(id,revision,body) VALUES(?,?,?)').run(id, 1, JSON.stringify(record)); insertEdges(record)
-        addHistory.run(operationId, actor, id, null, JSON.stringify(record)); return ready(record)
+        addHistory.run(operationId, actor, id, null, JSON.stringify(record)); coordination.taskChanged(null,record,{operationId,actor}); return ready(record)
       })
     },
     command({ operationId, taskId, expectedRevision, actor, type, value, sessionId }) {

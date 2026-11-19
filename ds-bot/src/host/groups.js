@@ -451,6 +451,7 @@ export function install(rt) {
     const text = [
       members,
       notice,
+      rt.projectCoordinationPrompt?.(room, member),
       goal,
       ...(round.reviewInspect ? ['Inspection only: earlier group delivery outcomes are unknown. Review and report existing evidence; do not assign, dispatch, modify tasks, or take external actions.'] : []),
       leads ? adminNote(room) : '',
