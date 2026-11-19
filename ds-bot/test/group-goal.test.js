@@ -3240,7 +3240,7 @@ test('scheduled messages do not resume an idle goal, while a real user message d
   assert.equal(goal(host).idle, undefined)
 })
 
-for (const scenario of ['operator', 'scheduler', 'native-bound', 'native-input-changed', 'native-relay-changed', 'native-repeated', 'passive-only', 'cold original', 'unpersisted terminal', 'wrong turn', 'second delivery in a later part', 'repeat admission', 'unfinished job', 'canceled admission', 'failed admin', 'unrelated input', 'original queue busy', 'changed cut', 'wrong admin', 'paused', 'stopped']) {
+for (const scenario of ['operator', 'scheduler', 'native-bound', 'native-input-changed', 'native-relay-changed', 'native-repeated', 'passive-only', 'cold-tail', 'cold-synthetic', 'cold-extra', 'cold original', 'unpersisted terminal', 'wrong turn', 'second delivery in a later part', 'repeat admission', 'unfinished job', 'canceled admission', 'failed admin', 'unrelated input', 'original queue busy', 'changed cut', 'wrong admin', 'paused', 'stopped']) {
   test(`confirm a completed inspection after administrator rotation: ${scenario}`, async t => {
     const parts = new Map(), services = {}, host = await start(t, undefined, services)
     const goal = await parkForReview(host), room = host.rt.roomOf('r1')
@@ -3286,17 +3286,28 @@ for (const scenario of ['operator', 'scheduler', 'native-bound', 'native-input-c
     const stages = structuredClone(goal.stages), counts = [...parts.keys()].map(id => host.agentOf(id).calls.length)
     const sessions = new Map([...parts].map(([id, events]) => [id, { id, seq: events.length }]))
     let inspected = 0, disposed = 0
-    const cold = id => ['cold original','unpersisted terminal'].includes(scenario) && id === 'old-a'
+    const fromTail = ['cold-tail','cold-synthetic','cold-extra'].includes(scenario)
+    const cold = id => (fromTail || ['cold original','unpersisted terminal'].includes(scenario)) && id === 'old-a'
     host.ctx.sessions.get = id => cold(id) ? undefined : sessions.get(id)
     services.agents = { get: id => cold(id) ? undefined : host.agentOf(id) }
     services.sessionProjections = { snapshot: () => ({ asOfSeq: 10, values: { inbox: { 'next-step': [], 'next-turn': [] } } }) }
-    services.sessionPersistence = { stat: async id => ({ header: { id }, revision: 'native-cut' }) }
+    services.sessionPersistence = {
+      stat: async id => ({ header: { id }, revision: 'native-cut' }),
+      open: async (id,mode) => {
+        assert.equal(mode,'read'); assert.equal(id,'old-a')
+        return { header:{id}, inheritedEventCount:0, async close(){}, async read(offset,length) {
+          const last = parts.get(id).at(-1)
+          assert.equal(offset,last.seq); assert.equal(length,2)
+          return {events:scenario === 'cold-synthetic' ? [] : scenario === 'cold-extra' ? [last,{seq:last.seq+1}] : [last]}
+        } }
+      },
+    }
     services.sessionQuery = { inspectSession: async (id, read) => read(sessions.get(id)), async observeSession(id) {
       assert.ok(parts.has(id)); inspected++
       const events = parts.get(id)
       if (scenario === 'changed cut' && id === 'ga') sessions.get('r1').seq++
       return { header: { id }, source: cold(id) ? 'prepared' : 'live', inheritedEventCount: 0, cursor: events.length - 1, events,
-        ...(cold(id) ? { revision:'native-cut', persistedEventCount: events.length - (scenario === 'unpersisted terminal' ? 1 : 0) } : {}),
+        ...(cold(id) ? { revision:'native-cut', ...(fromTail ? {} : { persistedEventCount:events.length - (scenario === 'unpersisted terminal' ? 1 : 0) }) } : {}),
         [Symbol.dispose]() { disposed++ } }
     } }
     if (scenario === 'wrong turn') body.admin.turn++
@@ -3308,12 +3319,12 @@ for (const scenario of ['operator', 'scheduler', 'native-bound', 'native-input-c
     if (scenario === 'scheduler') await host.rt.testScheduleOccurrence()
     else {
       const result = await host.call('goal-control', body)
-      assert.equal(result.ok, ['operator','cold original','native-bound','passive-only'].includes(scenario), result.error)
+      assert.equal(result.ok, ['operator','cold original','native-bound','passive-only','cold-tail'].includes(scenario), result.error)
     }
     assert.equal(disposed, inspected)
     assert.deepEqual(goal.stages, stages)
     assert.deepEqual([...parts.keys()].map(id => host.agentOf(id).calls.length), counts)
-    if (['operator','cold original','scheduler','native-bound','passive-only'].includes(scenario)) {
+    if (['operator','cold original','scheduler','native-bound','passive-only','cold-tail'].includes(scenario)) {
       assert.equal(goal.reviewAttempt, undefined)
       const [resolution] = saved(host).rooms.r1.goal.reviewResolutions
       assert.equal(resolution.by, scenario === 'scheduler' ? 'host' : 'user')

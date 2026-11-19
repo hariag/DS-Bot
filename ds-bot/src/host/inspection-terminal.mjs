@@ -55,7 +55,7 @@ function completedTurn(events, start, end, input, root) {
 function readPart(cut, room, attempt, side) {
   const count = cut.cursor + 1, first = cut.inheritedEventCount
   if (!Number.isSafeInteger(count) || count < 0 || count > 200_000 || !Number.isSafeInteger(first) || first < 0 || first > count
-    || (cut.source === 'prepared' && cut.persistedEventCount !== count)) return
+    || (cut.source === 'prepared' && cut.persistedEventCount !== undefined && cut.persistedEventCount !== count)) return
   const events = cut.events
   if (!Array.isArray(events) || events.length !== count) return
   const audit = createInboxAudit(cut.header.id), jobs = new Set(), passive = new Map()
@@ -113,6 +113,20 @@ function readPart(cut, room, attempt, side) {
   return { coordinates }
 }
 
+// Some DSH versions balance a cold observation with synthetic turn-end events
+// without exposing the durable count. Verify its exact tail on a read handle.
+async function durableTail(persistence, cut, signal) {
+  if (cut.persistedEventCount !== undefined) return cut.persistedEventCount === cut.cursor + 1
+  const handle = await persistence.open(cut.header.id, 'read', { signal })
+  try {
+    if (handle.header.id !== cut.header.id || handle.inheritedEventCount !== cut.inheritedEventCount) return false
+    const offset = Math.max(0,cut.cursor)
+    const { events } = await handle.read(offset,2,{signal})
+    return Array.isArray(events) && events.length === (cut.cursor < 0 ? 0 : 1)
+      && (cut.cursor < 0 || isDeepStrictEqual(events[0],cut.events[offset]))
+  } finally { await handle.close() }
+}
+
 // Only for an overdue fenced inspection. Read its root and original/later
 // administrator parts without opening an Agent or draining its queue.
 export async function completedInspection(rt, room, attempt) {
@@ -121,6 +135,7 @@ export async function completedInspection(rt, room, attempt) {
   const signal = AbortSignal.timeout(30_000), unchanged = [], stored = [], result = {}
   try {
     const query = ctx.get?.('sessionQuery') ?? ctx.sessionQuery, sessions = ctx.sessions
+    const persistence = ctx.get?.('sessionPersistence') ?? ctx.sessionPersistence
     if (typeof query?.observeSession !== 'function' || typeof sessions?.get !== 'function') return
     for (const [i, id] of ids.entries()) {
       const cut = await query.observeSession(id, { signal, projectionMode: 'none' })
@@ -133,7 +148,7 @@ export async function completedInspection(rt, room, attempt) {
         const live = sessions.get(id), count = cut.cursor + 1
         if (cut.source === 'live' ? live?.id !== id || live.seq !== count : live !== undefined) return
         if (!live) {
-          if (typeof cut.revision !== 'string') return
+          if (typeof cut.revision !== 'string' || !await durableTail(persistence,cut,signal)) return
           stored.push({ id, revision: cut.revision })
         }
         unchanged.push(() => sessions.get(id) === live && (!live || live.seq === count)
@@ -143,7 +158,6 @@ export async function completedInspection(rt, room, attempt) {
       } finally { cut[Symbol.dispose]() }
     }
     if (stored.length) {
-      const persistence = ctx.get?.('sessionPersistence') ?? ctx.sessionPersistence
       const revisions = await Promise.all(stored.map(({ id }) => persistence.stat(id, { signal })))
       if (revisions.some((snapshot, i) => snapshot?.header?.id !== stored[i].id || snapshot.revision !== stored[i].revision)) return
     }
