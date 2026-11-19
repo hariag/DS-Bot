@@ -125,6 +125,7 @@ export function install(rt) {
   const observedInput = (bot, matches) => {
     const registry = ctx.get?.('agents')
     for (const id of ownChatSessions(bot)) {
+      if (rt.privateChatOwner(id) !== bot.id) continue
       const turn = rt.live.get(id)
       if (turn?.turn !== undefined && (matches(turn.info) || turn.joined?.some(item => matches(item.info)))) return 'read in a running turn'
       const inbox = registry?.get?.(id)?.inbox
@@ -134,7 +135,7 @@ export function install(rt) {
   }
 
   const inspectRequest = (args, exec) => {
-    const sender = rt.botOf(rt.chatOwners.get(exec.agent?.id))
+    const sender = rt.botOf(rt.privateChatOwner(exec.agent?.id))
     if (sender === undefined || args.group) return 'Check a private request from the sending Bot’s own chat.'
     const name = typeof args.request_id === 'string' ? args.request_id.trim() : ''
     if (!args.bot || !name || name.length > NAME_MAX) return 'Give the recipient bot and original request_id.'

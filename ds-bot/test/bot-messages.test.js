@@ -397,6 +397,12 @@ test('a named private handoff reports the post-delivery queue and checks only it
   const pending = await inspect()
   assert.match(pending, /queued for a later turn/)
   assert.doesNotMatch(pending, /private task body/)
+  rt.groupOwners.set('a', { roomId:'r1', botId:'a' })
+  assert.match(await inspect(), /sending Bot’s own chat/)
+  rt.groupOwners.delete('a')
+  rt.pastOwners.set('b', { roomId:'r1' })
+  assert.match(await inspect(), /processing and result are unconfirmed/)
+  rt.pastOwners.delete('b')
   assert.match(await inspect('c'), /No matching private handoff can be verified/)
   assert.match(await inspect('gb'), /sending Bot’s own chat/)
   assert.match(await inspect('a', { ...query, bot: 'Tester' }), /No matching private handoff can be verified/)
@@ -411,6 +417,9 @@ test('a named private handoff reports the post-delivery queue and checks only it
   assert.deepEqual(writer.inbox.nextTurn.map(item => item.source.exchangeId), ['unrelated'])
   rt.state.bots.b.private = true
   assert.match(await inspect(), /No matching private handoff can be verified/)
+  rt.state.bots.c.sessionId = 'a'
+  await rt.save()
+  assert.match(await inspect(), /sending Bot’s own chat/)
 })
 
 test('message receipts include group pending counts only for an authorized viewer', async (t) => {
