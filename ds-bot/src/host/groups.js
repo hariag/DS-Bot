@@ -16,6 +16,7 @@
 // it started, or that is called while still at earlier work, lets the round go on. Its
 // turn keeps running in its group Session, and what it ends with is posted to the group,
 // where the member that asked for it answers.
+import { missedRoomTerminal, readRoomReplyCut, relayRecorded, sameReceipt } from './missed-room-reply.mjs'
 import { randomUUID } from 'node:crypto'
 import { claimsFor } from './claims.js'
 import { readFileSync } from 'node:fs'
@@ -319,9 +320,11 @@ export function install(rt) {
     const record = { ...line, seq: room.seq, time: line.time ?? Date.now() }
     rt.ledger.append(bookOf(room.id), record)
     // The phone link hears every line the chat will draw (mobile.js).
-    rt.roomLineAdded?.(room, record)
+    if (!record.completedRoomReply) rt.roomLineAdded?.(room, record)
     if (!memberLine(record)) return record
     room.log = [...room.log, cutLine(record)].slice(-ROOM_LOG_MAX)
+    // A recovered row is visible in group reads. Do not resend it to external bridges.
+    if (record.completedRoomReply) return record
     for (const listener of roomLineListeners) {
       try { listener(room, record) } catch (error) { rt.warn('ds-bot: room line listener failed: %s', error) }
     }
@@ -369,8 +372,73 @@ export function install(rt) {
       if (next !== undefined) end = next - 1
     }
     // Not the messages the group's own Session shows itself.
-    const rows = rt.ledger.range(bookOf(roomId), from, end).filter(record => record.session !== true).map(rowOf).filter(Boolean)
+    let visibleEnd = end
+    if (Number.isSafeInteger(to)) {
+      const book = bookOf(roomId)
+      while (true) {
+        const receipt = rt.ledger.record(book, visibleEnd + 1)?.completedRoomReply
+        if (!receipt || receipt.after !== to || receipt.from !== from || (anchor && receipt.anchor !== anchor)) break
+        visibleEnd += 1
+      }
+    }
+    const rows = rt.ledger.range(bookOf(roomId), from, visibleEnd).filter(record => record.session !== true).map(rowOf).filter(Boolean)
     return { rows, open: end === undefined }
+  }
+  // Publish an already-completed member answer as a row of its original
+  // closed relay. Posting a new native prompt here would open another round.
+  rt.restoreMissedRoomReply = async (sessionId, record, isCurrent) => {
+    const room = rt.roomOf(record.roomId), bot = rt.botOf(record.botId)
+    if (!room || !bot) return false
+    const book = bookOf(room.id), lease = rt.homeLockVersion()
+    const current = () => {
+      const owner = rt.groupOwners.get(sessionId)
+      return isCurrent() && lease !== undefined && rt.homeLockVersion() === lease
+        && rt.roomOf(room.id) === room && rt.botOf(bot.id) === bot && owner?.botId === bot.id && owner.roomId === room.id
+        && room.members.includes(bot.id) && room.sessions?.[bot.id] === sessionId && !roomBusyForPatrol(rt, room)
+        && !batchesOf(room.id, bot.id).length
+    }
+    if (!current()) return false
+    const memberCut = await readRoomReplyCut(rt.ctx, sessionId)
+    const result = memberCut && missedRoomTerminal(memberCut.events, record)
+    if (!result || !current()) return false
+    const text = stripOwnName(bot.name, result.text)
+    const mentions = mentionsIn(text, room.members.map(rt.botOf).filter(Boolean))
+    if (isPass(text) || mentions.all || mentions.found.some(peer => peer.id !== bot.id)) return false
+    const roomCut = await readRoomReplyCut(rt.ctx, rt.sessionOfRoom(room))
+    if (!roomCut) return false
+    await rt.ledger.flushRequired(book)
+    if (!current() || !memberCut.current() || !roomCut.current()) return false
+    rt.requireHomeLock()
+    ensureRoomLog(room)
+    const entry = rt.ledger.open(book)
+    if (!entry.complete || entry.torn) return false
+    const records = entry.records
+    const proof = { ...result, memberSessionId:sessionId }
+    const existing = records.filter(row => row.completedRoomReply?.exchangeId === result.exchangeId)
+    if (existing.length) {
+      if (existing.length !== 1 || existing[0].botId !== bot.id || existing[0].text !== text
+        || !sameReceipt(existing[0].completedRoomReply, proof)) return false
+      await rt.save({ required:true })
+      return true
+    }
+    const lastAnchor = records.findLast(row => row.event === 'anchor')
+    const closed = records.findLast(row => row.event === 'round')
+    if (!lastAnchor || !closed || closed.stopped || closed.from !== lastAnchor.from || closed.to !== room.seq
+      || records.at(-1) !== closed || !Array.isArray(closed.failed) || closed.failed.length || !Array.isArray(closed.passed)
+      || closed.passed.includes(bot.name) || !relayRecorded(roomCut.events, lastAnchor, proof)) return false
+    const round = rt.ledger.range(book, closed.from, closed.to)
+    // Only the original user's opener and one unambiguous 'working' record.
+    // An old unkeyed text/progress row cannot prove this answer was missing.
+    if (round.length !== 2 || round[0].seq !== closed.from || round[1].seq !== closed.to
+      || closed.to !== closed.from + 1 || round[0].via || round[0].session !== true || round[0].botId || round[0].kind || round[1].kind !== 'working' || round[1].botId !== bot.id
+      || !(lastAnchor.time <= result.admittedAt && result.admittedAt <= round[1].time)) return false
+    const { text: _text, ...identity } = proof
+    const saved = say(room, { who:bot.name, botId:bot.id, text,
+      completedRoomReply:{ ...identity, from:closed.from, after:closed.to, anchor:lastAnchor.id } })
+    await rt.ledger.flushRequired(book)
+    if (!current() || rt.ledger.record(book, saved.seq) !== saved) return false
+    await rt.save({ required:true })
+    return true
   }
   const groupRows = (roomId, from, to, anchor) => rowsView(roomId, from, to, anchor).rows
   // A sequence of words over everything said in the group, newest first, with each
