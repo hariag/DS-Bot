@@ -13,6 +13,7 @@ import { readBoardImage } from './board-images.js'
 import { buildReleaseReport, lifecyclePlan, resolveReleaseTeam } from './release-team.mjs'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { isDeepStrictEqual } from 'node:util'
+import { OWNER_REPORT_FIELDS, REVIEW_FIELDS } from './task-tool.mjs'
 import { installHostWorkflow } from './host-workflow.mjs'
 import { createTaskDriver } from './task-driver.mjs'
 import { createGoalBoardEditor } from './goal-board-editor.js'
@@ -286,10 +287,12 @@ export function install(rt) {
     ]
     if (task.change) detail.push(`Requirement change from ${task.change.sourceTaskId} revision ${task.change.sourceRevision}. The original task remains unchanged.`,
       `Before: ${JSON.stringify(task.change.before)}`, `After: ${JSON.stringify(task.change.after)}`,
-      'Compare the two revisions, inspect the current implementation and any queued or in-flight work, adjust what is needed or explicitly reassign it, then report evidence with board_task report. Do not silently rewrite the source task.')
+      action.kind === 'review'
+        ? 'Independently compare the before and after requirements with the owner’s reported changes and observed results.'
+        : 'Compare the two revisions, inspect the current implementation and any queued or in-flight work, adjust what is needed or explicitly reassign it, then report evidence with board_task report. Do not silently rewrite the source task.')
     if (action.kind === 'review') detail.push(`Owner report: ${JSON.stringify(task.evidence)}`,
-      'Independently compare the report with the acceptance criteria. Do not repeat the owner’s work. Use board_task review with evidence and pass or rework.')
-    else detail.push('Use board_task show first. As the assigned owner, use board_task start, do only this task and its stated dependencies, then report evidence with board_task report. Respect this task’s scope, all authorization limits and the 30-step turn budget.')
+      'Independently compare the report with the acceptance criteria. Do not repeat the owner’s work.', REVIEW_FIELDS)
+    else detail.push('Use board_task show first. As the assigned owner, use board_task start and do only this task and its stated dependencies. Respect this task’s scope, all authorization limits and the 30-step turn budget.', OWNER_REPORT_FIELDS)
     return detail.join('\n')
   }
   const botWorkflowEvidence = (task, value, actor, phase) => currentBinding(task) && goalAllows(task, actor)
