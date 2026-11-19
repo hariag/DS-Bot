@@ -1014,6 +1014,8 @@ var JA = {
   "Replies from": "グループ返信:",
   "Reply from": "返信元:",
   "Message from": "メッセージ送信元:",
+  "Unrecorded sender": "送信者の記録なし",
+  "Unrecorded sender ({reference})": "送信者の記録なし（{reference}）",
   "Stopped by": "停止者:",
   "{count} messages with": "{count} 件のやり取り:",
   "Routine started": "定期タスクを開始",
@@ -3477,6 +3479,8 @@ var KO = {
   "Replies from": "그룹 답장:",
   "Reply from": "답장:",
   "Message from": "메시지 발신:",
+  "Unrecorded sender": "발신자 기록 없음",
+  "Unrecorded sender ({reference})": "발신자 기록 없음 ({reference})",
   "Stopped by": "중지한 주체:",
   "{count} messages with": "메시지 {count}개 · 상대:",
   "Routine started": "정기 작업 시작됨",
@@ -5956,6 +5960,8 @@ var ES = {
   "Replies from": "Respuestas de",
   "Reply from": "Respuesta de",
   "Message from": "Mensaje de",
+  "Unrecorded sender": "Remitente no registrado",
+  "Unrecorded sender ({reference})": "Remitente no registrado ({reference})",
   "Stopped by": "Detenido por",
   "{count} messages with": "{count} mensajes con",
   "Routine started": "Rutina iniciada",
@@ -8406,6 +8412,8 @@ var FR = {
   "Replies from": "Réponses de",
   "Reply from": "Réponse de",
   "Message from": "Message de",
+  "Unrecorded sender": "Expéditeur non enregistré",
+  "Unrecorded sender ({reference})": "Expéditeur non enregistré ({reference})",
   "Stopped by": "Arrêté par",
   "{count} messages with": "{count} messages avec",
   "Routine started": "Tâche de routine démarrée",
@@ -10869,6 +10877,8 @@ var DE = {
   "Replies from": "Antworten von",
   "Reply from": "Antwort von",
   "Message from": "Nachricht von",
+  "Unrecorded sender": "Absender nicht erfasst",
+  "Unrecorded sender ({reference})": "Absender nicht erfasst ({reference})",
   "Stopped by": "Gestoppt von",
   "{count} messages with": "{count} Nachrichten mit",
   "Routine started": "Routine gestartet",
@@ -13907,6 +13917,8 @@ var ZH = {
   "Replies from": "群聊回复：",
   "Reply from": "收到回复：",
   "Message from": "收到消息：",
+  "Unrecorded sender": "未记录发送者",
+  "Unrecorded sender ({reference})": "未记录发送者（{reference}）",
   "Stopped by": "叫停者：",
   "{count} messages with": "{count} 条消息，来自",
   "Routine started": "例行任务开始",
@@ -16214,6 +16226,23 @@ function writeSkinSurfaceVars(doc, read) {
   };
 }
 
+// src/shared/message-sender.js
+var field = (value) => typeof value === "string" && value.trim() ? value.trim() : void 0;
+function relaySender(source) {
+  const sender = source?.sender;
+  return {
+    id: field(source?.senderSessionId) ?? field(source?.senderId) ?? field(source?.fromId) ?? field(sender?.id) ?? field(sender?.sessionId) ?? field(sender),
+    name: field(source?.senderName) ?? field(sender?.name) ?? field(source?.fromName)
+  };
+}
+function peerRole(source) {
+  if (!source || source.form === "snapshot") return void 0;
+  if (["request", "reply", "stopped"].includes(source.role)) return source.role;
+  if (source.role !== void 0) return void 0;
+  const sender = relaySender(source);
+  if (source.form === "relay" || sender.id || sender.name) return "request";
+}
+
 // src/shared/mentions.js
 var ALL_WORDS = ["all", "everyone", "所有人", "全体"];
 var USER_NAMES = ["user", "you"];
@@ -16400,12 +16429,11 @@ function toolArgs(root) {
     value: (key) => object()?.[key]
   };
 }
-var RELAY_ROLES = /* @__PURE__ */ new Set(["request", "reply", "stopped"]);
 var isRelayContext = (data) => {
   const source = data?.source;
   if (source === null || typeof source !== "object" || source.kind !== "bot" || source.handoff === true) return false;
   if (source.deferred === true || source.resumed === true || source.retried === true) return false;
-  return RELAY_ROLES.has(source.role) && typeof source.senderSessionId === "string";
+  return !!peerRole(source) && !source.taskAction && !!relaySender(source).id;
 };
 var stepShows = (step) => (step?.blocks ?? []).some((block) => {
   if (block === void 0 || block.kind === "tool-call") return false;
@@ -19748,7 +19776,7 @@ function QuestionView({ question, onAnswer, onDismiss, onInteract, busy = false,
   };
   const hints = useOptionKeys(busy ? 0 : options.length, (index) => choose(options[index].label), ownRef);
   const ownLetter = options.length > 0 ? keyLetter(options.length) : void 0;
-  const field2 = ownAnswer ? (0, import_react10.createElement)("textarea", {
+  const field3 = ownAnswer ? (0, import_react10.createElement)("textarea", {
     ref: ownRef,
     rows: 1,
     value: own,
@@ -19794,12 +19822,12 @@ function QuestionView({ question, onAnswer, onDismiss, onInteract, busy = false,
       selected && !raised ? (0, import_react10.createElement)("span", { className: "bt-q-check", title: t("Selected") }, (0, import_react10.createElement)(CheckIcon)) : null
     );
   });
-  if (raised && field2) {
+  if (raised && field3) {
     rows2.push((0, import_react10.createElement)(
       "label",
       { key: "own", className: "bt-q-opt bt-q-ownrow", "data-filled": custom !== "" ? "" : void 0 },
       hints && ownLetter ? (0, import_react10.createElement)("span", { className: "bt-key", "aria-hidden": true }, ownLetter) : null,
-      (0, import_react10.createElement)("span", { className: "bt-q-body" }, field2)
+      (0, import_react10.createElement)("span", { className: "bt-q-body" }, field3)
     ));
   }
   let foot = null;
@@ -19839,10 +19867,10 @@ function QuestionView({ question, onAnswer, onDismiss, onInteract, busy = false,
       (0, import_react10.createElement)("button", { type: "button", className: "bt-q-x", "aria-label": t("Dismiss question"), title: t("Dismiss"), onClick: onDismiss, disabled: busy }, (0, import_react10.createElement)(CloseIcon))
     ),
     rows2.length > 0 ? (0, import_react10.createElement)("div", { className: "bt-q-list", role: "group" }, rows2) : null,
-    field2 && !raised ? (0, import_react10.createElement)(
+    field3 && !raised ? (0, import_react10.createElement)(
       "div",
       { className: "bt-q-custom" },
-      (0, import_react10.createElement)("label", { className: "bt-q-field" }, field2),
+      (0, import_react10.createElement)("label", { className: "bt-q-field" }, field3),
       !multi && canSubmit ? (0, import_react10.createElement)("button", { type: "submit", className: "bt-q-submit", disabled: busy }, t("Submit")) : null
     ) : null,
     foot
@@ -21174,7 +21202,7 @@ function normalizeView(value, inFormFields = false) {
   }
   const out = {};
   for (const key of keys) Object.defineProperty(out, key, { value: normalizeView(value[key], inFormFields || key === "fields"), writable: true, enumerable: true, configurable: true });
-  for (const field2 of NUMERIC) if ((field2 !== "value" || !inFormFields) && Object.hasOwn(out, field2)) out[field2] = numeric(out[field2]);
+  for (const field3 of NUMERIC) if ((field3 !== "value" || !inFormFields) && Object.hasOwn(out, field3)) out[field3] = numeric(out[field3]);
   if (Array.isArray(out.values)) out.values = out.values.map(numeric);
   return out;
 }
@@ -21477,24 +21505,24 @@ function checkForm(node, path2, ctx) {
   if (node.fields.length > MAX_FIELDS) return `${path2}.fields: ${node.fields.length} fields exceeds the limit of ${MAX_FIELDS}`;
   const seen = /* @__PURE__ */ new Set();
   for (let index = 0; index < node.fields.length; index += 1) {
-    const field2 = node.fields[index];
+    const field3 = node.fields[index];
     const at = `${path2}.fields[${index}]`;
-    if (!isRecord(field2)) return `${at}: expected a field object`;
-    for (const key of Object.keys(field2)) {
+    if (!isRecord(field3)) return `${at}: expected a field object`;
+    for (const key of Object.keys(field3)) {
       if (!FIELD_PROPS.includes(key)) return `${at}.${key}: unknown property ${quoted(key)}; allowed: ${allowed(FIELD_PROPS)}`;
     }
-    if (typeof field2.id !== "string" || field2.id === "") return `${at}.id: expected a non-empty string`;
-    if (field2.id === "__proto__") return `${at}.id: "__proto__" cannot be an id`;
-    if (seen.has(field2.id)) return `${at}.id: duplicate field id ${quoted(field2.id)}`;
-    seen.add(field2.id);
-    if (typeof field2.label !== "string") return `${at}.label: expected a string`;
-    if (field2.placeholder !== void 0 && typeof field2.placeholder !== "string") return `${at}.placeholder: expected a string`;
-    if (field2.value !== void 0) {
-      if (typeof field2.value !== "string") return `${at}.value: expected a string`;
-      if (field2.value.length > MAX_TEXT) return `${at}.value: ${field2.value.length} characters exceeds the limit of ${MAX_TEXT}`;
+    if (typeof field3.id !== "string" || field3.id === "") return `${at}.id: expected a non-empty string`;
+    if (field3.id === "__proto__") return `${at}.id: "__proto__" cannot be an id`;
+    if (seen.has(field3.id)) return `${at}.id: duplicate field id ${quoted(field3.id)}`;
+    seen.add(field3.id);
+    if (typeof field3.label !== "string") return `${at}.label: expected a string`;
+    if (field3.placeholder !== void 0 && typeof field3.placeholder !== "string") return `${at}.placeholder: expected a string`;
+    if (field3.value !== void 0) {
+      if (typeof field3.value !== "string") return `${at}.value: expected a string`;
+      if (field3.value.length > MAX_TEXT) return `${at}.value: ${field3.value.length} characters exceeds the limit of ${MAX_TEXT}`;
     }
-    if (field2.multiline !== void 0 && typeof field2.multiline !== "boolean") return `${at}.multiline: expected a boolean`;
-    if (field2.readOnly !== void 0 && typeof field2.readOnly !== "boolean") return `${at}.readOnly: expected a boolean`;
+    if (field3.multiline !== void 0 && typeof field3.multiline !== "boolean") return `${at}.multiline: expected a boolean`;
+    if (field3.readOnly !== void 0 && typeof field3.readOnly !== "boolean") return `${at}.readOnly: expected a boolean`;
   }
   return void 0;
 }
@@ -21644,7 +21672,7 @@ function componentSummary(node, lookup) {
     case "confirm":
       return "confirm";
     case "form":
-      return `form: ${(Array.isArray(node.fields) ? node.fields : []).map((field2) => field2?.label || field2?.id).filter(Boolean).join("/")}`;
+      return `form: ${(Array.isArray(node.fields) ? node.fields : []).map((field3) => field3?.label || field3?.id).filter(Boolean).join("/")}`;
     case "submit":
       return `submit: ${node.label ?? "Send"}`;
     default:
@@ -21724,9 +21752,9 @@ function validateConfirm(values) {
 function validateForm(node, values) {
   if (values.canceled === true) return { canceled: true };
   if (!isRecord(values.fields)) return { error: "values.fields: expected an object of field ids to strings" };
-  const declaredFields = (node.fields ?? []).filter((field2) => typeof field2?.id === "string");
-  const declared = declaredFields.map((field2) => field2.id);
-  const byId = new Map(declaredFields.map((field2) => [field2.id, field2]));
+  const declaredFields = (node.fields ?? []).filter((field3) => typeof field3?.id === "string");
+  const declared = declaredFields.map((field3) => field3.id);
+  const byId = new Map(declaredFields.map((field3) => [field3.id, field3]));
   const allowedIds = new Set(declared);
   const fields = {};
   for (const [key, value] of Object.entries(values.fields)) {
@@ -22266,7 +22294,7 @@ var mdLabels2 = (ui2) => ({ code: { copyLabel: ui2.t("Copy"), copiedLabel: ui2.t
 var TONES2 = ["good", "warn", "bad"];
 var CALLOUT_TONES2 = ["info", "good", "warn", "bad"];
 var optionsOf2 = (node) => (Array.isArray(node?.options) ? node.options : []).map((option) => typeof option === "string" ? { label: option } : option).filter((option) => option !== null && typeof option === "object" && option.label !== void 0);
-var fieldsOf = (node) => (Array.isArray(node?.fields) ? node.fields : []).filter((field2) => field2 !== null && typeof field2 === "object" && field2.id !== void 0);
+var fieldsOf = (node) => (Array.isArray(node?.fields) ? node.fields : []).filter((field3) => field3 !== null && typeof field3 === "object" && field3.id !== void 0);
 var cellText2 = (value) => value === null || value === void 0 ? "" : typeof value === "object" ? JSON.stringify(value) : asText(value);
 var NUMERIC_CELL = /^[-+]?[\d.,]+\s?(%|[a-zA-Z]{1,4})?$/;
 var countType = (node, type) => {
@@ -22379,9 +22407,9 @@ function SettledConfirm({ node, answer }) {
 function FormInput({ node, onSubmit, busy = false, footStart = null }) {
   const ui2 = useViewUi();
   const fields = fieldsOf(node);
-  const [draft, setDraft] = (0, import_react16.useState)(() => Object.fromEntries(fields.map((field2) => [field2.id, field2.value ?? ""])));
+  const [draft, setDraft] = (0, import_react16.useState)(() => Object.fromEntries(fields.map((field3) => [field3.id, field3.value ?? ""])));
   const submit = () => {
-    if (!busy) onSubmit?.(node.id, { fields: Object.fromEntries(fields.map((field2) => [field2.id, field2.readOnly === true ? field2.value ?? "" : draft[field2.id] ?? ""])) });
+    if (!busy) onSubmit?.(node.id, { fields: Object.fromEntries(fields.map((field3) => [field3.id, field3.readOnly === true ? field3.value ?? "" : draft[field3.id] ?? ""])) });
   };
   const cancel = () => {
     if (!busy) onSubmit?.(node.id, { canceled: true });
@@ -22395,24 +22423,24 @@ function FormInput({ node, onSubmit, busy = false, footStart = null }) {
         submit();
       }
     },
-    fields.map((field2) => {
-      const val = field2.readOnly === true ? field2.value ?? "" : draft[field2.id] ?? "";
-      const hasLabel = typeof field2.label === "string" && field2.label.trim() !== "";
-      const multiline = field2.multiline === true;
-      const readOnly = field2.readOnly === true;
+    fields.map((field3) => {
+      const val = field3.readOnly === true ? field3.value ?? "" : draft[field3.id] ?? "";
+      const hasLabel = typeof field3.label === "string" && field3.label.trim() !== "";
+      const multiline = field3.multiline === true;
+      const readOnly = field3.readOnly === true;
       const heading = !multiline && !hasLabel;
-      const labelText = hasLabel ? field2.label : field2.placeholder ?? field2.id;
+      const labelText = hasLabel ? field3.label : field3.placeholder ?? field3.id;
       return (0, import_react16.createElement)(
         "label",
         {
-          key: field2.id,
+          key: field3.id,
           className: "dv-widget-field",
           "data-inline": !multiline && hasLabel ? "" : void 0,
           "data-heading": heading ? "" : void 0,
           "data-multiline": multiline ? "" : void 0,
           "data-readonly": readOnly ? "" : void 0
         },
-        hasLabel ? (0, import_react16.createElement)("span", { className: "dv-widget-field-label" }, field2.label) : null,
+        hasLabel ? (0, import_react16.createElement)("span", { className: "dv-widget-field-label" }, field3.label) : null,
         (0, import_react16.createElement)(
           "span",
           { className: "dv-q-field" },
@@ -22424,9 +22452,9 @@ function FormInput({ node, onSubmit, busy = false, footStart = null }) {
             spellCheck: false,
             readOnly: busy || readOnly,
             "aria-label": labelText,
-            placeholder: field2.placeholder ?? void 0,
+            placeholder: field3.placeholder ?? void 0,
             onChange: (event) => {
-              if (!busy && !readOnly) setDraft((current2) => ({ ...current2, [field2.id]: event.target.value }));
+              if (!busy && !readOnly) setDraft((current2) => ({ ...current2, [field3.id]: event.target.value }));
             },
             onKeyDown: (event) => {
               if (event.key !== "Enter" || !event.metaKey && !event.ctrlKey || event.nativeEvent?.isComposing) return;
@@ -22441,9 +22469,9 @@ function FormInput({ node, onSubmit, busy = false, footStart = null }) {
             spellCheck: false,
             readOnly: busy || readOnly,
             "aria-label": labelText,
-            placeholder: field2.placeholder ?? void 0,
+            placeholder: field3.placeholder ?? void 0,
             onChange: (event) => {
-              if (!busy && !readOnly) setDraft((current2) => ({ ...current2, [field2.id]: event.target.value }));
+              if (!busy && !readOnly) setDraft((current2) => ({ ...current2, [field3.id]: event.target.value }));
             },
             onKeyDown: (event) => {
               if (event.key !== "Enter" || event.nativeEvent?.isComposing) return;
@@ -22473,23 +22501,23 @@ function SettledForm({ node, answer }) {
   return (0, import_react16.createElement)(
     "div",
     { className: "dv-widget-form" },
-    fieldsOf(node).map((field2) => {
-      const val = values[field2.id] ?? field2.value ?? "";
-      const hasLabel = typeof field2.label === "string" && field2.label.trim() !== "";
-      const multiline = field2.multiline === true;
+    fieldsOf(node).map((field3) => {
+      const val = values[field3.id] ?? field3.value ?? "";
+      const hasLabel = typeof field3.label === "string" && field3.label.trim() !== "";
+      const multiline = field3.multiline === true;
       const heading = !multiline && !hasLabel;
-      const labelText = hasLabel ? field2.label : field2.placeholder ?? field2.id;
+      const labelText = hasLabel ? field3.label : field3.placeholder ?? field3.id;
       return (0, import_react16.createElement)(
         "label",
         {
-          key: field2.id,
+          key: field3.id,
           className: "dv-widget-field",
           "data-inline": !multiline && hasLabel ? "" : void 0,
           "data-heading": heading ? "" : void 0,
           "data-multiline": multiline ? "" : void 0,
-          "data-readonly": field2.readOnly === true ? "" : void 0
+          "data-readonly": field3.readOnly === true ? "" : void 0
         },
-        hasLabel ? (0, import_react16.createElement)("span", { className: "dv-widget-field-label" }, field2.label) : null,
+        hasLabel ? (0, import_react16.createElement)("span", { className: "dv-widget-field-label" }, field3.label) : null,
         (0, import_react16.createElement)(
           "span",
           { className: "dv-q-field" },
@@ -23169,7 +23197,7 @@ function viewAnswerText(view, answer) {
   } else if (isRecord2(values.fields)) {
     const labels2 = /* @__PURE__ */ new Map();
     eachNode(view, (node) => {
-      for (const field2 of Array.isArray(node.fields) ? node.fields : []) labels2.set(field2?.id, field2?.label || field2?.id);
+      for (const field3 of Array.isArray(node.fields) ? node.fields : []) labels2.set(field3?.id, field3?.label || field3?.id);
     });
     parts.push(...Object.entries(values.fields).map(([key, value]) => `${labels2.get(key) ?? key}: ${value}`));
   }
@@ -23258,7 +23286,7 @@ function viewPrompt(title, view, answer = null) {
         if (line !== "") found = line;
       } else if (node.type === "form") {
         const fields = Array.isArray(node.fields) ? node.fields : [];
-        const label = fields.map((field2) => field2?.label || field2?.placeholder).find((item) => typeof item === "string" && item.trim() !== "");
+        const label = fields.map((field3) => field3?.label || field3?.placeholder).find((item) => typeof item === "string" && item.trim() !== "");
         if (label) found = label.trim();
       } else if (LABELED_NODES.has(node.type) && typeof node.label === "string" && node.label.trim() !== "") {
         found = node.label.trim();
@@ -23308,11 +23336,11 @@ function summarizeView(view, answer, closed) {
       if (answer.values?.canceled === true) {
         return { answered: true, badge: { text: target.cancelLabel || t("Cancel"), accent: false }, options: [], kvRows: [] };
       }
-      const fields = (Array.isArray(target.fields) ? target.fields : []).filter((field2) => field2 !== null && typeof field2 === "object" && field2.id !== void 0);
+      const fields = (Array.isArray(target.fields) ? target.fields : []).filter((field3) => field3 !== null && typeof field3 === "object" && field3.id !== void 0);
       const sentFields = answer.values?.fields && typeof answer.values.fields === "object" ? answer.values.fields : {};
-      const fieldRows = fields.map((field2) => ({
-        key: field2.label || field2.placeholder || field2.id,
-        value: String(sentFields[field2.id] ?? field2.value ?? "").replace(/\s+/g, " ").trim()
+      const fieldRows = fields.map((field3) => ({
+        key: field3.label || field3.placeholder || field3.id,
+        value: String(sentFields[field3.id] ?? field3.value ?? "").replace(/\s+/g, " ").trim()
       })).filter((row) => row.value !== "");
       const kvRows = [...fieldRows, ...inputRows];
       const badge = kvRows.length === 0 ? { text: target.submitLabel || t("Submit"), accent: true } : null;
@@ -23955,7 +23983,7 @@ function SecretStoreCard({ store, actions, run: run2, Section: Section2 }) {
       if (ok) reset();
     }).finally(() => setBusy(false));
   };
-  const field2 = (label, value, onChange, autoFocus) => (0, import_react19.createElement)(
+  const field3 = (label, value, onChange, autoFocus) => (0, import_react19.createElement)(
     "label",
     { className: "bt-q-field bt-secret-field" },
     (0, import_react19.createElement)(MaskedInput, { value, onChange, label, autoFocus })
@@ -23977,7 +24005,7 @@ function SecretStoreCard({ store, actions, run: run2, Section: Section2 }) {
           (0, import_react19.createElement)("span", { className: "bt-bs-label" }, t("Secrets are locked")),
           (0, import_react19.createElement)("span", { className: "bt-set-hint" }, why)
         ),
-        field2(t("Passphrase"), passphrase, setPassphrase, true),
+        field3(t("Passphrase"), passphrase, setPassphrase, true),
         row((0, import_react19.createElement)("button", { type: "button", className: "bt-send bt-soft-sm", disabled: busy || passphrase.length < 8, onClick: () => submit(actions.secretUnlock) }, t("Unlock")))
       )
     );
@@ -23990,7 +24018,7 @@ function SecretStoreCard({ store, actions, run: run2, Section: Section2 }) {
       form === "decrypt" ? (0, import_react19.createElement)(
         "div",
         { className: "bt-set-row bt-bs-stack" },
-        field2(t("Passphrase"), passphrase, setPassphrase, true),
+        field3(t("Passphrase"), passphrase, setPassphrase, true),
         row([
           (0, import_react19.createElement)("button", { key: "cancel", type: "button", className: "bt-soft bt-soft-sm", onClick: reset }, t("Cancel")),
           (0, import_react19.createElement)("button", { key: "off", type: "button", className: "bt-soft bt-soft-sm", disabled: busy || passphrase.length < 8, onClick: () => submit(actions.secretDecrypt) }, t("Turn off encryption"))
@@ -24012,8 +24040,8 @@ function SecretStoreCard({ store, actions, run: run2, Section: Section2 }) {
     form === "encrypt" ? (0, import_react19.createElement)(
       "div",
       { className: "bt-set-row bt-bs-stack" },
-      field2(t("Passphrase (at least 8 characters)"), passphrase, setPassphrase, true),
-      field2(t("Repeat the passphrase"), confirm, setConfirm),
+      field3(t("Passphrase (at least 8 characters)"), passphrase, setPassphrase, true),
+      field3(t("Repeat the passphrase"), confirm, setConfirm),
       confirm !== "" && confirm !== passphrase ? (0, import_react19.createElement)("div", { className: "bt-set-hint" }, t("The passphrases do not match.")) : null,
       row([
         (0, import_react19.createElement)("button", { key: "cancel", type: "button", className: "bt-soft bt-soft-sm", onClick: reset }, t("Cancel")),
@@ -26672,9 +26700,9 @@ var capitalize = (word) => word[0].toUpperCase() + word.slice(1);
 function InlineText({ label, value, placeholder, required = false, maxLength, multiline = false, className, autoFocus = false, onSave, onDone }) {
   const [draft, setDraft] = (0, import_react27.useState)(null);
   const reverting = (0, import_react27.useRef)(false);
-  const field2 = (0, import_react27.useRef)(null);
+  const field3 = (0, import_react27.useRef)(null);
   (0, import_react27.useEffect)(() => {
-    const node = field2.current;
+    const node = field3.current;
     if (!autoFocus || !node) return;
     node.focus();
     node.setSelectionRange(node.value.length, node.value.length);
@@ -26706,7 +26734,7 @@ function InlineText({ label, value, placeholder, required = false, maxLength, mu
     }
   };
   return (0, import_react27.createElement)(multiline ? "textarea" : "input", {
-    ref: field2,
+    ref: field3,
     className: className ?? (multiline ? "bt-bs-input bt-bs-area" : "bt-bs-input"),
     value: draft ?? value ?? "",
     placeholder,
@@ -29429,14 +29457,12 @@ function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, use
     null,
     relays.map((relay) => {
       const source = relay.source;
-      const sender = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t("a Bot"), color: "gray" };
+      const sender = senderOf(roster, source, relay.seq);
       return (0, import_react34.createElement)(EventLine, {
         key: relay.seq,
         prefix: source.role === "stopped" ? t("Stopped by") : source.role === "reply" ? t("Reply from") : t("Message from"),
         bots: [sender],
-        onOpen: () => {
-          if (sender.id) actions.openExchange(selfId, sender.id);
-        },
+        onOpen: sender.id ? () => actions.openExchange(selfId, sender.id) : void 0,
         whole: true
       });
     }),
@@ -29455,14 +29481,24 @@ function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, use
   );
 }
 var activityParts = (line) => line.split("`").map((part, index) => index % 2 === 1 ? (0, import_react34.createElement)("code", { key: index }, part) : part);
+function senderOf(roster, source, seq) {
+  const { id, name } = relaySender(source);
+  if (id && Object.hasOwn(roster.byId, id)) return roster.byId[id];
+  const reference = id ?? (typeof source.exchangeId === "string" && source.exchangeId.trim() || void 0) ?? (Number.isSafeInteger(seq) ? "#" + seq : void 0);
+  const label = name === "You" ? id ? void 0 : t("You") : name;
+  return { name: label ?? (reference ? t("Unrecorded sender ({reference})", { reference }) : t("Unrecorded sender")), reference, color: "gray" };
+}
+function scheduleLine(text, key) {
+  return (0, import_react34.createElement)("div", { key, className: "bt-event" }, text ? t("Scheduled task: {text}", { text }) : t("Routine started"));
+}
 function EventLine({ prefix, bots, joiner = t("and"), onOpen, whole = false }) {
   if (whole && bots.length === 1) {
     return (0, import_react34.createElement)(
       "div",
       { className: "bt-event" },
       (0, import_react34.createElement)(
-        "button",
-        { type: "button", className: "bt-event-whole", title: bots[0].name, onClick: () => onOpen?.(bots[0]) },
+        onOpen ? "button" : "span",
+        { ...onOpen ? { type: "button", onClick: () => onOpen(bots[0]) } : {}, className: "bt-event-whole", title: [bots[0].name, bots[0].reference].filter(Boolean).join(" · ") },
         (0, import_react34.createElement)("span", null, prefix),
         (0, import_react34.createElement)(BotMark, { bot: bots[0], size: 16 }),
         (0, import_react34.createElement)("span", { className: "bt-event-name" }, bots[0].name)
@@ -29473,9 +29509,10 @@ function EventLine({ prefix, bots, joiner = t("and"), onOpen, whole = false }) {
   parts.push((0, import_react34.createElement)("span", { key: "p" }, prefix));
   bots.forEach((bot, index) => {
     if (index > 0) parts.push((0, import_react34.createElement)("span", { key: `j${index}` }, joiner));
+    const open = bot.id && onOpen;
     parts.push((0, import_react34.createElement)(
-      "button",
-      { key: bot.id ?? index, type: "button", onClick: () => onOpen?.(bot) },
+      open ? "button" : "span",
+      { key: bot.id ?? index, ...open ? { type: "button", onClick: () => onOpen(bot) } : {}, title: bot.reference },
       (0, import_react34.createElement)(BotMark, { bot, size: 16 }),
       bot.name
     ));
@@ -29548,8 +29585,8 @@ function GroupMessage({ bot, text, texts: texts2 = [text], room: room2, sessionI
     return () => scheduleGroupChains(flow);
   }, [bot.id]);
   const lead = (0, import_react34.createElement)(
-    "button",
-    { type: "button", className: "bt-lead", "aria-label": t("Open {name}'s chat", { name: bot.name }), onClick: () => actions.openSession(bot.id) },
+    bot.id ? "button" : "span",
+    { className: "bt-lead", title: bot.reference, ...bot.id ? { type: "button", "aria-label": t("Open {name}'s chat", { name: bot.name }), onClick: () => actions.openSession(bot.id) } : {} },
     (0, import_react34.createElement)(BotMark, { bot, size: 22 })
   );
   const flat = layoutOf(roster.prefs) === "flat";
@@ -29563,7 +29600,7 @@ function GroupMessage({ bot, text, texts: texts2 = [text], room: room2, sessionI
       { className: "bt-group-name", style: flat ? void 0 : { color: inkText(colorOf(bot)) } },
       flat ? lead : null,
       bot.name,
-      room2?.admin === bot.id ? (0, import_react34.createElement)("span", { className: "bt-group-role" }, t("Admin")) : null,
+      bot.id && room2?.admin === bot.id ? (0, import_react34.createElement)("span", { className: "bt-group-role" }, t("Admin")) : null,
       Number.isFinite(time) ? (0, import_react34.createElement)("span", { className: "bt-group-time", title: clockLabel(time) }, messageClock(time)) : null,
       took ? (0, import_react34.createElement)("span", { className: "bt-group-took", title: t("Ran for {duration}", { duration: took }) }, took) : null
     ),
@@ -29782,7 +29819,7 @@ function chatRow(row, key, { sessionId, selfId, roster, actions, useUi, onBtwDel
     case "btw":
       return (0, import_react34.createElement)(BtwCardView, { key, card: row.card, sessionId, actions, onDeleted: onBtwDelete });
     case "post": {
-      const poster = roster.byId[row.botId] ?? { id: row.botId, name: row.name ?? t("a Bot"), color: "gray" };
+      const poster = senderOf(roster, { senderSessionId: row.botId, senderName: row.name }, row.seq);
       return (0, import_react34.createElement)(GroupMessage, {
         key,
         bot: poster,
@@ -29807,11 +29844,12 @@ function chatRow(row, key, { sessionId, selfId, roster, actions, useUi, onBtwDel
     }
     case "event": {
       if (row.role === "report") return (0, import_react34.createElement)(GroupEvent, { key, prefix: t("Replies from"), room: roster.roomsById[row.roomId], name: t("a group chat"), roster, actions });
-      const other = roster.byId[row.botId] ?? { id: row.botId, name: row.name ?? t("a Bot"), color: "gray" };
+      if (row.role === "schedule") return scheduleLine(row.text, key);
+      if (row.boardTask) return (0, import_react34.createElement)("div", { key, className: "bt-event" }, t("Task board"));
+      if (!peerRole(row)) return null;
+      const other = senderOf(roster, { senderSessionId: row.botId, senderName: row.name, exchangeId: row.exchangeId }, row.seq);
       const prefix = { stopped: t("Stopped by"), reply: t("Reply from") }[row.role] ?? t("Message from");
-      return (0, import_react34.createElement)(EventLine, { key, prefix, bots: [other], onOpen: () => {
-        if (selfId && other.id) actions.openExchange(selfId, other.id);
-      }, whole: true });
+      return (0, import_react34.createElement)(EventLine, { key, prefix, bots: [other], onOpen: selfId && other.id ? () => actions.openExchange(selfId, other.id) : void 0, whole: true });
     }
     default:
       return null;
@@ -29829,9 +29867,10 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
   (0, import_react34.useLayoutEffect)(() => {
     if (internalReview) actions.noteTurnReview?.(sessionId, turn);
   }, [actions, sessionId, turn, internalReview]);
+  const peerId = relayed ? relaySender(source).id : void 0;
   (0, import_react34.useLayoutEffect)(() => {
-    if (relayed) actions.noteTurnPeer(sessionId, turn, source.senderSessionId);
-  }, [relayed, sessionId, turn, source.senderSessionId]);
+    if (peerId) actions.noteTurnPeer(sessionId, turn, peerId);
+  }, [peerId, sessionId, turn]);
   const order = useSessions((list) => {
     const outline = list.projectionsBySession?.[sessionId]?.values?.turnOutline ?? list.byId[sessionId]?.projectionValues?.turnOutline;
     return Array.isArray(outline) ? outline.map((entry) => entry.turn).join(",") : "";
@@ -29866,7 +29905,7 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
         if (source.logged !== void 0) return null;
         if (source.failed !== void 0 || source.resumed === true || source.stopped === true || source.done === true) return null;
         const room2 = roster.roomsById[sessionId];
-        const poster = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t("a Bot"), color: "gray" };
+        const poster = senderOf(roster, source, data.seq);
         const file = source.length === void 0 ? void 0 : (data.content ?? []).find((block) => block?.type === "file")?.attachment;
         const text = stripHeader(contentText(data.content));
         return (0, import_react34.createElement)(GroupMessage, {
@@ -29890,6 +29929,9 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
       if (source.role === "resume" || source.resumed === true) return (0, import_react34.createElement)("div", { className: "bt-event" }, t("Picked up its work after a restart"));
       if (source.role === "retry" || source.retried === true) return (0, import_react34.createElement)("div", { className: "bt-event" }, t("Asked to make the tool call it wrote as text"));
       if (source.role === "continue") return (0, import_react34.createElement)("div", { className: "bt-event" }, t("Went on after the failed turn"));
+      if (source.taskAction) return (0, import_react34.createElement)("div", { className: "bt-event" }, t("Task board"));
+      const role = peerRole(source);
+      if (!role) return null;
       const run2 = relayed ? commRunOf(
         order.split(",").filter(Boolean).map(Number),
         Object.fromEntries(peers.split(",").filter(Boolean).map((pair) => [Number(pair.slice(0, pair.indexOf(":"))), pair.slice(pair.indexOf(":") + 1)])),
@@ -29897,22 +29939,22 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
         hiddenTurns
       ) : null;
       if (run2 === "folded") return null;
-      const sender = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t("a Bot"), color: "gray" };
+      const sender = senderOf(roster, source, data.seq);
       const count = run2?.count ?? (isHiddenTurn(roster, sessionId, turn) ? 2 : 1);
       const bots = [sender];
       for (const peer of (run2?.peerIds ?? []).map((id) => roster.byId[id]).filter(Boolean)) {
         if (!bots.some((bot) => bot.id === peer.id)) bots.push(peer);
       }
       return (0, import_react34.createElement)(EventLine, {
-        prefix: source.role === "stopped" ? t("Stopped by") : count > 1 ? t("{count} messages with", { count }) : t("Message from"),
+        prefix: role === "stopped" ? t("Stopped by") : count > 1 ? t("{count} messages with", { count }) : role === "reply" ? t("Reply from") : t("Message from"),
         bots,
-        onOpen: (bot) => actions.openExchange(selfId, bot.id),
+        onOpen: bots.some((bot) => bot.id) ? (bot) => actions.openExchange(selfId, bot.id) : void 0,
         whole: true
       });
     }
     if (source.kind === "schedule") {
       const prompts = reminderPrompts(contentText(data.content));
-      return (0, import_react34.createElement)("div", { className: "bt-event" }, prompts.length > 0 ? t("Scheduled task: {text}", { text: prompts.join(" · ").slice(0, 80) }) : t("Routine started"));
+      return scheduleLine(prompts.join(" · ").slice(0, 80));
     }
     if (source.kind === "user-question-reply" || source.kind === "goal") return null;
     return (0, import_react34.createElement)("div", { className: "bt-event" }, contentText(data.content).slice(0, 80) || t("Update"));
@@ -36127,31 +36169,31 @@ function AddView({ platform, roster, actions, onBack }) {
   const [busy, setBusy] = (0, import_react44.useState)(false);
   const [error, setError] = (0, import_react44.useState)(null);
   const set = (key, value) => setFields((current2) => ({ ...current2, [key]: value }));
-  const missing = shown.fields.some((field2) => !field2.options && String(fields[field2.key] ?? "").trim() === "");
+  const missing = shown.fields.some((field3) => !field3.options && String(fields[field3.key] ?? "").trim() === "");
   const add = () => {
     if (busy || botId === "" || missing) return;
     setBusy(true);
     setError(null);
     void Promise.resolve(actions.imAdd({ platform, botId, fields })).then(() => onBack()).catch((failure) => setError(failure?.message ?? String(failure))).finally(() => setBusy(false));
   };
-  const fieldRow = (field2) => {
-    if (field2.options) {
-      const value = fields[field2.key] ?? field2.options[0][0];
+  const fieldRow = (field3) => {
+    if (field3.options) {
+      const value = fields[field3.key] ?? field3.options[0][0];
       return (0, import_react44.createElement)(
         Row3,
-        { key: field2.key, label: t(field2.label) },
+        { key: field3.key, label: t(field3.label) },
         (0, import_react44.createElement)(
           Segmented,
-          { label: t(field2.label), value },
-          field2.options.map(([id, label2]) => (0, import_react44.createElement)("button", { key: id, type: "button", "aria-pressed": value === id, onClick: () => set(field2.key, id) }, t(label2)))
+          { label: t(field3.label), value },
+          field3.options.map(([id, label2]) => (0, import_react44.createElement)("button", { key: id, type: "button", "aria-pressed": value === id, onClick: () => set(field3.key, id) }, t(label2)))
         )
       );
     }
-    const label = t(field2.label);
+    const label = t(field3.label);
     return (0, import_react44.createElement)(
       Row3,
-      { key: field2.key, label, className: "bt-im-field" },
-      field2.secret ? (0, import_react44.createElement)("span", { className: "bt-q-field bt-secret-field bt-im-secret" }, (0, import_react44.createElement)(MaskedInput, { value: fields[field2.key] ?? "", onChange: (value) => set(field2.key, value), onEnter: add, label: field2.hint ? `${field2.hint}…` : label })) : (0, import_react44.createElement)("input", { className: "bt-input", "aria-label": label, placeholder: label, spellCheck: false, autoComplete: "off", value: fields[field2.key] ?? "", onChange: (event) => set(field2.key, event.target.value), onKeyDown: (event) => {
+      { key: field3.key, label, className: "bt-im-field" },
+      field3.secret ? (0, import_react44.createElement)("span", { className: "bt-q-field bt-secret-field bt-im-secret" }, (0, import_react44.createElement)(MaskedInput, { value: fields[field3.key] ?? "", onChange: (value) => set(field3.key, value), onEnter: add, label: field3.hint ? `${field3.hint}…` : label })) : (0, import_react44.createElement)("input", { className: "bt-input", "aria-label": label, placeholder: label, spellCheck: false, autoComplete: "off", value: fields[field3.key] ?? "", onChange: (event) => set(field3.key, event.target.value), onKeyDown: (event) => {
         if (event.key === "Enter" && !event.nativeEvent.isComposing) add();
       } })
     );
@@ -37393,7 +37435,7 @@ function CustomForm({ view, apply: apply2, actions, onDone }) {
   const [found, setFound] = (0, import_react48.useState)(null);
   const [picked, setPicked] = (0, import_react48.useState)([]);
   const [asking, setAsking] = (0, import_react48.useState)(false);
-  const set = (field2, value) => setDraft((current2) => ({ ...current2, [field2]: value }));
+  const set = (field3, value) => setDraft((current2) => ({ ...current2, [field3]: value }));
   const typed = draft.typed.split(/[\s,]+/).map((id) => id.trim()).filter(Boolean);
   const models = [...(found ?? []).filter((model) => picked.includes(model.id)), ...typed.filter((id) => !picked.includes(id)).map((id) => ({ id }))];
   const missing = [];
@@ -37422,14 +37464,14 @@ function CustomForm({ view, apply: apply2, actions, onDone }) {
       if (ok) onDone();
     });
   };
-  const input = (field2, label, placeholder) => (0, import_react48.createElement)("input", {
+  const input = (field3, label, placeholder) => (0, import_react48.createElement)("input", {
     className: "bt-input",
     "aria-label": label,
     placeholder,
-    value: draft[field2],
+    value: draft[field3],
     spellCheck: false,
     autoComplete: "off",
-    onChange: (event) => set(field2, event.target.value)
+    onChange: (event) => set(field3, event.target.value)
   });
   return (0, import_react48.createElement)(
     "div",
@@ -38839,8 +38881,8 @@ function settingsPlace(id) {
   return ["dsh", id];
 }
 function transitionText(from, to, unknown) {
-  const field2 = from?.version !== to?.version ? "version" : "commit";
-  return [from?.[field2] ?? unknown, to?.[field2] ?? unknown];
+  const field3 = from?.version !== to?.version ? "version" : "commit";
+  return [from?.[field3] ?? unknown, to?.[field3] ?? unknown];
 }
 function Transition({ label, from, to, done }) {
   return (0, import_react53.createElement)(
@@ -39156,7 +39198,7 @@ var SETTINGS_SHELL_CSS = `
 
 // src/client/project-coordination-panel.js
 var import_react54 = require("react");
-function field(label, element) {
+function field2(label, element) {
   return (0, import_react54.createElement)("label", { className: "bt-project-field" }, (0, import_react54.createElement)("span", null, label), element);
 }
 function Parties({ rooms, ids, fixed, onChange }) {
@@ -39385,16 +39427,16 @@ function ProjectCoordinationPanel({ scope, request, tasks, releases, actorName: 
       draft.mode === "binding" ? (0, import_react54.createElement)(
         "div",
         null,
-        field(t("Project ID"), (0, import_react54.createElement)("input", { required: true, disabled: !!project, value: draft.projectId, onChange: (e) => fieldChange("projectId", e.target.value) })),
-        field(t("Name"), (0, import_react54.createElement)("input", { required: true, disabled: !!project, value: draft.name, onChange: (e) => fieldChange("name", e.target.value) })),
+        field2(t("Project ID"), (0, import_react54.createElement)("input", { required: true, disabled: !!project, value: draft.projectId, onChange: (e) => fieldChange("projectId", e.target.value) })),
+        field2(t("Name"), (0, import_react54.createElement)("input", { required: true, disabled: !!project, value: draft.name, onChange: (e) => fieldChange("name", e.target.value) })),
         (0, import_react54.createElement)("p", null, t("Selected groups can read shared decisions and linked task updates."))
       ) : (0, import_react54.createElement)(
         "div",
         null,
-        field(t("Shared resource"), (0, import_react54.createElement)("input", { required: true, list: "bt-project-resources-" + roomId, value: draft.resource, onChange: (e) => fieldChange("resource", e.target.value) })),
+        field2(t("Shared resource"), (0, import_react54.createElement)("input", { required: true, list: "bt-project-resources-" + roomId, value: draft.resource, onChange: (e) => fieldChange("resource", e.target.value) })),
         (0, import_react54.createElement)("datalist", { id: "bt-project-resources-" + roomId }, [...new Set(data.events.map((row) => row.resource).filter(Boolean))].map((resource) => (0, import_react54.createElement)("option", { key: resource, value: resource }))),
-        field(t("Decision"), (0, import_react54.createElement)("textarea", { required: true, rows: 3, value: draft.summary, onChange: (e) => fieldChange("summary", e.target.value) })),
-        field(t("Linked task"), (0, import_react54.createElement)(
+        field2(t("Decision"), (0, import_react54.createElement)("textarea", { required: true, rows: 3, value: draft.summary, onChange: (e) => fieldChange("summary", e.target.value) })),
+        field2(t("Linked task"), (0, import_react54.createElement)(
           "select",
           { value: draft.taskId, onChange: (e) => fieldChange("taskId", e.target.value) },
           (0, import_react54.createElement)("option", { value: "" }, t("None")),
@@ -40542,18 +40584,18 @@ function ReleaseGateStrip({ release, compact: compact2 = false }) {
   }));
 }
 var statusValueLabel = (value) => t({ draft: "Draft", proposed: "Preparing", waiting: "Waiting", ready: "Ready", pending: "Not started", working: "In progress", reported: "Awaiting review", done: "Done", cancelled: "Cancelled" }[value] ?? "Status unknown");
-var displayFieldValue = (value, field2, task, actors, tasks) => {
-  if (field2 === "type") return t(TASK_TYPE_LABELS[value] ?? "Other");
-  if (field2 === "status") return statusValueLabel(value);
-  if (field2 === "owner" || field2 === "reviewer") return actorName(value, actors);
-  if (field2 === "coverImageId") {
+var displayFieldValue = (value, field3, task, actors, tasks) => {
+  if (field3 === "type") return t(TASK_TYPE_LABELS[value] ?? "Other");
+  if (field3 === "status") return statusValueLabel(value);
+  if (field3 === "owner" || field3 === "reviewer") return actorName(value, actors);
+  if (field3 === "coverImageId") {
     const image = (task?.images ?? []).find((item) => item.id === value);
     return value ? textValue(image?.name) || value : t("None");
   }
-  if (field2 === "dueComplete") return value ? t("Yes") : t("No");
-  if (field2 === "labels") return Array.isArray(value) && value.length ? value.join(", ") : t("None");
-  if (field2 === "checklist") return Array.isArray(value) && value.length ? value.map((item) => (item?.checked === true ? "✓ " : "") + textValue(item?.text)).join(" · ") : t("None");
-  if (field2 === "dependencies") return Array.isArray(value) && value.length ? value.map((id) => textValue((Array.isArray(tasks) ? tasks : []).find((task2) => task2.id === id)?.title) || id).join(", ") : t("None");
+  if (field3 === "dueComplete") return value ? t("Yes") : t("No");
+  if (field3 === "labels") return Array.isArray(value) && value.length ? value.join(", ") : t("None");
+  if (field3 === "checklist") return Array.isArray(value) && value.length ? value.map((item) => (item?.checked === true ? "✓ " : "") + textValue(item?.text)).join(" · ") : t("None");
+  if (field3 === "dependencies") return Array.isArray(value) && value.length ? value.map((id) => textValue((Array.isArray(tasks) ? tasks : []).find((task2) => task2.id === id)?.title) || id).join(", ") : t("None");
   if (value === null || value === void 0 || value === "") return t("None");
   if (Array.isArray(value)) return value.length ? value.join(", ") : t("None");
   if (typeof value === "object") return JSON.stringify(value);
@@ -40561,11 +40603,11 @@ var displayFieldValue = (value, field2, task, actors, tasks) => {
 };
 var confirmationRows = (task, command, value, actors, tasks) => {
   const before = command.type === "goal-task-edit" ? { title: textValue(task.legacy?.originalTitle ?? task.title), note: textValue(task.goalNote), status: task.legacy?.originalStatus ?? "" } : command.type === "goal-history-title" ? { title: textValue(task.title), reason: "" } : task;
-  return Object.keys(value ?? {}).map((field2) => ({
-    field: field2,
-    label: CONFIRM_FIELD_LABELS[field2] ?? field2,
-    before: displayFieldValue(field2 === "type" ? taskType(task) : before?.[field2], field2, task, actors, tasks),
-    after: displayFieldValue(value[field2], field2, task, actors, tasks)
+  return Object.keys(value ?? {}).map((field3) => ({
+    field: field3,
+    label: CONFIRM_FIELD_LABELS[field3] ?? field3,
+    before: displayFieldValue(field3 === "type" ? taskType(task) : before?.[field3], field3, task, actors, tasks),
+    after: displayFieldValue(value[field3], field3, task, actors, tasks)
   })).filter((row) => row.before !== row.after);
 };
 var proposalRows = (proposal, actors, tasks, releases = []) => {
@@ -40589,11 +40631,11 @@ var proposalRows = (proposal, actors, tasks, releases = []) => {
   }
   const before = proposal?.before && typeof proposal.before === "object" ? proposal.before : {};
   const after = proposal?.after && typeof proposal.after === "object" ? proposal.after : {};
-  return [.../* @__PURE__ */ new Set([...Object.keys(before), ...Object.keys(after)])].filter((field2) => JSON.stringify(before[field2] ?? null) !== JSON.stringify(after[field2] ?? null)).map((field2) => ({
-    field: field2,
-    label: CONFIRM_FIELD_LABELS[field2] ?? field2,
-    before: displayFieldValue(before[field2], field2, task, actors, tasks),
-    after: displayFieldValue(after[field2], field2, task, actors, tasks)
+  return [.../* @__PURE__ */ new Set([...Object.keys(before), ...Object.keys(after)])].filter((field3) => JSON.stringify(before[field3] ?? null) !== JSON.stringify(after[field3] ?? null)).map((field3) => ({
+    field: field3,
+    label: CONFIRM_FIELD_LABELS[field3] ?? field3,
+    before: displayFieldValue(before[field3], field3, task, actors, tasks),
+    after: displayFieldValue(after[field3], field3, task, actors, tasks)
   }));
 };
 function DueChip({ task }) {
@@ -40846,14 +40888,14 @@ function CardSection({ title, action, children, className = "" }) {
     children
   );
 }
-function CardTextEditor({ task, field: field2 = "description", editable, disabled, onSave }) {
+function CardTextEditor({ task, field: field3 = "description", editable, disabled, onSave }) {
   const [editing, setEditing] = (0, import_react55.useState)(false);
   const [draft, setDraft] = (0, import_react55.useState)("");
   const [base, setBase] = (0, import_react55.useState)(null);
   const [error, setError] = (0, import_react55.useState)("");
-  const stage = field2 === "stage";
+  const stage = field3 === "stage";
   const label = t(stage ? "Work stage" : "Description");
-  const current2 = textValue(task[field2]);
+  const current2 = textValue(task[field3]);
   const start = () => {
     setBase(cardStamp(task));
     setDraft(current2);
@@ -40866,7 +40908,7 @@ function CardTextEditor({ task, field: field2 = "description", editable, disable
       setError(t(stage ? "Stage is too long." : "Description is too long."));
       return;
     }
-    const result = await onSave(stampedTask(task, base), { [field2]: stage ? draft.trim() : draft });
+    const result = await onSave(stampedTask(task, base), { [field3]: stage ? draft.trim() : draft });
     if (result === "committed") setEditing(false);
     else if (result !== "cancelled") setError(t(stage ? "The stage could not be saved." : "The description could not be saved. Check the board and try again."));
   };
@@ -41585,12 +41627,12 @@ function ChangeBlock({ task }) {
     (0, import_react55.createElement)("strong", null, t("Requirement change")),
     (0, import_react55.createElement)(Fact, { label: t("Original task"), value: task.change.sourceTaskId + " · " + t("Revision") + " " + task.change.sourceRevision }),
     (0, import_react55.createElement)("p", { role: "status" }, t(task.status === "working" ? "This change is being worked as a separate task; the original stays unchanged." : task.status === "ready" ? "The source task is complete; this requirement change is queued as its own task." : "This change waits for the original task to complete. It has not been dispatched.")),
-    Object.entries({ title: "Title", owner: "Owner", reviewer: "Reviewer", acceptance: "Acceptance criteria", dependencies: "Dependencies", description: "Description" }).filter(([field2]) => JSON.stringify(task.change.before?.[field2]) !== JSON.stringify(task.change.after?.[field2])).map(([field2, label]) => (0, import_react55.createElement)(
+    Object.entries({ title: "Title", owner: "Owner", reviewer: "Reviewer", acceptance: "Acceptance criteria", dependencies: "Dependencies", description: "Description" }).filter(([field3]) => JSON.stringify(task.change.before?.[field3]) !== JSON.stringify(task.change.after?.[field3])).map(([field3, label]) => (0, import_react55.createElement)(
       "div",
-      { key: field2 },
+      { key: field3 },
       (0, import_react55.createElement)("strong", null, t(label)),
-      (0, import_react55.createElement)("p", null, t("Before") + ": " + (typeof task.change.before?.[field2] === "string" ? task.change.before[field2] : JSON.stringify(task.change.before?.[field2] ?? ""))),
-      (0, import_react55.createElement)("p", null, t("After") + ": " + (typeof task.change.after?.[field2] === "string" ? task.change.after[field2] : JSON.stringify(task.change.after?.[field2] ?? "")))
+      (0, import_react55.createElement)("p", null, t("Before") + ": " + (typeof task.change.before?.[field3] === "string" ? task.change.before[field3] : JSON.stringify(task.change.before?.[field3] ?? ""))),
+      (0, import_react55.createElement)("p", null, t("After") + ": " + (typeof task.change.after?.[field3] === "string" ? task.change.after[field3] : JSON.stringify(task.change.after?.[field3] ?? "")))
     ))
   );
 }
@@ -41634,7 +41676,7 @@ function EditTask({ task, actors, tasks, disabled, onEdit }) {
     reset();
     setOpen(true);
   } }, t("Edit task"));
-  const field2 = (label, key) => (0, import_react55.createElement)("label", { className: "bt-field" }, (0, import_react55.createElement)("span", null, t(label)), (0, import_react55.createElement)("input", { value: draft[key] ?? "", disabled, onChange: (event) => setDraft({ ...draft, [key]: event.target.value }) }));
+  const field3 = (label, key) => (0, import_react55.createElement)("label", { className: "bt-field" }, (0, import_react55.createElement)("span", null, t(label)), (0, import_react55.createElement)("input", { value: draft[key] ?? "", disabled, onChange: (event) => setDraft({ ...draft, [key]: event.target.value }) }));
   const actorField = (label, key) => (0, import_react55.createElement)(
     "label",
     { className: "bt-field" },
@@ -41663,10 +41705,10 @@ function EditTask({ task, actors, tasks, disabled, onEdit }) {
     } },
     changed ? (0, import_react55.createElement)("p", { className: "bt-card-warning", role: "alert" }, t("Task changed. Reload its current values before saving."), " ", (0, import_react55.createElement)("button", { type: "button", className: "bt-card-mini", disabled, onClick: reset }, t("Reload values"))) : null,
     ["working", "reported", "done"].includes(task.status) ? (0, import_react55.createElement)("p", { className: "bt-card-note" }, t("Saving creates a separate change proposal after the original task.")) : null,
-    field2("Title", "title"),
+    field3("Title", "title"),
     actorField("Owner", "owner"),
     actorField("Independent reviewer", "reviewer"),
-    field2("Acceptance criteria", "acceptance"),
+    field3("Acceptance criteria", "acceptance"),
     (0, import_react55.createElement)(DependencySelect, { tasks, exclude: task.id, value: draft.dependencies ?? [], disabled, onChange: (value) => setDraft({ ...draft, dependencies: value }) }),
     (0, import_react55.createElement)(
       "div",
@@ -46853,7 +46895,7 @@ function CommandPalette({ start, token, roster, actions, useSessions }) {
     }
     return JSON.stringify(hits);
   });
-  const matchesName = (...fields) => wanted === "" || fields.some((field2) => (field2 ?? "").toLowerCase().includes(wanted));
+  const matchesName = (...fields) => wanted === "" || fields.some((field3) => (field3 ?? "").toLowerCase().includes(wanted));
   const sections = [];
   const people = [
     ...roster.bots.filter((bot) => matchesName(bot.name, bot.role)).map((bot) => ({
@@ -49076,7 +49118,7 @@ function About({ text, title = "About", label, placeholder, onSave }) {
   const long = shown.split("\n").length > 5 || shown.length > 240;
   const body = (0, import_react70.useRef)(null);
   useMorph(body, open);
-  const field2 = onSave !== void 0 && (editing || shown === "");
+  const field3 = onSave !== void 0 && (editing || shown === "");
   const edit = () => {
     if (!window.getSelection?.()?.toString()) setEditing(true);
   };
@@ -49084,7 +49126,7 @@ function About({ text, title = "About", label, placeholder, onSave }) {
     "div",
     null,
     (0, import_react70.createElement)("div", { className: "bt-section-title" }, t(title)),
-    field2 ? (0, import_react70.createElement)(InlineText, { label, value: shown, multiline: true, placeholder, autoFocus: editing, className: "bt-input bt-input-area", onSave: save, onDone: () => setEditing(false) }) : (0, import_react70.createElement)("div", {
+    field3 ? (0, import_react70.createElement)(InlineText, { label, value: shown, multiline: true, placeholder, autoFocus: editing, className: "bt-input bt-input-area", onSave: save, onDone: () => setEditing(false) }) : (0, import_react70.createElement)("div", {
       ref: body,
       className: "bt-about",
       "data-open": open || void 0,
@@ -49095,7 +49137,7 @@ function About({ text, title = "About", label, placeholder, onSave }) {
         }
       } } : {}
     }, shown),
-    long && !field2 ? (0, import_react70.createElement)("button", { type: "button", className: "bt-more", onClick: () => setOpen((value) => !value) }, open ? t("Show less") : t("Show more")) : null
+    long && !field3 ? (0, import_react70.createElement)("button", { type: "button", className: "bt-more", onClick: () => setOpen((value) => !value) }, open ? t("Show less") : t("Show more")) : null
   );
 }
 var PILE_MAX = 4;
@@ -52345,16 +52387,16 @@ function Preview({ text, renderFactorySlot }) {
   return (0, import_react76.createElement)("span", { className: "bt-queue-preview" }, rendered ?? text);
 }
 function EditField({ text, onChange, onSave, onCancel }) {
-  const field2 = (0, import_react76.useRef)(null);
+  const field3 = (0, import_react76.useRef)(null);
   (0, import_react76.useEffect)(() => {
-    const node = field2.current;
+    const node = field3.current;
     if (node === null) return;
     node.focus();
     node.style.height = "auto";
     node.style.height = `${node.scrollHeight}px`;
   }, [text]);
   return (0, import_react76.createElement)("textarea", {
-    ref: field2,
+    ref: field3,
     className: "bt-queue-edit",
     value: text,
     rows: 1,
@@ -53043,7 +53085,7 @@ function TextSelectionAction({ sessionId, dismiss, readText, clearSelection, inp
   const [annotation, setAnnotation] = (0, import_react77.useState)("");
   const [sending, setSending] = (0, import_react77.useState)(false);
   const [closing, setClosing] = (0, import_react77.useState)(false);
-  const field2 = (0, import_react77.useRef)(null);
+  const field3 = (0, import_react77.useRef)(null);
   const pending = (0, import_react77.useRef)(false);
   const closeTimer = (0, import_react77.useRef)(null);
   (0, import_react77.useEffect)(() => {
@@ -53051,7 +53093,7 @@ function TextSelectionAction({ sessionId, dismiss, readText, clearSelection, inp
   }, [enabled, dismiss]);
   (0, import_react77.useEffect)(() => {
     if (!team || !enabled || !editing) return;
-    field2.current?.focus();
+    field3.current?.focus();
     if (typeof window !== "undefined") window.dispatchEvent(new Event("resize"));
   }, [team, enabled, editing]);
   (0, import_react77.useEffect)(() => () => clearTimeout(closeTimer.current), []);
@@ -53109,7 +53151,7 @@ function TextSelectionAction({ sessionId, dismiss, readText, clearSelection, inp
       actions.reportError(error, "text-annotation");
       setSending(false);
       pending.current = false;
-      field2.current?.focus();
+      field3.current?.focus();
     }
   };
   const onKeyDown = (event) => {
@@ -53162,7 +53204,7 @@ function TextSelectionAction({ sessionId, dismiss, readText, clearSelection, inp
     (0, import_react77.createElement)("blockquote", { className: "bt-annotation-quote" }, quoteText()),
     (0, import_react77.createElement)("textarea", {
       id: "bt-annotation-field",
-      ref: field2,
+      ref: field3,
       value: annotation,
       rows: 3,
       placeholder: t("Add an annotation…"),

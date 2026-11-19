@@ -887,6 +887,8 @@ export const DE = {
   'Replies from': 'Antworten von',
   'Reply from': 'Antwort von',
   'Message from': 'Nachricht von',
+  'Unrecorded sender': 'Absender nicht erfasst',
+  'Unrecorded sender ({reference})': 'Absender nicht erfasst ({reference})',
   'Stopped by': 'Gestoppt von',
   '{count} messages with': '{count} Nachrichten mit',
   'Routine started': 'Routine gestartet',

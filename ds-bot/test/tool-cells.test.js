@@ -9,7 +9,7 @@ import { build } from 'esbuild'
 const { outputFiles } = await build({
   stdin: {
     contents: [
-      "export { ToolCell, TriggerCell, callTree, CellEmpty, Bubbles } from './src/client/cells.js'",
+      "export { ToolCell, TriggerCell, ChatRows, callTree, CellEmpty, Bubbles } from './src/client/cells.js'",
       "export { stackReplies } from './src/shared/group-replies.js'",
       "export { QuestionDock, SettledQuestion } from './src/client/questions.js'",
       "export { SecretDock } from './src/client/secret-card.js'",
@@ -70,7 +70,7 @@ runInNewContext(outputFiles[0].text, {
     throw new Error(`Unexpected platform module ${name}`)
   },
 })
-const { ToolCell, TriggerCell, callTree, stackReplies, CellEmpty, Bubbles, QuestionDock, SettledQuestion, SecretDock, countCards, ViewMenuList, WidgetView, WidgetDock, SettledView, AnsweredView, ClosedView } = module.exports
+const { ToolCell, TriggerCell, ChatRows, callTree, stackReplies, CellEmpty, Bubbles, QuestionDock, SettledQuestion, SecretDock, countCards, ViewMenuList, WidgetView, WidgetDock, SettledView, AnsweredView, ClosedView } = module.exports
 
 // Runs the effects collected since the last render; returns the cleanups.
 const mount = () => {
@@ -1329,4 +1329,40 @@ test('room cursors refresh an active range without a timer and discard a switche
 test('goal changes in a completed group call appear in the transcript', () => {
   const output = shown(call('group_relay', 'goal', { content: { replies: [{ kind: 'goal', event: 'pause' }] } }), { sessionId: 'room' })
   assert.match(output, /Goal paused/)
+})
+
+test('live message attribution uses a stable sender, keeps lookup evidence, and excludes system context', () => {
+  const click = []
+  const roster = team({ byId: { chief, writer, 'writer-old': writer } })
+  const trigger = source => expand(TriggerCell({
+    node: { key: 'trigger', data: { seq: 17, source: { kind: 'bot', ...source }, content: text$('[Message from Chief]') }, location: { turn: { turn: 1 } } },
+    sessionId: 'chief', actions: { openExchange: (...ids) => click.push(ids), noteTurnPeer() {} },
+    useRoster: select => select(roster), useSessions: select => select({ byId: {} }),
+    useTurnClock: select => select({}), useUi: select => select({ visits: {} }),
+  }))
+  const attributed = trigger({ role: 'reply', sender: { sessionId: 'writer-old', name: 'Old name' } })
+  assert.match(text(attributed), /Reply fromWriter/)
+  find(attributed, n => n.props?.className === 'bt-event-whole').props.onClick()
+  assert.deepEqual(click, [['chief', 'writer']])
+  const deleted = trigger({ role: 'request', senderId: 'removed-bot', senderName: 'Former writer' })
+  assert.match(text(deleted), /Former writer/)
+  assert.match(find(deleted, n => n.props?.className === 'bt-event-whole').props.title, /removed-bot/)
+  assert.equal(find(deleted, n => n.type === 'button'), undefined)
+  assert.match(text(trigger({ role: 'request', senderSessionId: 'missing-id', senderName: 'You' })), /Unrecorded sender \(missing-id\)/)
+  assert.match(text(trigger({ role: 'request', exchangeId: 'ex-9', askedBy: 'chief' })), /Unrecorded sender \(ex-9\)/)
+  assert.match(text(trigger({ role: 'request', senderName: 'You', taskAction: { id: 'a' } })), /Task board/)
+  for (const source of [{ form: 'snapshot', sections: [] }, { role: 'kickoff', roomId: 'room' }, { role: 'goal' }, { role: 'room', askedBy: 'chief' }]) {
+    assert.equal(text(trigger(source)), '')
+  }
+  effects = []
+})
+
+test('saved schedule entries, board requests and unknown peers have distinct history rows', () => {
+  const body = items => text(expand(ChatRows({ items, sessionId: 'chief', roster: team(), actions: {} })))
+  assert.match(body([{ kind: 'event', role: 'schedule', text: '巡检' }]), /Scheduled task: 巡检/)
+  assert.match(body([{ kind: 'event', role: 'schedule' }]), /Routine started/)
+  assert.match(body([{ kind: 'event', role: 'request', boardTask: true }]), /Task board/)
+  assert.match(body([{ kind: 'event', role: 'request', name: '', seq: 19 }]), /Unrecorded sender \(#19\)/)
+  assert.match(body([{ kind: 'event', role: 'request', botId: 'writer', name: 'stale' }]), /Message fromWriter/)
+  assert.equal(body([{ kind: 'event', role: 'kickoff', roomId: 'room' }]), '')
 })
