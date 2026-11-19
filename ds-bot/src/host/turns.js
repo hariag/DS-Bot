@@ -794,19 +794,35 @@ export function install(rt) {
 
   // Retry sends a failed greeting again; other failed inputs stay in their original
   // Session and are tracked by event sequence until a completed turn settles them.
-  async function resumeBot(bot) {
-    if (await rt.releaseKickoff(bot)) return
+  async function resumeBot(bot, requestedSession, turn) {
     await rt.load?.()
-    if (rt.greetingOut?.(bot.id)) return
-    const candidates = new Set([
-      rt.chatOf(bot.id),
-      ...(rt.groupSessionsOf?.(bot.id) ?? []),
-      ...(Array.isArray(bot.segments) ? bot.segments.map(segment => segment.sessionId) : []),
-    ].filter(sessionId => typeof sessionId === 'string'))
+    const own = rt.chatOf(bot.id)
+    const groupOf = id => rt.groupOwners.get(id)?.roomId
+    const current = id => {
+      const roomId = groupOf(id)
+      if (roomId !== undefined) {
+        const room = rt.roomOf(roomId)
+        return rt.groupOwners.get(id).botId === bot.id && room?.sessions?.[bot.id] === id && room.members.includes(bot.id)
+      }
+      return id === own || rt.chatOwners.get(id) === bot.id
+    }
+    const target = requestedSession ?? bot.blocked?.sessionId
+    if (target !== undefined && (typeof target !== 'string' || !target || !current(target))) throw new Error('Open the current conversation to retry its failed work.')
+    if (turn !== undefined && (!Number.isSafeInteger(turn) || requestedSession === undefined ||
+      !(bot.failures?.[target]?.turn === turn || (bot.blocked?.sessionId === target && bot.blocked.turn === turn)))) {
+      throw new Error('This failure has changed. Open the current conversation to check its status.')
+    }
+    const groupSessions = rt.groupSessionsOf?.(bot.id) ?? []
+    if (target === own || (target === undefined && !groupSessions.length)) {
+      if (await rt.releaseKickoff(bot) || rt.greetingOut?.(bot.id)) return
+    }
+    const candidates = target === undefined
+      ? new Set([own, ...groupSessions, ...(bot.openParts ?? []).map(part => part.sessionId)].filter(current))
+      : new Set([target])
     for (const sessionId of candidates) await reconcilePending(sessionId)
     const sessions = Object.entries(state.pendingInputs ?? {})
-      .filter(([, items]) => Array.isArray(items) && items.some(item => item.ownerId === bot.id))
-      .sort((a, b) => Math.min(...a[1].map(item => item.seq)) - Math.min(...b[1].map(item => item.seq)))
+      .filter(([id, items]) => candidates.has(id) && Array.isArray(items) && items.some(item => item.ownerId === bot.id))
+    if (sessions.length > 1) throw new Error('Several conversations have outstanding work. Retry in the original conversation.')
     if (sessions.length > 0) {
       for (const [sessionId] of sessions) {
         await reconcilePending(sessionId)
@@ -815,6 +831,7 @@ export function install(rt) {
         const agent = await rt.resolveAgent(sessionId).catch(() => undefined)
         if (agent === undefined) continue
         if (agent.status === 'running') continue
+        if (items.some(item => rt.isHeldRecoveryInput?.(sessionId,item))) throw new Error('The interrupted turn has an unknown outcome. Check its original result in the task board recovery records.')
         const ids = items.map(item => item.id)
         const queuedRecovery = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
           .some(message => Array.isArray(message?.source?.recoveryIds) && message.source.recoveryIds.some(id => ids.includes(id)))
@@ -836,6 +853,9 @@ export function install(rt) {
           // A turn known to have failed may be retried with a new key.
           delete state.pendingRecovery[sessionId]
         }
+        if (!current(sessionId)) throw new Error('The original conversation changed before retry.')
+        const roomId = groupOf(sessionId)
+        if (roomId && rt.goalRecoveryBlocked?.(rt.roomOf(roomId), bot.id)) throw new Error('Resume the stopped group work in its original group.')
         const recoveryIds = ids
         const recoveryKey = randomUUID()
         state.pendingRecovery ??= {}
@@ -843,7 +863,13 @@ export function install(rt) {
         // Do not send unless the recovery key can survive this process stopping.
         await rt.save({ required: true })
         try {
-          await rt.deliver({ toId: bot.id, sessionId, role: 'continue', recoveryIds, recoveryKey, text: RECOVERY_TEXT })
+          await rt.deliver({ toId: bot.id, sessionId, roomId, role: 'continue', recoveryIds, recoveryKey, text: RECOVERY_TEXT }, {
+            beforeAdmission: () => {
+              if (!current(sessionId) || groupOf(sessionId) !== roomId || (roomId && rt.goalRecoveryBlocked?.(rt.roomOf(roomId), bot.id))) {
+                throw new Error('The original conversation changed before retry.')
+              }
+            },
+          })
         } catch (error) {
           // followup may already have run when its subsequent Session flush fails.
           // Retain the durable marker rather than creating a new recovery identity.
@@ -854,13 +880,8 @@ export function install(rt) {
       }
       return
     }
-    if (live.get(rt.chatOf(bot.id))?.turn !== undefined) return
-    const code = bot.blocked?.code
-    await rt.deliver({
-      toId: bot.id,
-      role: 'continue',
-      text: `Your last turn failed${code ? ` (${code})` : ''} and the user has fixed it. Answer the user's last unanswered message.`,
-    })
+    if (live.get(target ?? own)?.turn !== undefined) return
+    throw new Error('No outstanding input was found for this retry. Check the original conversation and its recovery records.')
   }
 
   const businessInput = source => source?.reviewInspect !== true && (source?.kind === 'user' || source?.kind === REPLY_KIND || source?.kind === 'schedule'
@@ -980,7 +1001,7 @@ export function install(rt) {
     }
     await reconcilePending(agent.id, signal)
     if (signal.aborted) return decision
-    const pending = state.pendingInputs?.[agent.id] ?? []
+    const pending = (state.pendingInputs?.[agent.id] ?? []).filter(item => !rt.isHeldRecoveryInput?.(agent.id,item))
     const inStep = decision.messages.flatMap(message => Array.isArray(message?.source?.recoveryIds)
       ? message.source.recoveryIds.filter(value => typeof value === 'string') : [])
     entry.recoveryIds = [...new Set([...(entry.recoveryIds ?? []), ...inStep])]
@@ -994,9 +1015,10 @@ export function install(rt) {
     }
     entry.recoveryStepHandled = true
     entry.turnRecoveryKey = randomUUID()
+    const recoveryRoom = rt.groupOwners.get(agent.id)?.roomId
     const recovery = createUserMessage({
       content: [{ type: 'text', text: RECOVERY_TEXT }],
-      source: { kind: SOURCE_KIND, form: 'snapshot', role: 'continue', recoveryIds, recoveryKey: entry.turnRecoveryKey },
+      source: { kind: SOURCE_KIND, form: 'snapshot', role: 'continue', ...(recoveryRoom ? {roomId:recoveryRoom} : {}), recoveryIds, recoveryKey: entry.turnRecoveryKey },
     })
     return { ...decision, messages: [recovery, ...decision.messages] }
   })

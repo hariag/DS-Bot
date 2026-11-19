@@ -760,6 +760,26 @@ test('waking an inbox retains its delivery note while removing and resending', a
   await settle(() => notes(home).queued?.b === undefined)
 })
 
+test('a saved group delivery with no room field follows the original group and never the private chat', async t => {
+  t.mock.timers.enable({apis:['setTimeout']})
+  const home = freshHome(t), team = seed()
+  team.rooms.r1.segments = { b:[{sessionId:'old-gb'}] }
+  writeFileSync(join(home,'state.json'), JSON.stringify(team))
+  const args = {exchangeId:'group-input',toId:'b',role:'room',fromId:'a',text:'Continue in the original group'}
+  writeFileSync(join(home,'inflight.json'), JSON.stringify({turns:{},queued:{
+    'old-gb':[{args,at:1}],
+    'missing-group':[{args:{...args,exchangeId:'unknown-origin'},at:2}],
+    b:[{args:{...args,exchangeId:'private-mismatch',roomId:'r1'},at:3}],
+  }}))
+  const host = await start(home,new Map([['old-gb',[]],['gb',[]],['missing-group',[]],['b',[]]]))
+  t.mock.timers.tick(3000)
+  await settle(() => host.agentOf('gb').calls.length === 1)
+  const [message] = host.agentOf('gb').calls
+  assert.deepEqual([message.source.exchangeId,message.source.roomId],['group-input','r1'])
+  assert.equal(host.agentOf('b').calls.length,0)
+  assert.equal(host.agentOf('missing-group').calls.length,0)
+})
+
 test('a queued request kept over a restart is sent again however old, and the asker is told it was late', async (t) => {
   const home = freshHome(t)
   const first = await start(home)
@@ -1330,6 +1350,9 @@ for (const reason of ['completed', 'error', 'interrupted']) {
 test('a receipt found in an old part stays held when a later history omits it', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const home = freshHome(t)
+  const team = seed()
+  team.bots.b.segments = [{sessionId:'old'}]
+  writeFileSync(join(home,'state.json'),JSON.stringify(team))
   const args = { exchangeId:'seen-once', toId:'b', fromId:'a', role:'request', text:'test' }
   writeFileSync(join(home, 'inflight.json'), JSON.stringify({ queued:{ old:[{ at:1, args }] } }))
   const first = await start(home, new Map([['old', [{ type:'user/message', data:{ source:args } }]]]))
