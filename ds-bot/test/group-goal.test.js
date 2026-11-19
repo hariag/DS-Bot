@@ -3287,3 +3287,89 @@ test('scheduled messages do not resume an idle goal, while a real user message d
   await settle(() => user() !== undefined)
   assert.equal(goal(host).idle, undefined)
 })
+
+for (const scenario of ['operator', 'scheduler', 'cold original', 'unpersisted terminal', 'wrong turn', 'second delivery in a later part', 'repeat admission', 'unfinished job', 'canceled admission', 'failed admin', 'unrelated input', 'original queue busy', 'changed cut', 'wrong admin', 'paused', 'stopped']) {
+  test(`confirm a completed inspection after administrator rotation: ${scenario}`, async t => {
+    const parts = new Map(), services = {}, host = await start(t, undefined, services)
+    const goal = await parkForReview(host), room = host.rt.roomOf('r1')
+    const attempt = goal.reviewAttempt = { id: 'old-inspection', at: Date.now() - 2 * GOAL_REVIEW_INTERVAL_MS, state: 'admitting',
+      adminId: 'a', rootSessionId: 'r1', adminSessionId: 'old-a', inspectOnly: true }
+    room.segments = { a: [{ sessionId: 'old-a' }, { sessionId: 'later-a' }] }
+    const body = { action: 'review-confirm-terminal', confirmed: true, roomId: room.id, goalId: goal.id, reviewId: attempt.id }
+    for (const [id, role] of [['r1', 'goal'], ['old-a', 'room']]) {
+      const root = role === 'goal'
+      const message = { id: 'm-' + id, role: 'user', content: [], source: { kind: 'bot', form: 'relay', reviewId: attempt.id,
+        roomId: room.id, role, reviewInspect: true, ...(root ? { goalId: goal.id } : {}) } }
+      const data = [
+        ['agent/inbox/spliced', { start:0, target:'next-turn', inserted:[message] }],
+        ['turn/start', { turn: 7 }],
+        ['agent/inbox/spliced', { start:0, target:'next-turn', inserted:[], removedCount:1,
+          ...(!root && scenario === 'canceled admission' ? { outcome:'canceled' } : {}) }],
+        ...(!root ? [['user/message', { source: { kind: 'bot', form: 'snapshot', role: 'continue' } }]] : []),
+        ['user/message', message],
+        ['user/message', { source: { kind:'time-context', form:'snapshot' } }],
+        ['tool/call', { callId: 'c', name: root ? 'group_relay' : 'bash' }],
+        ...(!root ? [['job/registered', { jobId: 'j' }], ...(scenario === 'unfinished job' ? [] : [['job/settled', { jobId: 'j' }]])] : []),
+        ['tool/result', { message: { role: 'tool', toolCallId: 'c', isError: false } }],
+        ...(!root && scenario === 'unrelated input' ? [['user/message', { source: { kind: 'user' } }]] : []),
+        ['turn/end', { turn: 7, reason: { kind: !root && scenario === 'failed admin' ? 'error' : 'completed' } }],
+      ]
+      const events = data.map(([type, data], seq) => ({ type, data, seq }))
+      parts.set(id, events)
+      body[root ? 'root' : 'admin'] = { sessionId: id, seq: events.find(e => e.data === message).seq, end: events.at(-1).seq, turn: 7 }
+      if (!root && scenario === 'repeat admission') events.push({ ...events[0], seq: events.length })
+    }
+    parts.set('later-a', scenario === 'second delivery in a later part' ? parts.get('old-a') : [])
+    parts.set('ga', [])
+    const stages = structuredClone(goal.stages), counts = [...parts.keys()].map(id => host.agentOf(id).calls.length)
+    const sessions = new Map([...parts].map(([id, events]) => [id, { id, seq: events.length }]))
+    let inspected = 0, disposed = 0
+    const cold = id => ['cold original','unpersisted terminal'].includes(scenario) && id === 'old-a'
+    host.ctx.sessions.get = id => cold(id) ? undefined : sessions.get(id)
+    services.agents = { get: id => cold(id) ? undefined : host.agentOf(id) }
+    services.sessionProjections = { snapshot: () => ({ asOfSeq: 10, values: { inbox: { 'next-step': [], 'next-turn': [] } } }) }
+    services.sessionPersistence = { stat: async id => ({ header: { id }, revision: 'native-cut' }) }
+    services.sessionQuery = { inspectSession: async (id, read) => read(sessions.get(id)), async observeSession(id) {
+      assert.ok(parts.has(id)); inspected++
+      const events = parts.get(id)
+      if (scenario === 'changed cut' && id === 'ga') sessions.get('r1').seq++
+      return { header: { id }, source: cold(id) ? 'prepared' : 'live', inheritedEventCount: 0, cursor: events.length - 1, events,
+        ...(cold(id) ? { revision:'native-cut', persistedEventCount: events.length - (scenario === 'unpersisted terminal' ? 1 : 0) } : {}),
+        [Symbol.dispose]() { disposed++ } }
+    } }
+    if (scenario === 'wrong turn') body.admin.turn++
+    if (scenario === 'wrong admin') room.admin = 'b'
+    if (scenario === 'paused' || scenario === 'stopped') goal.status = scenario
+    if (scenario === 'original queue busy') host.agentOf('old-a').inbox.nextTurn.push({ id: 'waiting' })
+    const before = structuredClone(goal)
+    if (scenario === 'scheduler') await host.rt.goalReviewPoll()
+    else {
+      const result = await host.call('goal-control', body)
+      assert.equal(result.ok, ['operator','cold original'].includes(scenario), result.error)
+    }
+    assert.equal(disposed, inspected)
+    assert.deepEqual(goal.stages, stages)
+    assert.deepEqual([...parts.keys()].map(id => host.agentOf(id).calls.length), counts)
+    if (['operator','cold original','scheduler'].includes(scenario)) {
+      assert.equal(goal.reviewAttempt, undefined)
+      const [resolution] = saved(host).rooms.r1.goal.reviewResolutions
+      assert.equal(resolution.by, scenario === 'scheduler' ? 'host' : 'user')
+      assert.equal(resolution.decision, 'inspection-ended')
+      assert.deepEqual(resolution.root, body.root)
+      assert.deepEqual(resolution.admin, body.admin)
+      assert.deepEqual(resolution.attempt, before.reviewAttempt)
+      assert.ok(goal.ownerReviewAt >= resolution.at + GOAL_REVIEW_INTERVAL_MS)
+      const post = structuredClone(goal)
+      await host.rt.goalDrive(room, { goalReviewId: attempt.id, goalNudge: true, slots: [{ id: 'a', status: 'passed' }] })
+      assert.equal((await host.call('goal-control', body)).ok, true)
+      assert.equal((await host.call('goal-control', { ...body, admin: { ...body.admin, end: body.admin.end + 1 } })).ok, false)
+      assert.deepEqual(goal, post)
+      if (scenario === 'operator') {
+        await host.ctx.dispose()
+        const reboot = await start(t, undefined, {}, {}, host.home)
+        assert.equal((await reboot.call('goal-control', body)).ok, true)
+        assert.deepEqual(saved(reboot).rooms.r1.goal.reviewResolutions, [resolution])
+      }
+    } else assert.deepEqual(goal, before)
+  })
+}

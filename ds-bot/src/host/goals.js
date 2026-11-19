@@ -13,6 +13,7 @@ import { GOAL_IDLE_NUDGES, SOURCE_KIND } from './constants.js'
 import { headOf } from './text.js'
 import { output } from './tools.js'
 import { currentGoalBoardTaskId } from './legacy-goal.js'
+import { completedInspection, inspectionSourceMatches } from './inspection-terminal.mjs'
 import { syncDirectory } from './directory-sync.mjs'
 
 const TITLE_MAX = 80
@@ -643,6 +644,8 @@ export function install(rt) {
   // Remember only native record coordinates. Resolve a failed inspection from
   // two bounded original turns, without scanning either session's full log.
   const reviewInputs = new WeakMap()
+  const terminalCheckAt = new WeakMap()
+  const terminalChecks = new Set()
   const reviewTurnEnds = new Map()
   ctx.on('session/event', (session, event) => {
     if (event.type === 'turn/end') {
@@ -694,9 +697,7 @@ export function install(rt) {
       if (event.type === 'user/message') {
         const source = event.data?.source
         if (source?.kind === 'time-context' && source.form === 'snapshot') continue
-        if (received || event.seq !== seq || source?.kind !== SOURCE_KIND || source.form !== 'relay' || source.reviewInspect !== true
-          || source.roomId !== room.id || source.reviewId !== attempt.id || source.role !== (root ? 'goal' : 'room')
-          || (root && source.goalId !== room.goal.id)) return false
+        if (received || event.seq !== seq || !inspectionSourceMatches(source, room, attempt, root)) return false
         received = true
       } else if (root && received && event.type === 'assistant/message') {
         continue
@@ -991,25 +992,35 @@ export function install(rt) {
       confirmedReviewResolutions.set(goal,{entries,lease,failure})
     } finally { await file.close() }
   }
-  async function goalControl(roomId, body = {}, provenFailure) {
+  async function goalControl(roomId, body = {}, provenFailure, backgroundTerminal = false) {
     const room = rt.roomOf(roomId)
     if (room === undefined) return { error: 'Unknown group chat' }
     const goal = room.goal
     if (goal === undefined || goal.id !== String(body.goalId ?? '')) return { error: 'The goal has changed. Look again.', code: 'bot/stale' }
     const action = String(body.action ?? '')
-    if (action === 'review-resolve' || action === 'review-record-failure') {
+    if (action === 'review-resolve' || action === 'review-record-failure' || action === 'review-confirm-terminal') {
+      const terminal = action === 'review-confirm-terminal'
+      const sameCoordinates = (record, supplied) => ['root', 'admin'].every(side =>
+        record?.[side] && supplied?.[side] && ['sessionId','seq','end','turn'].every(key => record[side][key] === supplied[side][key]))
       const recordOnly = action === 'review-record-failure'
       const attempt = goal.reviewAttempt
       const allowFuture = body.decision === 'allow-future'
       const originalFailureEvidence = 'The original root turn only relayed this inspection. The administrator failed before any tool call. Owner checks remain unverified.'
-      const evidence = recordOnly || provenFailure ? originalFailureEvidence : allowFuture ? 'User allowed future inspections; the previous outcome remains unknown.' : String(body.evidence ?? '').trim()
-      if (body.confirmed !== true || (!allowFuture && (evidence.length < 8 || evidence.length > TEXT_MAX))) return { error: 'Confirm the decision before continuing.', code: 'bot/invalid' }
+      const evidence = terminal ? 'The original inspection turns ended. Owner checks and task completion remain unverified. Future inspections may run on schedule.' : recordOnly || provenFailure ? originalFailureEvidence : allowFuture ? 'User allowed future inspections; the previous outcome remains unknown.' : String(body.evidence ?? '').trim()
+      if ((terminal && (body.decision !== undefined || (!backgroundTerminal && !['root','admin'].every(side => {
+        const input = body[side]
+        return typeof input?.sessionId === 'string' && [input.seq,input.end,input.turn].every(Number.isSafeInteger)
+          && input.seq >= 0 && input.turn >= 0 && input.end > input.seq
+      })))) || body.confirmed !== true || (!allowFuture && (evidence.length < 8 || evidence.length > TEXT_MAX))) return { error: 'Confirm the decision before continuing.', code: 'bot/invalid' }
       const resolutions = goal.reviewResolutions ?? []
       if (!Array.isArray(resolutions) || resolutions.length >= 10000) return { error:'Review decision history is unavailable or full.', code:'bot/refused' }
       const resolutionKey = JSON.stringify([room.id,goal.id,body.reviewId])
       if (pendingReviewResolutions.has(resolutionKey)) return { error:'The earlier decision outcome is unknown; refresh later.', code:'bot/refused' }
       const settled = resolutions.find(item => item?.id === body.reviewId)
       if (settled) {
+        if ((settled.decision === 'inspection-ended') !== terminal || (terminal && !backgroundTerminal && !sameCoordinates(settled, body))) {
+          return { error: 'The saved decision or native coordinates differ.', code: 'bot/stale' }
+        }
         if (recordOnly && !['root', 'admin'].every(side => {
           const saved = settled.attempt?.terminalFailure?.[side] ?? settled[side], supplied = body[side]
           return saved && supplied && ['sessionId', 'seq', 'end', 'turn'].every(key => supplied[key] === saved[key])
@@ -1020,12 +1031,15 @@ export function install(rt) {
       if (!reviewEligible(goal) || attempt === undefined || attempt.id !== body.reviewId
         || !['uncertain', 'admitting', 'cancelled-uncertain'].includes(attempt.state)
         || (attempt.state === 'admitting' && (!Number.isFinite(attempt.at) || Date.now() - attempt.at < GOAL_REVIEW_INTERVAL_MS))) return { error: 'The review is not eligible for recovery, or the goal was paused or stopped.', code: 'bot/stale' }
+      if (terminal && (attempt.inspectOnly !== true || !['uncertain','admitting'].includes(attempt.state) || attempt.terminalFailure
+        || attempt.saveOutcomeUnknown || reviewInputs.get(attempt)?.ambiguous || stopsPending.has(room.id)
+        || !Number.isFinite(attempt.at) || Date.now() - attempt.at < GOAL_REVIEW_INTERVAL_MS)) return { error:'This inspection is not eligible for terminal verification.', code:'bot/stale' }
       const currentAdminSession = room.sessions?.[attempt.adminId]
       // A verified inspection may have finished in an earlier part belonging
       // to this same admin in this same room. Never infer ownership by name.
       const sessionsMatch = () => room.admin === attempt.adminId && room.members.includes(attempt.adminId)
         && rt.sessionOfRoom(room) === attempt.rootSessionId && room.sessions?.[attempt.adminId] === currentAdminSession
-        && (currentAdminSession === attempt.adminSessionId || (!allowFuture && attempt.inspectOnly === true && (attempt.state === 'uncertain' || attempt.terminalFailure)
+        && (currentAdminSession === attempt.adminSessionId || (!allowFuture && attempt.inspectOnly === true && (terminal || attempt.state === 'uncertain' || attempt.terminalFailure)
           && typeof currentAdminSession === 'string' && typeof attempt.adminSessionId === 'string'
           && room.segments?.[attempt.adminId]?.some(part => part.sessionId === attempt.adminSessionId)))
       if (!sessionsMatch()) return { error: 'The group or administrator session changed; inspect the original sessions before recovery.', code: 'bot/stale' }
@@ -1076,7 +1090,16 @@ export function install(rt) {
       const busy = { error: 'The goal changed or related work is still pending. Check it before recovery.', code: 'bot/stale' }
       if (roomBusy()) return busy
       const ids = [...new Set([attempt.rootSessionId, attempt.adminSessionId, currentAdminSession].filter(id => id !== undefined))]
-      const agents = await Promise.all(ids.map(id => rt.resolveAgent(id)))
+      let proof
+      if (terminal) {
+        if (terminalChecks.has(room.id)) return { error: 'Inspection verification is already in progress.', code: 'bot/refused' }
+        terminalChecks.add(room.id)
+        try { proof = await completedInspection(rt, room, attempt) } finally { terminalChecks.delete(room.id) }
+        if (!proof?.isCurrent() || (!backgroundTerminal && !sameCoordinates(proof, body))) {
+          return { error: 'No unique completed inspection was confirmed at these coordinates in the quiet original sessions.', code: 'bot/stale' }
+        }
+      }
+      const agents = terminal ? [] : await Promise.all(ids.map(id => rt.resolveAgent(id)))
       const quietAgent = agent => Array.isArray(agent?.inbox?.nextStep) && Array.isArray(agent?.inbox?.nextTurn)
         && agent.inbox.nextStep.length === 0 && agent.inbox.nextTurn.length === 0
         && rt.live.get(agent.session.id)?.turn === undefined && rt.hasSubagents?.(agent.session.id) !== true
@@ -1084,21 +1107,24 @@ export function install(rt) {
       if (rt.roomOf(room.id) !== room || room.goal !== goal || goal.reviewAttempt !== attempt || !reviewEligible(goal)
         || stopsPending.has(room.id) || attempt.terminalFailure !== previousFailure || (provenFailure && attempt.terminalFailure !== provenFailure
           && (reviewInputs.get(attempt) !== provenFailure || provenFailure.proven !== true || provenFailure.ambiguous))
+        || (terminal && (!proof.isCurrent() || !['uncertain','admitting'].includes(attempt.state) || attempt.saveOutcomeUnknown
+          || reviewInputs.get(attempt)?.ambiguous || pendingReviewResolutions.has(resolutionKey)))
         || !sessionsMatch() || !agents.every((agent, i) => agent?.session?.id === ids[i] && quietAgent(agent)) || roomBusy()) return busy
       rt.requireHomeLock()
       const wasAutomatic = automaticIdle(goal)
       const now = Date.now()
       pendingReviewResolutions.add(resolutionKey)
       pendingReviewRooms.add(room.id)
-      const by = provenFailure ? 'host' : 'user'
-      const resolution = { id:attempt.id, attempt:structuredClone(attempt), decision:provenFailure?'failed-before-tools':allowFuture?'allow-future':'verified', by, at:now,
+      const by = provenFailure || backgroundTerminal ? 'host' : 'user'
+      const resolution = { id:attempt.id, attempt:structuredClone(attempt), decision:terminal?'inspection-ended':provenFailure?'failed-before-tools':allowFuture?'allow-future':'verified', by, at:now,
+        ...(terminal ? { root: proof.root, admin: proof.admin } : {}),
         ...(provenFailure ? { root: { ...provenFailure.root }, admin: { ...provenFailure.admin } } : {}) }
       goal.reviewResolutions = [...resolutions, resolution]
       delete goal.reviewAttempt
       goal.revision += 1
       goal.updatedAt = now
       if (wasAutomatic) { goal.idleRevision = goal.revision; goal.reviewAt = now + GOAL_REVIEW_INTERVAL_MS }
-      if (provenFailure) goal.ownerReviewAt = now + GOAL_REVIEW_INTERVAL_MS
+      if (provenFailure || terminal) goal.ownerReviewAt = now + GOAL_REVIEW_INTERVAL_MS
       goal.events = [...(goal.events ?? []), { at: now, kind: 'review-resolved', by, reviewId: attempt.id, text: evidence }].slice(-EVENTS_MAX)
       await rt.save({ required: true })
       await durableReviewResolutions(room,goal)
@@ -1369,6 +1395,23 @@ export function install(rt) {
         })())
         continue
       }
+      // A restart can lose the in-memory end callback after both native turns
+      // already finished. Check only this overdue inspection's bound parts.
+      if (attempt?.inspectOnly && ['admitting','uncertain'].includes(attempt.state) && !attempt.terminalFailure
+        && !attempt.saveOutcomeUnknown && reviewEligible(goal) && !stopsPending.has(room.id) && !reviewing.has(room.id)
+        && Number.isFinite(attempt.at) && now - attempt.at >= GOAL_REVIEW_INTERVAL_MS
+        && now >= (terminalCheckAt.get(attempt) ?? 0)) {
+        terminalCheckAt.set(attempt, now + GOAL_REVIEW_INTERVAL_MS)
+        reviewing.add(room.id)
+        jobs.push((async () => {
+          try {
+            await goalControl(room.id, { action: 'review-confirm-terminal', confirmed: true, goalId: goal.id, reviewId: attempt.id }, undefined, true)
+          } catch (error) {
+            rt.warn('ds-bot: terminal inspection verification for %s failed: %s', attempt.id, error)
+          } finally { reviewing.delete(room.id) }
+        })())
+        continue
+      }
       // A different owner's progress must not reset the period for everyone.
       const due = goal?.idle === true && !inspectionOnlyIdle(goal) ? goal.reviewAt
         : Number.isFinite(goal?.ownerReviewAt) ? goal.ownerReviewAt
@@ -1464,6 +1507,10 @@ export function install(rt) {
     const goal = room.goal
     if (goal?.reviewResolutions !== undefined || goal?.reviewAttempt?.terminalFailure) { try { await durableReviewResolutions(room,goal) } catch { return } }
     const admin = room.admin === undefined || room.admin === null ? undefined : rt.botOf(room.admin)
+    // A delayed callback from an already confirmed inspection cannot start a
+    // normal goal drive or change task progress.
+    if (round.goalReviewId && goal?.reviewResolutions?.some(record =>
+      record.id === round.goalReviewId && record.decision === 'inspection-ended')) return
     if (round.goalReviewId && goalReviewAllowed(room, round.goalReviewId)) {
       const slot = round.slots.find(item => item.id === admin?.id)
       if ((slot !== undefined && ['passed', 'posted'].includes(slot.status)) || goal.reviewAttempt?.adminCompleted === true) {
