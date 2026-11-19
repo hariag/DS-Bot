@@ -3,7 +3,7 @@
 import { randomUUID } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { readAvatar } from './avatar.js'
-import { COLORS, EXTRA_COLORS, MESSAGE_INLINE_MAX, ROOM_MODES, TEXT_KEPT } from './constants.js'
+import { COLORS, EXTRA_COLORS, MESSAGE_INLINE_MAX, ROOM_MODES, SOURCE_KIND, TEXT_KEPT } from './constants.js'
 import { within } from './folders.js'
 import { missingFileRefs } from './claims.js'
 import { absoluteLinks } from './links.js'
@@ -120,16 +120,53 @@ export function install(rt) {
     return { bots: bot ? [bot] : members, rooms: [room] }
   }
 
+  // Inspect only loaded private Sessions. A missing input can also mean the
+  // worker consumed it, the Session moved, or this host restarted.
+  const observedInput = (bot, matches) => {
+    const registry = ctx.get?.('agents')
+    for (const id of ownChatSessions(bot)) {
+      if (rt.privateChatOwner(id) !== bot.id) continue
+      const turn = rt.live.get(id)
+      if (turn?.turn !== undefined && (matches(turn.info) || turn.joined?.some(item => matches(item.info)))) return 'read in a running turn'
+      const inbox = registry?.get?.(id)?.inbox
+      if (inbox?.nextStep?.some(message => matches(message.source))) return 'queued for the next step'
+      if (inbox?.nextTurn?.some(message => matches(message.source))) return 'queued for a later turn'
+    }
+  }
+
+  const inspectRequest = (args, exec) => {
+    const sender = rt.botOf(rt.privateChatOwner(exec.agent?.id))
+    if (sender === undefined || args.group) return 'Check a private request from the sending Bot’s own chat.'
+    const name = typeof args.request_id === 'string' ? args.request_id.trim() : ''
+    if (!args.bot || !name || name.length > NAME_MAX) return 'Give the recipient bot and original request_id.'
+    const target = rt.findBot(args.bot)
+    const record = rt.privateRequest(sender.id, name)
+    const handoff = record?.privateHandoff
+    if (!target || target.private === true || !handoff || handoff.to !== target.id || typeof handoff.exchangeId !== 'string' || !handoff.exchangeId) {
+      return 'No matching private handoff can be verified. Check the original task or conversation before resending.'
+    }
+    const reply = observedInput(sender, source => source?.kind === SOURCE_KIND && source.role === 'reply'
+      && source.senderSessionId === target.id && source.replyTo === handoff.exchangeId)
+    if (reply) return `A reply from ${target.name} to this request was returned to your chat (${reply}). Check its result against the task’s acceptance criteria.`
+    const input = observedInput(target, source => source?.kind === SOURCE_KIND && source.role === 'request'
+      && source.senderSessionId === sender.id && source.exchangeId === handoff.exchangeId)
+    if (input) return `This request is ${input} in ${target.name}’s chat. Task completion is unconfirmed.`
+    const delivery = record.outcome === 'delivered' ? 'Private delivery was recorded.' : 'Private delivery is unconfirmed.'
+    return `${delivery} Current processing and result are unconfirmed. Check the original task or conversation before resending.`
+  }
+
   rt.teamTools.push(defineTool({
     name: 'list_bots',
     description: 'List every Bot on the user\'s team with its role, what it does and what it is doing right now, and the group chats you can see. Give bot or group to list only that Bot or that group\'s members; with both, the Bot must be in the group.',
     parameters: {
       bot: { type: 'string', description: 'Exact name of one Bot to list, with the group chats you can see that it is in' },
       group: { type: 'string', description: 'Exact group chat name: list only its members and that group' },
+      request_id: { type: 'string', description: 'With bot, check a named private request from your own chat against current inputs and turns without sending again.' },
     },
     output,
     async execute(args, exec) {
       await rt.load()
+      if (args.request_id !== undefined) return inspectRequest(args, exec)
       const self = rt.selfOf(exec.agent?.id)
       if (Object.keys(state.bots).length === 0) return 'No Bots yet.'
       const { bots, rooms, none, error } = listScope(args, self)
@@ -339,27 +376,30 @@ export function install(rt) {
       const openingWork = rt.workOf(turn?.info)
       const joinedWorks = (turn?.joined ?? []).map(joined => rt.workOf(joined.info))
       if (rt.upstreamOf([openingWork, ...joinedWorks]).has(target.id)) return upstreamRefusal(exec, sender, target, text.trim(), args, payload.when)
+      const exchangeId = randomUUID()
+      if (request !== undefined) request.privateHandoff = { to: target.id, exchangeId }
       const send = async () => {
         const toUser = args.reply_to === 'user'
         const work = toUser ? undefined : openingWork
         // The part of the sender's own chat this request comes from: its answer goes back
         // to that part's thread.
         const fromPart = callerPart(exec).fromPart
-        const chat = rt.chatOf(target.id)
-        await rt.resolveAgent(chat)
-        const status = rt.statusOf(target.id, sender.id)
         // Every request is a separate unit of work. In particular, never promote a
         // queued request into an unread steer or append to a named request's payload.
         const long = await rt.attachLong(text, `Message from ${sender.name}.txt`)
         // Nothing went out, so a named request must not take this as a delivered
         // receipt: admitRequest drops the pending record instead, and a retry can send.
         if (long === undefined) { if (request !== undefined) request.unsent = true; return tooLong(text) }
-        const working = rt.live.get(chat)?.turn !== undefined
+        let chat, working
         const steer = args.when === 'now' && !toUser
-        const exchangeId = randomUUID()
         if (!toUser) rt.openWork(exchangeId, { from: sender.id, to: target.id, parent: work, ...(fromPart ? { fromPart } : {}) })
         try {
-          await rt.deliver({ fromId: sender.id, toId: target.id, ...(fromPart ? { fromPart } : {}), text: long.text, files: long.files, length: long.length, role: 'request', steer, exchangeId, ...(toUser ? { audience: 'user' } : {}) })
+          await rt.deliver({ fromId: sender.id, toId: target.id, ...(fromPart ? { fromPart } : {}), text: long.text, files: long.files, length: long.length, role: 'request', steer, exchangeId, ...(toUser ? { audience: 'user' } : {}) }, {
+            beforeAdmission(agent) {
+              chat = agent.session.id
+              working = rt.live.get(chat)?.turn !== undefined
+            },
+          })
         } catch (error) {
           // The delivery stays noted for the next start while its Bot exists
           // (resume.js), and the resent request still answers up the tree, so the
@@ -372,11 +412,15 @@ export function install(rt) {
           : working && steer
             ? `Delivered to ${target.name} while it is working: it reads your message at its next step and answers once that work is done. Its reply will arrive later as a new message; do not wait for it.`
             : working
-              ? `Queued for ${target.name}: it reads your message after its current work. Its reply will arrive later as a new message; do not wait for it.`
+              ? `Queued for ${target.name} behind the work running at delivery. Its reply will arrive later as a new message; do not wait for it.`
               : `Delivered to ${target.name}. Its reply will arrive later as a new message; do not wait for it.`
         const asker = rt.ownsWork(sender.id, work) ? rt.botOf(state.works[work].from)?.name : undefined
+        let status
+        try { status = rt.statusOf(target.id, sender.id) }
+        catch { status = 'status unavailable' }
         const notes = [
           status === 'idle' ? '' : `${target.name} now: ${status}.`,
+          request ? 'To check this handoff, use list_bots with bot and request_id. Repeating message_bot returns this original receipt.' : '',
           asker ? `When you have handed on everything, end your turn: each reply brings you back to this work, and your answer goes to ${asker} once all of it is back.` : '',
         ].filter(Boolean)
         const out = [sent, ...notes].join(' ')

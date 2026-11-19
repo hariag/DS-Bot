@@ -30,8 +30,9 @@ export function install(rt) {
   // The name of a request in the caller's own space: its Bot, the conversation the request
   // was made from, and the name the caller gave it. The Bot, not its Session: a Bot that
   // moves to a fresh part of its conversation keeps its name.
+  const keyOf = (caller, context, name) => `${caller}\u0000${context}\u0000${name}`
   const identity = ({ caller, context, name, payload, previousPayload }) => ({
-    key: `${caller}\u0000${context}\u0000${name}`,
+    key: keyOf(caller, context, name),
     print: print(payload),
     previousPrint: previousPayload === undefined ? undefined : print(previousPayload),
   })
@@ -90,6 +91,7 @@ export function install(rt) {
     // A receipt that cannot be saved cannot stop a second delivery later.
     if (rt.readOnly() !== undefined) return { status: 'readonly' }
     const fresh = { identityVersion: 2, fingerprint: request.print, outcome: 'pending', at: Date.now(), run }
+    if (request.privateHandoff !== undefined) fresh.privateHandoff = request.privateHandoff
     receipts()[request.key] = fresh
     const promise = (async () => {
       try {
@@ -138,5 +140,6 @@ export function install(rt) {
     }
   }
 
-  Object.assign(rt, { requestIdentity: identity, knownRequest: known, admitRequest: admit })
+  const privateRequest = (caller, name) => rt.own(state.requests, keyOf(caller, 'chat', name))
+  Object.assign(rt, { requestIdentity: identity, knownRequest: known, admitRequest: admit, privateRequest })
 }

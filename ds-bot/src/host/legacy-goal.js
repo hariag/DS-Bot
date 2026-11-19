@@ -7,6 +7,31 @@ const statuses = new Map([['pending','legacy-pending'],['working','working'],['r
 // This identifies the original goal task across edits; it is not a second
 // task registration and cannot confer permission by itself.
 export const legacyGoalCardId = (roomId, goalId, stageId, taskId) => `legacy-${keyOf([roomId,goalId,stageId,taskId])}`
+function validGoalOverlay(saved, roomId, goal, stage, task) {
+  return saved === undefined || (saved && typeof saved === 'object' && !Array.isArray(saved)
+    && saved.roomId === roomId && saved.goalId === goal.id && saved.stageId === stage.id && saved.taskId === task.id
+    && Number.isSafeInteger(saved.revision) && saved.revision >= 1 && Array.isArray(saved.audit)
+    && (saved.details === undefined || (saved.details && typeof saved.details === 'object' && !Array.isArray(saved.details)))
+    && ['comments', 'images', 'hiddenImages'].every(key => saved[key] === undefined || Array.isArray(saved[key])))
+}
+
+const uniqueId = (rows, id) => rows.filter(row => row?.id === id).length === 1
+
+// Produce a locator for a live goal task without materializing its replies,
+// images or archived cards for every prompt. Conflicting identities have no
+// writable original item.
+export function currentGoalBoardTaskId(room, goal, stage, task) {
+  if (typeof room.id !== 'string' || typeof goal.id !== 'string' || typeof stage.id !== 'string'
+    || typeof task.id !== 'string' || typeof task.botId !== 'string' || typeof task.task !== 'string'
+    || !Number.isSafeInteger(goal.current) || goal !== room.goal || !Array.isArray(goal.stages) || !goal.stages.includes(stage)
+    || !Array.isArray(stage.tasks) || !stage.tasks.includes(task)
+    || !uniqueId(goal.stages, stage.id)
+    || !uniqueId(stage.tasks, task.id)
+    || (Array.isArray(room.pastGoals) && room.pastGoals.some(other => other?.id === goal.id))) return undefined
+  const id = legacyGoalCardId(room.id, goal.id, stage.id, task.id)
+  return validGoalOverlay(own(goal.boardCards, id), room.id, goal, stage, task) ? id : undefined
+}
+
 export function legacyGoalCards({ scope, principal, rooms = {}, bots = {}, pendingCard }) {
   if (!scope || !principal) return []
   if (principal.kind === 'bot' && scope.kind === 'personal' && scope.id !== principal.id) return []
@@ -31,16 +56,12 @@ export function legacyGoalCards({ scope, principal, rooms = {}, bots = {}, pendi
       const stableId=legacyGoalCardId(roomId,goal.id,stage.id,task.id)
       const pending=pendingCard?.(stableId)
       const saved=pending ? pending.previous : own(goal.boardCards,stableId)
-      const validSaved=saved===undefined || (saved && typeof saved==='object' && !Array.isArray(saved)
-        && saved.roomId===roomId && saved.goalId===goal.id && saved.stageId===stage.id && saved.taskId===task.id
-        && Number.isSafeInteger(saved.revision) && saved.revision>=1 && Array.isArray(saved.audit)
-        && (saved.details===undefined || (saved.details && typeof saved.details==='object' && !Array.isArray(saved.details)))
-        && ['comments','images','hiddenImages'].every(key=>saved[key]===undefined || Array.isArray(saved[key])))
-      const ambiguous=stage.tasks.filter(item=>item?.id===task.id).length!==1
-        || (!retired && goal.stages.filter(item=>item?.id===stage.id).length!==1)
+      const validSaved = validGoalOverlay(saved, roomId, goal, stage, task)
+      const ambiguous=!uniqueId(stage.tasks, task.id)
+        || (!retired && !uniqueId(goal.stages, stage.id))
         || (retired && (goal.stages.some(item=>item?.id===stage.id && item.tasks?.some(t=>t?.id===task.id))
           || retiredStages.filter(item=>item.stage.id===stage.id && item.stage.tasks[0]?.id===task.id).length!==1))
-        || goals.filter(item=>item?.id===goal.id).length!==1 || !validSaved
+        || !uniqueId(goals, goal.id) || !validSaved
       const overlay=validSaved && saved ? saved : undefined
       const isCurrent=!retired && goal===room.goal && stageIndex===goal.current && ['active','paused'].includes(goal.status)
       const position=retired || goal!==room.goal?'archived':stageIndex<goal.current?'previous':stageIndex>goal.current?'future':isCurrent?'current':'closed'

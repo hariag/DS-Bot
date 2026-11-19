@@ -520,6 +520,7 @@ export function install(rt) {
   // archived and stay readable.
   /** @type {Map<string, string>} */
   const chatOwners = new Map()
+  const conflictingChatOwners = new Set()
   /** @type {Map<string, {botId:string, roomId:string}>} */
   const groupOwners = new Map()
   /** @type {Map<string, string>} */
@@ -554,9 +555,15 @@ export function install(rt) {
   }
   const indexSessions = () => {
     chatOwners.clear()
+    conflictingChatOwners.clear()
     groupOwners.clear()
     roomOwners.clear()
     pastOwners.clear()
+    const indexChat = (sid, botId) => {
+      if (sid === undefined) return
+      if (chatOwners.has(sid) && chatOwners.get(sid) !== botId) conflictingChatOwners.add(sid)
+      chatOwners.set(sid, botId)
+    }
     const indexPast = (segments, owner) => {
       if (!Array.isArray(segments)) return
       for (const segment of segments) {
@@ -569,13 +576,13 @@ export function install(rt) {
       if (botId === undefined) continue
       indexPast(bot.segments, { botId })
       const currentSid = chatOf(botId)
-      if (sessionIdOf(currentSid) !== undefined) chatOwners.set(currentSid, botId)
+      indexChat(sessionIdOf(currentSid), botId)
       // Parts opened while the Bot was busy are its own chat too: a turn there may use
       // the team tools, and the phone still sees only the current part. Their earlier
       // parts stay the Bot's as well, so their history still reads on that thread.
       for (const part of bot.openParts ?? []) {
         const partSid = sessionIdOf(part?.sessionId)
-        if (partSid !== undefined) chatOwners.set(partSid, botId)
+        indexChat(partSid, botId)
         indexPast(part?.segments, { botId })
       }
     }
@@ -601,6 +608,10 @@ export function install(rt) {
   // The Bot a Session speaks for: its own chat, one of its group Sessions, or an
   // earlier segment of either.
   const selfOf = id => chatOwners.get(id) ?? groupOwners.get(id)?.botId ?? pastOwners.get(id)?.botId
+  // A private receipt needs an unambiguous live origin even when old roster
+  // data also assigns that Session to a group, an archive, or another Bot.
+  const privateChatOwner = id => conflictingChatOwners.has(id) || groupOwners.has(id) || roomOwners.has(id) || pastOwners.has(id)
+    ? undefined : chatOwners.get(id)
   // A Session where the Bot speaks now, as opposed to an archived segment.
   const isBotSession = id => chatOwners.has(id) || groupOwners.has(id)
   const groupSessionsOf = botId => Object.values(state.rooms).map(room => room.sessions?.[botId]).filter(Boolean)
@@ -664,7 +675,7 @@ export function install(rt) {
   Object.assign(rt, {
 state, load, save, refresh, readOnly, hasLoaded, syncReadOnly, own, onSaved, closeCard, requireHomeLock, onHomeDrain,
     homeLockVersion: () => { requireHomeLock(); return `${homeLockGeneration}:${lockEpoch}` },
-    botOf, roomOf, isMain, chatOf, sessionOfRoom, selfOf, isBotSession,
+    botOf, roomOf, isMain, chatOf, sessionOfRoom, selfOf, isBotSession, privateChatOwner,
     chatOwners, groupOwners, roomOwners, pastOwners,
     groupSessionsOf, dropGroupSession, retireGroupSession, findBot, findRooms, isAdminOf,
   })

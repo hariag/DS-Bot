@@ -1282,6 +1282,53 @@ test('confirmed inspection recovery remains read-only while legacy notes remain 
   assert.equal(host.agentOf('gb').calls.length, 0)
 })
 
+test('an admin inspection preserves pending business inputs for a later ordinary turn', async t => {
+  const host = await start(t)
+  const g = await parkForReview(host)
+  const admin = 'ga'
+  const agent = { ...host.agentOf(admin), id:admin }
+  const preStep = async (messages, turn, step) => {
+    const input = { agent, messages, turn, step, signal:new AbortController().signal, modelSelection:{} }
+    const chain = host.ctx.listeners.get('agent/pre-step')
+    const run = i => i === chain.length ? { kind:'enter', messages } : chain[i](input, () => run(i + 1))
+    return (await run(0)).messages
+  }
+  const previous = [{ id:'ga:9', seq:9, turn:1, ownerId:'a' }]
+  host.rt.state.pendingInputs = { ...host.rt.state.pendingInputs, [admin]:previous }
+  const original = host.ctx.sessionController.resolveAgent
+  host.ctx.sessionController.resolveAgent = async id => { if (id === 'gb') throw new Error('legacy note'); return original(id) }
+  await assert.rejects(host.rt.deliver({ toId:'b', sessionId:'gb', role:'room', roomId:'r1', text:'old assignment' }))
+  host.ctx.sessionController.resolveAgent = original
+  await host.rt.goalReviewPoll(g.reviewAt)
+  const rootPost = host.takeGoal()
+  host.agentOf('r1').inbox.nextTurn.length = 0
+  const round = host.round('protected-inspection', rootPost)
+  await settle(() => host.agentOf(admin).calls.length === 1)
+  const inspection = host.agentOf(admin).calls[0]
+  assert.equal(inspection.source.reviewInspect, true)
+  host.agentOf(admin).inbox.nextTurn.length = 0
+  host.emit(admin, 'turn/start', { turn:2 })
+  const inspectionMessages = await preStep([inspection], 2, 1)
+  assert.ok(inspectionMessages.some(m => m.source?.reviewId === rootPost.source.reviewId))
+  assert.ok(!inspectionMessages.some(m => m.source?.recoveryIds))
+  for (const message of inspectionMessages) host.emit(admin, 'user/message', message)
+  assert.equal(host.rt.live.get(admin).info.reviewId, rootPost.source.reviewId)
+  await host.tool('group_goal', { group:'Ops', action:'show' }, admin)
+  assert.ok(Number.isFinite(g.reviewAttempt.inspectionLedgerAt))
+  assert.ok(!(await preStep([], 2, 2)).some(m => m.source?.recoveryIds))
+  host.emit(admin, 'turn/end', { turn:2, reason:{ kind:'completed' } })
+  await settle(() => round() !== undefined)
+  assert.equal(g.reviewAttempt, undefined)
+  assert.deepEqual(host.rt.state.pendingInputs[admin], previous)
+
+  host.emit(admin, 'turn/start', { turn:3 })
+  const normal = await preStep([host.say('Continue the business task')], 3, 1)
+  assert.deepEqual(normal.find(m => m.source?.recoveryIds)?.source.recoveryIds, ['ga:9'])
+  for (const message of normal) host.emit(admin, 'user/message', message)
+  host.emit(admin, 'turn/end', { turn:3, reason:{ kind:'completed' } })
+  assert.equal(host.rt.state.pendingInputs[admin], undefined)
+})
+
 test('a user request arriving during inspection waits for its own normal round', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
@@ -1414,6 +1461,42 @@ test('an interrupted ordinary turn is retained without replay through two restar
     try { return Object.values(JSON.parse(readFileSync(join(third.home, 'inflight.json'), 'utf8')).heldTurns ?? {}).some(item => item.sessionId === 'gb') } catch { return false }
   })
   assert.equal(third.agentOf('gb').calls.length, 0)
+})
+
+test('startup reports new interruptions separately from previously retained turns', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const host = await start(t)
+  await host.ctx.dispose()
+  const reason = 'interrupted outcome unknown'
+  const record = { botId:'a', roomId:'r1', turn:1, since:1 }
+  const id = createHash('sha256').update(JSON.stringify(['ga', record])).digest('hex')
+  const held = { sessionId:'ga', record, reason, decisions:[{ action:'ignored' }] }
+  const file = join(host.home, 'inflight.json')
+  writeFileSync(file, JSON.stringify({
+    turns:{
+      ga:{ ...record, recoveryHold:reason },
+      gb:{ ...record, botId:'b' },
+      gc:{ ...record, botId:'c', recoveryHold:reason },
+    },
+    queued:{},
+    heldTurns:{ [id]:held },
+  }))
+  const restarted = await start(t, undefined, undefined, undefined, host.home)
+  const notices = []
+  let settled = false
+  restarted.rt.noteFailure = note => notices.push(note)
+  restarted.rt.settleRoomBatches = async () => { settled = true }
+  t.mock.timers.tick(4000)
+  await settle(() => settled)
+  assert.deepEqual(notices.filter(note => note.code === 'RESUME_UNCERTAIN_HOLD').map(note => note.sessionId).sort(), ['gb','gc'])
+  assert.equal(notices.filter(note => note.code === 'RESUME_HELD_RECORDS').length, 1)
+  const saved = JSON.parse(readFileSync(file, 'utf8'))
+  assert.equal(Object.keys(saved.heldTurns).length, 3)
+  assert.deepEqual(saved.heldTurns[id], held)
+  for (const session of ['ga','gb','gc']) {
+    assert.equal(saved.turns[session].recoveryHold, reason)
+    assert.equal(restarted.agentOf(session).calls.length, 0)
+  }
 })
 
 test('resume of a paused goal does not dispatch with an unresolved review', async (t) => {
@@ -2144,6 +2227,47 @@ test('members see their own task note in show and prompt without another member 
   const testerPrompt = host.rt.goalBlock(host.rt.state.rooms.r1, host.rt.state.bots.c)
   assert.match(testerPrompt, /tester-only evidence/)
   assert.doesNotMatch(testerPrompt, /writer-only evidence/)
+})
+
+test('a goal ledger opens the original board item in its room and keeps its identity across stage changes', async t => {
+  const host = await start(t)
+  await startGoal(host)
+  const show = sid => host.tool('group_goal', {action:'show'}, sid)
+  const itemId = text => {
+    const refs = [...text.matchAll(/board_task\.task_id=(legacy-[a-f0-9]{64})/g)]
+    assert.equal(refs.length, 1)
+    return refs[0][1]
+  }
+  const read = async (id, sid='gb') => JSON.parse(await host.tool('board_task', {action:'show', room_id:'r1', task_id:id}, sid)).task
+  const original = itemId(await show('gb'))
+  assert.equal(itemId(await show('ga')), original)
+  assert.equal(itemId(host.rt.goalBlock(host.rt.roomOf('r1'), host.rt.botOf('b'))), original)
+  assert.doesNotMatch(await show('gc'), /board_task\.task_id=/)
+  const card = await read(original)
+  assert.equal(card.owner, 'b')
+  assert.equal(card.scope, 'room:r1')
+  assert.equal(card.title, 'write the draft')
+  await host.tool('board_task', {action:'reply', task_id:original, operation_id:'one-board-reply',
+    expected_revision:card.revision, expected_board_revision:card.legacy.boardRevision, note:'Checking the draft'}, 'gb')
+  assert.ok((await read(original)).replies.some(reply => reply.text === 'Checking the draft'))
+  const scope = {kind:'room', id:'r1'}
+  const parent = await host.rt.boardCall('board-command', {scope, operationId:'create-feature', taskId:'feature-draft',
+    type:'create', value:{type:'feature',title:'Draft review',owner:'b',reviewer:'c',acceptance:'Reviewed',dependencies:[]}})
+  const organized = await host.rt.boardCall('board-command', {scope, operationId:'link-original', taskId:parent.id,
+    type:'link-goal-items', expectedRevision:parent.revision, value:{itemIds:[original]}})
+  const minor = await host.rt.boardCall('board-release-create', {scope, operationId:'new-minor',
+    release:{id:'build-12',name:'November',version:'1.2'}})
+  await host.rt.boardCall('board-release-assign', {scope, operationId:'assign-minor', taskId:parent.id,
+    releaseId:minor.id, expectedReleaseRevision:minor.revision, expectedTaskRevision:organized.revision})
+  await host.tool('group_goal', {action:'pass', evidence:'Reviewed draft'}, 'ga')
+  const current = itemId(await show('gc'))
+  assert.notEqual(current, original)
+  assert.equal((await read(current, 'gc')).owner, 'c')
+  const previous = await read(original)
+  assert.equal(previous.legacy.position, 'previous')
+  assert.equal(previous.parentTaskId, parent.id)
+  assert.equal(previous.releaseId, minor.id)
+  assert.ok(previous.replies.some(reply => reply.text === 'Checking the draft'))
 })
 
 test('a Main Bot who is a member can explicitly show the full group ledger as backup', async (t) => {
