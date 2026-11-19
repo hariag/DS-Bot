@@ -72,6 +72,22 @@ test('Bot discovery scopes minor releases and filters the authorized rows before
   const previousReads = reads.mock.callCount()
   assert.equal((await list({})).some(row => row.kind === 'release'), false)
   assert.equal(reads.mock.callCount() - previousReads, 1)
+  // A private-session recipient can copy the original card's query, including teammates' items.
+  const shown = await call({action:'show',task_id:parent.id}, 'chat-one')
+  assert.equal(shown.task.roomId, 'g')
+  assert.deepEqual(shown.itemsQuery, {action:'list',room_id:'g',parent_task_id:parent.id})
+  const childPage = await call(shown.itemsQuery, 'chat-one')
+  const childTail = await call({...shown.itemsQuery,cursor:childPage.nextCursor}, 'chat-one')
+  assert.equal(childPage.items.length, 20)
+  assert.equal(childTail.nextCursor, undefined)
+  assert.equal(new Set([...childPage.items,...childTail.items].map(item=>item.id)).size, 23)
+  assert.ok([...childPage.items,...childTail.items].some(item=>item.id==='other-work'))
+  await assert.rejects(call({...shown.itemsQuery,room_id:shown.task.scope}, 'chat-one'), /not authorized/)
+  assert.deepEqual(await call({action:'show',task_id:shared.id}), {task:{id:shared.id,status:shared.status,shared:true}})
+  const personal = create('own','personal:one')
+  const own = await call({action:'show',task_id:personal.id}, 'chat-one')
+  assert.equal(own.task.roomId, undefined)
+  assert.equal(own.itemsQuery, undefined)
   const page = {action:'list',kind:'item',release_id:'r-g',mine:true}
   const first = await call(page), last = await call({...page,cursor:first.nextCursor})
   const found = [...first.items, ...last.items]
