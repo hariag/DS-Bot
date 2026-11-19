@@ -1,7 +1,7 @@
-import { installProjectCoordination } from './project-coordination.mjs'
+import { installProjectCoordination, projectRolesChanged } from './project-coordination.mjs'
 import { isManualBoardTask } from './board-intake.mjs'
 import { legacyGoalCards } from './legacy-goal.js'
-import { mkdirSync, lstatSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, lstatSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { link, rm } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { randomUUID } from 'node:crypto'
@@ -334,7 +334,7 @@ export function install(rt) {
     const proofs = new Map(), admissionProofs = new Map()
     const store = openTaskStore(join(root, 'tasks.sqlite'), {
       assertWriteLock: writable, conversationKind:actor=>botWorkflow.conversationKind(actor),
-      onProjectEvent:event=>{void steerProjectChange(event).catch(error=>rt.warn?.('ds-bot: shared project update: %s',error?.message || error))},
+      onProjectEvent:projectChanged,
       authorize: input => (input.actor === 'user' && ['create', 'link-goal-items', 'move-item', 'move-goal-item', 'edit', 'card-details', 'card-comment', 'card-comment-edit', 'card-comment-delete', 'reorder', 'attach', 'remove-image', 'cancel', 'submit', 'restore', 'archive', 'unarchive', 'release-assign', 'release', 'proposal', 'share', 'unshare', 'personal-progress', 'schedule', 'unschedule'].includes(input.type))
         || (input.actor === 'scheduler' && (input.type === 'claim' ? allowedAction(input.task, input.action) : input.type === 'receipt'))
         || (input.actor !== 'user' && input.type === 'proposal' && botWorkflow.authorize(input))
@@ -557,7 +557,18 @@ export function install(rt) {
     if (committedHere && releaseSyncTypes.has(payload.type)) void notifyBoardChange(payload.taskId, change).catch(error => rt.warn?.('ds-bot: board change not synced to release group: %s', error))
     return result
   }
-  const project = installProjectCoordination(rt,{defineTool,store:()=>service().store,run})
+  const previouslyBound=existsSync(join(rt.home,'board-v1','project-coordination.sqlite'))
+  let toolSyncPending=false
+  function projectChanged(event) {
+    if (!toolSyncPending && projectRolesChanged(event)) {
+      toolSyncPending=true
+      queueMicrotask(()=>{toolSyncPending=false;if (!closing && !rt.stopping) rt.syncScopedTools?.()})
+    }
+    void steerProjectChange(event).catch(error=>rt.warn?.('ds-bot: shared project update: %s',error?.message || error))
+  }
+  const project = installProjectCoordination(rt,{defineTool,store:()=>service().store,run,
+    availableStore:()=>instance?.store ?? (previouslyBound && !closing && !rt.stopping && !rt.readOnly() ? service().store : undefined)})
+
   rt.projectCoordinationPrompt = project.prompt
   let redoPreparation
   const boardCall = (endpoint, payload = {}) => endpoint === 'board-image' ? imageCall(payload) : run(async () => {
