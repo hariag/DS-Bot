@@ -378,6 +378,24 @@ test('status counts live private and group inboxes and marks unavailable session
   assert.match(await tool('list_bots', {}, 'a'), /group pending inputs: 0 in 0 available session\(s\); 1 group session\(s\) unavailable/)
 })
 
+test('the owner fetch route inspects a cold private queue on demand and other carriers cannot access it', async t => {
+  const {rt,ctx,call,stop} = await start(team())
+  t.after(stop)
+  const reads = []
+  ctx.sessionController.projections = async ({sessionId}) => {
+    reads.push(sessionId)
+    return {kind:'sequenced',asOfSeq:0,values:{inbox:{'next-step':[],'next-turn':[]}}}
+  }
+  await call('state', {})
+  const denied = await rt.channelCall('queue-inspect', {sessionId:'a'})
+  assert.deepEqual(reads, [])
+  assert.equal(denied.error.code, 'bot/refused')
+  const result = await call('queue-inspect', {sessionId:'a'})
+  assert.equal(result.ok, true)
+  assert.equal(result.value.sources[0].status, 'ready')
+  assert.deepEqual(reads, ['a'])
+})
+
 test('a named private handoff reports the post-delivery queue and checks only its own live request', async t => {
   const seed = team({ group: true })
   seed.bots.c = { id: 'c', name: 'Tester', sessionId: 'c', createdAt: 3 }
