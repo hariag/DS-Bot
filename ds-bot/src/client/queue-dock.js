@@ -138,10 +138,101 @@ export function combineRoomPosts(projection, host, sessionId, available) {
   return { rows, uncertain }
 }
 
+const sourceStatusLabel = {
+  missing: 'Session not found',
+  migration: 'Session needs migration',
+  unavailable: 'Could not read this inbox',
+  ambiguous: 'Session identity could not be confirmed',
+}
+
+function InboxSnapshotPage({ page, retry, busy }) {
+  const time = new Date(page.readAt)
+  const empty = page.sources.filter(source => source.earlier && source.status === 'ready' && !source.rows.length).length
+  return h('section', { className:'bt-inbox-snapshot' },
+    h('time', { dateTime:time.toISOString() }, t('Bot inbox snapshot at {time}', {time:time.toLocaleString()})),
+    empty > 0 && h('div', null, t('Earlier inboxes sampled without Bot messages: {n}', {n:empty})),
+    page.sources.filter(source => !source.earlier || source.status !== 'ready' || source.rows.length > 0).map(source =>
+      h('div', { key:source.sessionId, className:'bt-bot-queue-row' },
+        h('div', { className:'bt-bot-queue-meta', title:source.sessionId },
+          h('strong', null, source.roomName || t(source.kind === 'private' ? 'Private inbox' : 'Group inbox')),
+          h('span', null, t(source.earlier ? 'Earlier conversation' : 'Current conversation')),
+          source.earlier && Number.isFinite(source.endedAt) && h('time', {className:'bt-inbox-part-date', dateTime:new Date(source.endedAt).toISOString()},
+            t('Ended {time}', {time:new Date(source.endedAt).toLocaleString()})),
+          source.earlier && h('code', null, source.sessionId.slice(-8))),
+        source.status === 'ready' && !source.rows.length && h('div', null, t('No Bot messages at the time of this read')),
+        source.status !== 'ready' && h('div', null, t(sourceStatusLabel[source.status] ?? 'Could not read this inbox')),
+        source.rows.map(row => h('div', {key:row.id, className:'bt-inbox-sample-message'},
+          row.senderName && h('strong', null, row.senderName),
+          row.text && h('div', {className:'bt-bot-queue-text'}, row.text),
+          row.attachments > 0 && h('span', null, t('Attachments: {n}', {n:row.attachments})))))),
+    page.sources.some(source => source.status !== 'ready') && h('button', {className:'bt-inbox-retry', type:'button', disabled:busy, onClick:retry}, t('Retry this page')))
+}
+
+function InboxInspection({ read }) {
+  const [open, setOpen] = useState(false)
+  const [pages, setPages] = useState([])
+  const [busy, setBusy] = useState(false)
+  const [failure, setFailure] = useState(null)
+  const pending = useRef(null)
+  const panelId = useId()
+  // The parent keys this component by Session. Abort a departing Session's read
+  // and ignore late responses even when the transport does not honor cancellation.
+  useEffect(() => () => pending.current?.abort(), [])
+  async function load(cursor, replaceFrom = null) {
+    if (pending.current) return
+    const request = new AbortController()
+    pending.current = request
+    setBusy(true)
+    setFailure(null)
+    try {
+      const page = await read(cursor, request.signal)
+      if (!request.signal.aborted) setPages(prior => {
+        const sample = {page, cursor}
+        if (replaceFrom === null) return cursor ? [...prior, sample] : [sample]
+        const original = prior[replaceFrom].page
+        const sameRange = page.nextCursor === original.nextCursor && page.total === original.total
+        return [...prior.slice(0, replaceFrom), sample, ...(sameRange ? prior.slice(replaceFrom + 1) : [])]
+      })
+    } catch (error) {
+      if (!request.signal.aborted) setFailure({cursor, replaceFrom, restart:error?.code === 'bot/invalid'})
+    } finally {
+      if (pending.current === request) {
+        pending.current = null
+        if (!request.signal.aborted) setBusy(false)
+      }
+    }
+  }
+  function toggle() {
+    if (!open && !pages.length) void load()
+    if (open && pending.current) {
+      pending.current.abort()
+      pending.current = null
+      setBusy(false)
+    }
+    setOpen(!open)
+  }
+  const last = pages.at(-1)?.page
+  const sourcesRead = pages.reduce((count, sample) => count + sample.page.sources.length, 0)
+  return h('div', {className:'bt-queue-panel bt-inbox-inspection', 'data-inbox-inspection':''},
+    h('button', {type:'button', className:'bt-queue-head', 'aria-controls':panelId, 'aria-expanded':open, onClick:toggle},
+      h('span', {className:'bt-queue-lead', 'aria-hidden':true}, h(QueueIcon)),
+      h('span', {className:'bt-queue-count'}, t('Read Bot inboxes')),
+      h('span', {className:'bt-queue-chev', 'aria-hidden':true}, open ? h(ChevronUpIcon) : h(ChevronDownIcon))),
+    open && h('div', {id:panelId, className:'bt-inbox-inspection-body'},
+      last && h('div', {className:'bt-inbox-sample-count'}, t('Checked {read} of {total} inboxes', {read:sourcesRead, total:last.total})),
+      pages.map(({page, cursor}, i) => h(InboxSnapshotPage, {key:i, page, busy, retry:() => load(cursor, i)})),
+      busy && h('div', {role:'status'}, t('Reading inboxes…')),
+      failure && h('div', {role:'status'}, t(failure.restart ? 'Inbox scope changed. Start a new read.' : 'Inbox read failed. You can retry.')),
+      h('div', {className:'bt-inbox-inspect-actions'},
+        failure && h('button', {type:'button', disabled:busy, onClick:() => failure.restart ? load() : load(failure.cursor, failure.replaceFrom)}, t(failure.restart ? 'Read from the start' : 'Retry this read')),
+        !failure && last?.nextCursor && h('button', {type:'button', disabled:busy, onClick:() => load(last.nextCursor)}, t('Read next inboxes')),
+        last && !failure && h('button', {type:'button', disabled:busy, onClick:() => load()}, t('Refresh inbox snapshots')))))
+}
+
 // One item renders directly; several default to a collapsible count header; an
 // empty queue renders nothing. Rows still in flight show a sending state with
 // disabled actions until their queue rows arrive.
-export function QueueDock({ sessionId, useSession, useProjection, useRoster, useWork, updateQueue, loadImage, renderFactorySlot, actions }) {
+export function QueueDock({ sessionId, useSession, useProjection, useRoster, useWork, updateQueue, inspectQueue, loadImage, renderFactorySlot, actions }) {
   const inbox = useProjection?.('inbox')
   const botId = useRoster?.(roster => roster.byId?.[sessionId]?.id) ?? null
   const roomId = useRoster?.(roster => roster.roomsById?.[sessionId]?.id) ?? null
@@ -215,7 +306,8 @@ export function QueueDock({ sessionId, useSession, useProjection, useRoster, use
     if (rowCount === 0 && !collapsed) setCollapsed(true)
     if (editing !== null && (!queueMutable || !queue.some(row => row.id === editing.id))) setEditing(null)
   }, [collapsed, editing, queue, queueMutable, rowCount])
-  if (rowCount === 0 && botTitle === '' && (!isRoom || roomTitle === '')) return null
+  const canInspect = typeof inspectQueue === 'function' && (isRoom || botId !== null)
+  if (!canInspect && rowCount === 0 && botTitle === '' && (!isRoom || roomTitle === '')) return null
   const interactionActive = queueMutable && (editing !== null || busy !== null)
   const expanded = !collapsed || interactionActive
   const listVisible = rowCount === 1 || expanded
@@ -288,17 +380,18 @@ export function QueueDock({ sessionId, useSession, useProjection, useRoster, use
                 : h(QueueFile, { key: `${item.attachment.attachmentId}:${item.attachment.name}:${index}`, attachment: item.attachment, label: t('Queued file {name}', { name: item.attachment.name }) }))),
             text !== '' && h('div', { className: 'bt-bot-queue-text' }, text))
         }),
-        !botCollapsed && privateUnknown && !inboxAvailable && h('li', { className: 'bt-bot-queue-row' }, t('Private inbox unavailable')),
-        !botCollapsed && earlierPrivate.map(item => h('li', { key: item.id, className: 'bt-bot-queue-row', 'data-bot-earlier-private-queue-row': '' },
+        !botCollapsed && !canInspect && privateUnknown && !inboxAvailable && h('li', { className: 'bt-bot-queue-row' }, t('Private inbox unavailable')),
+        !botCollapsed && earlierPrivate.filter(item => !canInspect || !item.unavailable).map(item => h('li', { key: item.id, className: 'bt-bot-queue-row', 'data-bot-earlier-private-queue-row': '' },
           h('div', { className: 'bt-bot-queue-meta' },
             h('span', { className: 'bt-bot-queue-sender' }, item.senderName || t('Bot')),
             h('span', { className: 'bt-bot-queue-placement' }, item.unavailable ? t('Private inbox unavailable') : t('Earlier conversation'))),
           item.text && h('div', { className: 'bt-bot-queue-text' }, item.text))),
-        !botCollapsed && groupQueue.map(item => h('li', { key: `${item.roomId}:${item.id}`, className: 'bt-bot-queue-row', 'data-bot-group-queue-row': '' },
+        !botCollapsed && groupQueue.filter(item => !canInspect || !item.unavailable).map(item => h('li', { key: `${item.roomId}:${item.id}`, className: 'bt-bot-queue-row', 'data-bot-group-queue-row': '' },
           h('div', { className: 'bt-bot-queue-meta' },
             h('span', { className: 'bt-bot-queue-sender' }, item.roomName || t('Group')),
             h('span', { className: 'bt-bot-queue-placement' }, item.unavailable ? t('Group inbox unavailable') : item.previous ? t('Earlier conversation') : item.senderName)),
           item.text && h('div', { className: 'bt-bot-queue-text' }, item.text))))),
+    canInspect && h(InboxInspection, {key:sessionId, read:inspectQueue}),
     rowCount > 0 && h('div', { className: 'bt-queue-panel' },
       rowCount > 1 && h('button', { type: 'button', className: 'bt-queue-head', 'aria-controls': listId, 'aria-expanded': expanded, disabled: interactionActive, onClick: () => setCollapsed(value => !value) },
         h('span', { className: 'bt-queue-lead', 'aria-hidden': true }, h(QueueIcon)),
@@ -349,6 +442,11 @@ export const QUEUE_CSS = `
 .bt-queue-panel:before{z-index:-1;border-radius:inherit;background:var(--dsw-specific-menu,var(--bt-main));backdrop-filter:var(--dsw-menu-backdrop-filter,none);content:"";pointer-events:none;position:absolute;inset:0}
 .bt-queue-panel:after{border:.5px solid var(--bt-line-2);border-bottom:none;border-radius:inherit;content:"";pointer-events:none;position:absolute;inset:0}
 .bt-queue-head{box-sizing:border-box;width:100%;height:36px;border:0;border-radius:var(--dsw-radius-md,10px);background:none;color:var(--bt-ink);text-align:left;font:inherit;cursor:pointer;display:flex;align-items:center;gap:10px;padding:4px 12px}
+.bt-inbox-inspection-body{max-height:clamp(140px,32vh,320px);overflow:auto;padding:5px 12px 10px;line-height:1.5;font-size:12px;color:var(--bt-ink-2)}
+.bt-inbox-snapshot{margin-top:6px}.bt-inbox-snapshot>time{display:block;color:var(--bt-ink-3)}
+.bt-inbox-snapshot .bt-bot-queue-row{padding:6px 0}.bt-inbox-sample-message+.bt-inbox-sample-message{margin-top:5px}
+.bt-inbox-inspect-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.bt-inbox-inspect-actions button,.bt-inbox-retry{border:1px solid var(--bt-line);border-radius:6px;padding:3px 8px;font:inherit;background:var(--bt-main);color:var(--bt-ink);cursor:pointer}
 .bt-queue-head:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}
 .bt-queue-head:disabled{cursor:default}
 .bt-queue-lead{color:var(--bt-ink-3);flex:none;display:grid;place-items:center}

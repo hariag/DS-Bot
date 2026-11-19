@@ -45,6 +45,13 @@ test('unloaded historical inboxes without delivery notes remain unknown', () => 
   assert.equal(earlierPrivateQueueView(bots, getAgent, () => []).a[0].id, 'unavailable')
 })
 
+test('background private threads and their earlier parts contribute to the warm queue view', () => {
+  const bots = {a:{id:'a', sessionId:'foreground', openParts:[{sessionId:'background',segments:[{sessionId:'older'}]}]}}
+  const inbox = {nextStep:[{id:'m',source:{kind:'bot',exchangeId:'e'},content:[]}], nextTurn:[]}
+  const view = earlierPrivateQueueView(bots, id => id === 'background' ? {inbox} : undefined, () => [])
+  assert.deepEqual(view.a.map(row => row.id), ['m','unavailable'])
+})
+
 test('recovery notes add evidence without treating a missing note as an empty inbox', () => {
   const rooms = { r: { id: 'r', name: 'Team', sessions: { a: 'current' }, segments: { a: [{ sessionId: 'old1' }, { sessionId: 'old2' }] } } }
   const bots = { a: { id: 'a', segments: [{ sessionId: 'old1' }, { sessionId: 'old2' }] } }
