@@ -169,7 +169,7 @@ export const referenceNote = references => (references?.length
 
 const ROOM_REPLY = 'Reply with your message for the group, no name prefix: in a discussion, one or two short messages. When you are asked to do something, call your first tool in the same step as your opening note — if you stop without a tool call, your turn ends and no work runs. The group does not wait for you and sees what you write while you work: say what you will do, write again only when something matters, and end with the result, never a promise to do it later. Reply [PASS] to stay silent when you have nothing new to add or the message is for someone else.'
 const ROOM_INSPECTION_REPLY = 'This scheduled goal inspection requires action even if there are no new group messages. First call group_goal show for this group. If show fails, report the failure. Only after successfully reading the current goal may you reply [PASS] when nothing changed; follow the scoped inspection duties above.'
-const ROOM_CALLS = 'Writing "@Name" calls that member at once, to answer or to do what you ask, as soon as your message is posted: call members before you start on your own part. Members called in one message start together and do not see each other\'s replies until they post, so when one needs another\'s result, call the first and ask it to call the next. When a member finishes work you gave it, you answer its result. To only mention a member, write its name without "@".'
+const ROOM_CALLS = 'Writing "@Name" calls that member at once, to answer or do what you ask, as soon as your message is posted. When several independent goal tasks are ready, call every distinct owner in the same message, with one separate line starting with the exact plain-text @Name and listing that owner\'s task ID, action and deadline. Keep dependent tasks in order: call the prerequisite owner first and wait for its result before calling the next owner. Active @Name callouts must be outside backticks, code blocks and Markdown links; mentions there are literal text, not highlighted or dispatched. Members called in one message start together and do not see each other\'s replies until they post. When a member finishes work you gave it, you answer its result. To only mention a member, write its name without "@".'
 
 const slotLabel = (slot, self) => {
   if (slot.status === 'speaking') return slot === self ? `${slot.name} (you, now)` : `${slot.name} (answering now)`
@@ -587,7 +587,7 @@ export function install(rt) {
       notice,
       rt.projectCoordinationPrompt?.(room, member),
       goal,
-      ...(round.reviewInspect ? ['Earlier delivery outcomes are unknown for specific owners. First inspect the original handoff and task. Do not reassign, restart or repeat work for an uncertain recipient, and do not guess an ambiguous owner. If the original recipient is uniquely identified, call group_goal review-follow-up with the task ID and fingerprint from show to send a status-only group reply with plain-text @Name and the task ID, asking whether that original handoff was received and what its current status/next evidence is; explicitly say not to repeat the work. For a known reported task, ask only for its exact missing evidence. Include a response deadline and next check, do not put @Name in backticks/code and never use @all. You may advance independent, ready tasks owned by other unblocked members only through the scoped actions listed in the group goal. Do not change task state or pass a stage.'] : []),
+      ...(round.reviewInspect ? ['Earlier delivery outcomes are unknown for specific owners. First inspect the original handoff and task. Do not reassign, restart or repeat work for an uncertain recipient, and do not guess an ambiguous owner. For every distinct, eligible current task with an unresolved original handoff, call group_goal review-follow-up once with its exact task ID and fingerprint from show; this review permits follow-ups for multiple different tasks. Do not stop after the first owner. Each generated group callout uses the exact plain-text @Name outside backticks, code blocks and Markdown links, plus task ID, status/evidence requested and deadline. Ask whether the original handoff was received and what its current status/next evidence is; explicitly say not to repeat the work. For known reported tasks, ask only for exact missing evidence. Respect dependencies and never use @all. You may advance independent, ready tasks owned by other unblocked members only through the scoped actions listed in the group goal. Do not change task state or pass a stage.'] : []),
       leads ? adminNote(room) : '',
       earlier.length ? `Earlier in the group, before this round (context only):\n${transcript(earlier, memberText(room))}` : '',
       owed.length ? `Results of the work you asked for that the lines here leave out (oldest first):\n${owed.map(result => (result.line
@@ -1936,8 +1936,15 @@ let final = typeof reply === 'string' && !isPass(reply) ? reply : undefined
     }
     if (info.reviewReceipt === true) {
       const answered = !isPass(text)
-      const taskId = await rt.goalReceiptResult(room, sessionId, info, answered)
-      if (answered && taskId) await postToRoom(room, member, `Status reply for ${taskId}: ${text}`, { late:true, quiet:true })
+      const result = await rt.goalReceiptResult(room, sessionId, info, answered)
+      if (answered && result?.taskId) {
+        const admin = room.members.includes(result.adminId) ? rt.botOf(result.adminId) : undefined
+        const handoff = admin === undefined ? ''
+          : `\n@${admin.name} Review this self-report against existing evidence and take the next authorized step. It is not acceptance; do not restart the original work.`
+        await postToRoom(room, member, `Status reply for ${result.taskId} (self-report only, not acceptance): ${text}${handoff}`, {
+          late:true, ...(admin === undefined ? { quiet:true } : { askedBy:admin.id }),
+        })
+      }
       return
     }
     if (info.reviewInspect === true) {
