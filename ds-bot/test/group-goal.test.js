@@ -1183,6 +1183,31 @@ test('a persisted admin completion can rearm after runtime restart', async (t) =
   assert.equal(restarted.agentOf('r1').calls.length, 1)
 })
 
+test('a completed inspection closes behind a historical batch without touching its work', async t => {
+  const host = await start(t)
+  const goal = await parkForReview(host)
+  const room = host.rt.roomOf('r1')
+  const batch = { roomId:room.id, pending:['b'] }
+  host.rt.state.roomBatches = { old:batch }
+  host.rt.roomBatchPending = id => id === room.id
+  await host.rt.testScheduleOccurrence(goal.reviewAt)
+  const attempt = goal.reviewAttempt
+  assert.equal(attempt.inspectOnly, true)
+  attempt.adminCompleted = true
+  host.agentOf('r1').inbox.nextTurn.length = 0
+
+  // A real waiter still prevents declaring the group idle.
+  host.rt.roomWaiters.set('live', { roomId:room.id })
+  assert.equal(await host.rt.testScheduleOccurrence(goal.reviewAt + 1000), 'busy')
+  assert.equal(goal.reviewAttempt, attempt)
+  host.rt.roomWaiters.delete('live')
+
+  assert.equal(await host.rt.testScheduleOccurrence(goal.reviewAt + 2000), 'pending')
+  assert.equal(goal.reviewAttempt, undefined)
+  assert.deepEqual(batch.pending, ['b'])
+  assert.equal(host.agentOf('gb').calls.length, 0)
+})
+
 test('a real prepared worker delivery blocks completed review recovery after restart', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)

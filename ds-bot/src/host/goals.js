@@ -1542,10 +1542,12 @@ export function install(rt) {
           const quiet = agent => quietInbox(agent)
             && rt.live.get(agent.session.id)?.turn === undefined && rt.hasSubagents?.(agent.session.id) !== true
             && rt.waitsForApproval?.(agent.session.id) !== true
+          // Finalizing an inspection records what the admin checked. An old
+          // batch still fences its original work but cannot keep that inspection open.
+          const heldWork = hasUnreadRoomDeliveries(room) || rt.roomBatchPending?.(room.id) === true
           if (!goalReviewAllowed(room, attempt.id) || !quiet(root) || !quiet(adminAgent)
-            || [...rt.roomProgress.values()].some(round => round.roomId === room.id)
-            || (!attempt.inspectOnly && hasUnreadRoomDeliveries(room)) || (rt.workingInRoom?.(room) ?? []).length > 0 || rt.roomBatchPending?.(room.id) === true
-            || (rt.roomInbox.get(room.id)?.length ?? 0) > 0 || (rt.roomLaterCount?.(room.id) ?? 0) > 0) return
+            || rt.roomBusyForPatrol(room) || (rt.workingInRoom?.(room) ?? []).length > 0
+            || (!attempt.inspectOnly && heldWork)) return
           finishReview(room, 'admin-pass', now)
           await rt.save({ required: true })
         } catch (error) {
