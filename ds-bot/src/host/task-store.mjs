@@ -376,6 +376,15 @@ const releaseIsDone = release => {
           blocked:{ reason:'item acceptance changed', condition:'revalidate items and card', owner:parent.reviewer } })
       }
     }
+    if (after.parentTaskId) {
+      const parent = getTask(after.parentTaskId)
+      if (parent) reconcileItemAcceptanceBlock(parent)
+    }
+    if (before.parentTaskId && before.parentTaskId !== after.parentTaskId) {
+      const oldParent = getTask(before.parentTaskId)
+      if (oldParent) reconcileItemAcceptanceBlock(oldParent)
+    }
+    reconcileItemAcceptanceBlock(after)
   }
   const addAction = db.prepare("INSERT OR IGNORE INTO actions(id,task_id,revision,kind,actor,state) VALUES(?,?,?,?,?,'pending')")
   const action = (task, kind, actor) => {
@@ -445,6 +454,18 @@ const releaseIsDone = release => {
   const dependenciesDone = task => task.dependencies.every(id => { const dep = getTask(id); return dep?.status === 'done' && dep.stale !== true && validDependency(task, dep) })
   const unfinishedItems = db.prepare("SELECT 1 FROM tasks WHERE json_extract(body,'$.parentTaskId')=? AND (json_extract(body,'$.status')!='done' OR json_extract(body,'$.stale')=1 OR json_type(body,'$.blocked')='object') LIMIT 1")
   const hasItems = db.prepare("SELECT 1 FROM tasks WHERE json_extract(body,'$.parentTaskId')=? LIMIT 1")
+  // A parent is blocked automatically when one of its accepted items regresses.
+  // Re-check that machine-managed block whenever the parent or any item changes:
+  // once every item is done again, reopen the parent for independent review
+  // instead of leaving it blocked forever.
+  function reconcileItemAcceptanceBlock(task) {
+    if (!task || !task.blocked || task.stale !== true || task.blocked.reason !== 'item acceptance changed') return task
+    if (!['reported', 'done'].includes(task.status) || unfinishedItems.get(task.id)) return task
+    const next = { ...task, revision: task.revision + 1, status: 'reported', actionRevision: task.revision + 1, blocked: null, stale: false }
+    save(task, next)
+    action(next, 'review', next.reviewer)
+    return next
+  }
   const parentOpen = parent => !!parent && !parent.archivedAt && !parent.blocked && !parent.stale && !['reported','done','cancelled'].includes(parent.status)
   const itemContextOpen = task => {
     if (!task.parentTaskId) return true
