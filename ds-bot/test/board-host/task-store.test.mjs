@@ -890,6 +890,33 @@ test('an archived waiting dependent is not promoted to ready', t => {
   assert.equal(store.listSchedule().some(task => task.id === 'archived-dependent'), false)
 })
 
+test('a parent blocked by an item regression reopens when its items are done again', t => {
+  const { store } = fixture(t)
+  const roomTask = (id, extra = {}) => ({ ...task(id), scope:'room:room', ...extra })
+  store.create({ operationId:'create-blocked-parent', actor:'user', task:roomTask('parent', { type:'feature' }) })
+  store.create({ operationId:'create-blocked-child', actor:'user', task:roomTask('child', { parentTaskId:'parent', type:'development' }) })
+  register(store, 'child')
+  command(store, 'child', 'schedule', 'user', { kind:'personal', reference:'owner approval' })
+  finish(store, 'child')
+  register(store, 'parent')
+  command(store, 'parent', 'schedule', 'user', { kind:'personal', reference:'owner approval' })
+  finish(store, 'parent')
+  assert.equal(store.get('parent').status, 'done')
+
+  command(store, 'child', 'invalidate', 'reviewer', { reason:'artifact replaced', evidence:'new artifact' })
+  const blocked = store.get('parent')
+  assert.equal(blocked.blocked.reason, 'item acceptance changed')
+  assert.deepEqual(blocked.blocked.itemTaskIds, ['child'])
+  assert.equal(blocked.stale, true)
+
+  command(store, 'child', 'revalidate', 'reviewer', { evidence:'independently rechecked' })
+  const reopened = store.get('parent')
+  assert.equal(reopened.blocked, null)
+  assert.equal(reopened.stale, false)
+  assert.equal(reopened.status, 'reported')
+  assert.equal(store.listActions('parent').some(action => action.kind === 'review' && action.state === 'pending'), true)
+})
+
 test('a proposal is durable, user-confirmed and applied against its base revision', t => {
   const { store, path, trackStore } = fixture(t)
   create(store, 'card')

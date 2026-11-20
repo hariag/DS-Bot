@@ -762,8 +762,8 @@ test('task progress does not postpone the review of every owner', async (t) => {
   assert.equal(host.agentOf('r1').calls.length, 1)
   const prompt = host.rt.goalBlock(room, host.rt.state.bots.a, { nudge: true })
   assert.match(prompt, /original cards, items, owners/)
-  assert.match(prompt, /do not duplicate an outstanding or uncertain message/i)
-  assert.match(prompt, /assigned independent reviewer/)
+  assert.match(prompt, /do not duplicate an outstanding or uncertain assignment/i)
+  assert.match(prompt, /specific person authorized to unblock or decide/)
 })
 
 test('a busy group skips this review period durably and admits the next idle occurrence', async (t) => {
@@ -2980,7 +2980,7 @@ test('read-only review asks for show and does not count silent pass as successfu
   assert.match(text(input), /plain-text @Name/)
   assert.match(text(input), /receipt\/status or exact missing-evidence question/)
   assert.match(text(input), /response deadline/)
-  assert.match(text(input), /status-only group reply with plain-text @Name/)
+  assert.match(text(input), /status-only group reply with one exact plain-text @Name/)
   assert.match(text(input), /explicitly say not to repeat the work/)
   assert.match(text(input), /[Dd]o not leave the group with only “waiting”/)
   assert.match(text(input), /Only after successfully reading the current goal may you reply \[PASS\]/)

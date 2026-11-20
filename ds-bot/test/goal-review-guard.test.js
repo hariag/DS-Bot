@@ -37,7 +37,7 @@ test('a later allow policy cannot bypass the real inspection tool guard', async 
     })
     const blocked = await call('review-admin')
     assert.equal(blocked.results[0].result.isError, true)
-    assert.match(blocked.results[0].result.content[0].text, /inspection only/)
+    assert.match(blocked.results[0].result.content[0].text, /delivery inspection/i)
     assert.equal(writes, 0)
     const allowed = await call('ordinary-agent')
     assert.equal(allowed.results[0].result.isError, false)
