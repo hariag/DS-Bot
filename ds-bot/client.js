@@ -14730,6 +14730,9 @@ var ZH = {
   "Restore card": "恢复卡片",
   "Draft cards are not scheduled.": "起草中的卡片不会进入调度。",
   "This task item needs an owner and an independent reviewer before it can be submitted.": "此任务项需要先指定负责人和独立验收人，才能提交。",
+  "This task item is unassigned. Choose an owner and an independent reviewer.": "此任务项尚未指派，请选择负责人和独立验收人。",
+  "The owner and reviewer could not be saved.": "负责人和验收人保存失败，请重试。",
+  "The reviewer must be a different Bot.": "验收人不能与负责人是同一个 Bot。",
   "Set owner and reviewer": "设置负责人和验收人",
   "Save as draft": "保存为起草",
   "Draft cards stay in Draft until they are submitted.": "起草中的卡片会留在起草列，提交后才会进入流程。",
@@ -41444,7 +41447,7 @@ function SideSection({ title, action, children, className = "" }) {
     children
   );
 }
-function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand, notice, onOpenMore }) {
+function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand, notice }) {
   const progress = PERSONAL_COLUMNS.find(([id]) => id === task.personalProgress);
   const canSubmit = commandOf(commands, "submit") && task.status === "draft";
   const canCancel = commandOf(commands, "cancel") && !["done", "cancelled"].includes(task.status);
@@ -41465,12 +41468,7 @@ function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand
       (0, import_react55.createElement)("strong", null, progress ? t(progress[1]) : stageLabelOf(task))
     ),
     task.status === "draft" ? (0, import_react55.createElement)("p", { className: "bt-card-note" }, t("Draft cards are not scheduled.")) : null,
-    task.status === "draft" && !canSubmit && task.parentTaskId && (!task.owner || !task.reviewer) ? (0, import_react55.createElement)(
-      "div",
-      { className: "bt-card-note" },
-      (0, import_react55.createElement)("p", null, t("This task item needs an owner and an independent reviewer before it can be submitted.")),
-      onOpenMore ? (0, import_react55.createElement)("button", { type: "button", className: "bt-card-mini", disabled, onClick: onOpenMore }, t("Set owner and reviewer")) : null
-    ) : null,
+    task.status === "draft" && !canSubmit && task.parentTaskId && (!task.owner || !task.reviewer) ? (0, import_react55.createElement)("p", { className: "bt-card-note" }, t("This task item needs an owner and an independent reviewer before it can be submitted.")) : null,
     task.status === "cancelled" ? (0, import_react55.createElement)("p", { className: "bt-card-note" }, t("Cancelled cards are not scheduled and can be restored.")) : null,
     task.dispatchState === "uncertain" ? (0, import_react55.createElement)("p", { className: "bt-card-warning", role: "status" }, t("The Bot message may or may not have reached its Session. Check the delivery before scheduling again.")) : null,
     canMove ? (0, import_react55.createElement)("label", { className: "bt-field" }, (0, import_react55.createElement)("span", null, t("Personal progress")), (0, import_react55.createElement)("select", { value: task.personalProgress, disabled, "aria-label": t("Move personal task"), onChange: (event) => void onCommand(task, { type: "personal-progress" }, { progress: event.target.value }) }, PERSONAL_COLUMNS.map(([id, label]) => (0, import_react55.createElement)("option", { key: id, value: id }, t(label))))) : null,
@@ -41540,9 +41538,76 @@ function TypeBlock({ task, editable, disabled, onSave }) {
     error ? (0, import_react55.createElement)("p", { className: "bt-form-error", role: "alert" }, error) : null
   );
 }
-function PeopleBlock({ task, actors }) {
+function PeopleBlock({ task, actors, canEdit = false, disabled = false, onAssign }) {
+  const [editing, setEditing] = (0, import_react55.useState)(false);
+  const [owner, setOwner] = (0, import_react55.useState)(task.owner ?? "");
+  const [reviewer, setReviewer] = (0, import_react55.useState)(task.reviewer ?? "");
+  const [busy, setBusy] = (0, import_react55.useState)(false);
+  const [error, setError] = (0, import_react55.useState)("");
+  (0, import_react55.useEffect)(() => {
+    setOwner(task.owner ?? "");
+    setReviewer(task.reviewer ?? "");
+    setError("");
+  }, [task.owner, task.reviewer]);
+  const candidates = (Array.isArray(actors) ? actors : []).filter((actor) => actor && typeof actor.id === "string");
   const rows2 = [["Owner", task.owner], ["Reviewer", task.reviewer]];
-  if (task.parentTaskId && !task.owner && !task.reviewer) return (0, import_react55.createElement)(SideSection, { title: t("People") }, t("Unassigned"));
+  const unassignedItem = Boolean(task.parentTaskId && (!task.owner || !task.reviewer));
+  if (unassignedItem) {
+    const save = async (event) => {
+      event.preventDefault();
+      if (!canEdit || disabled || busy || !owner || !reviewer || owner === reviewer) return;
+      setBusy(true);
+      setError("");
+      try {
+        const result = await onAssign?.(owner, reviewer);
+        if (result === "committed") setEditing(false);
+        else if (result !== "cancelled") setError(t("The owner and reviewer could not be saved."));
+      } catch {
+        setError(t("The owner and reviewer could not be saved."));
+      } finally {
+        setBusy(false);
+      }
+    };
+    const choose = (label, value, onChange, list) => (0, import_react55.createElement)(
+      "label",
+      { className: "bt-field" },
+      (0, import_react55.createElement)("span", null, t(label)),
+      (0, import_react55.createElement)(
+        "select",
+        { value, disabled: disabled || busy, "aria-label": t(label), onChange: (event) => onChange(event.target.value) },
+        (0, import_react55.createElement)("option", { value: "" }, t("Choose a Bot")),
+        list.map((actor) => (0, import_react55.createElement)("option", { key: actor.id, value: actor.id }, actor.name || actor.id))
+      )
+    );
+    const form = (0, import_react55.createElement)(
+      "form",
+      { className: "bt-card-form", onSubmit: save },
+      choose("Owner", owner, (value) => {
+        setOwner(value);
+        if (value === reviewer) setReviewer("");
+      }, candidates),
+      choose("Independent reviewer", reviewer, setReviewer, candidates.filter((actor) => actor.id !== owner)),
+      owner && reviewer && owner === reviewer ? (0, import_react55.createElement)("p", { className: "bt-form-error", role: "alert" }, t("The reviewer must be a different Bot.")) : null,
+      error ? (0, import_react55.createElement)("p", { className: "bt-form-error", role: "alert" }, error) : null,
+      (0, import_react55.createElement)(
+        "div",
+        { className: "bt-card-editor-actions" },
+        (0, import_react55.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled: busy, onClick: () => {
+          setEditing(false);
+          setOwner(task.owner ?? "");
+          setReviewer(task.reviewer ?? "");
+        } }, t("Cancel")),
+        (0, import_react55.createElement)("button", { type: "submit", className: "bt-btn bt-btn-primary", disabled: disabled || busy || !owner || !reviewer || owner === reviewer }, t("Save"))
+      )
+    );
+    const body = canEdit ? editing ? form : (0, import_react55.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled, onClick: () => setEditing(true) }, t("Set owner and reviewer")) : null;
+    return (0, import_react55.createElement)(
+      SideSection,
+      { title: t("People") },
+      (0, import_react55.createElement)("p", { className: "bt-card-note" }, t("This task item is unassigned. Choose an owner and an independent reviewer.")),
+      body
+    );
+  }
   return (0, import_react55.createElement)(SideSection, { title: t("People") }, (0, import_react55.createElement)(
     "div",
     { className: "bt-card-people" },
@@ -42073,14 +42138,11 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
     else if (result !== "cancelled") setTitleError(t("The title could not be saved."));
   };
   const detailsSave = (target, value) => confirmCommand(target, { type: detailsType }, value);
-  const openTaskEditor = () => {
-    const more = modal.current?.querySelector(".bt-card-more");
-    if (!more) return;
-    more.open = true;
-    const edit = more.querySelector(".bt-card-more-body button");
-    edit?.click();
-    more.scrollIntoView({ block: "center", behavior: "smooth" });
-  };
+  const assignPeople = (owner, reviewer) => confirmCommand(
+    task,
+    { type: "edit" },
+    { title: textValue(task.title), owner, reviewer, acceptance: textValue(task.acceptance), dependencies: dependenciesOf(task) }
+  );
   const relatedTasks = (0, import_react55.createElement)(RelatedTasks, {
     task,
     tasks,
@@ -42225,8 +42287,8 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
         (0, import_react55.createElement)(
           "aside",
           { className: "bt-card-side" },
-          (0, import_react55.createElement)(StatusBlock, { task, commands, canMove, canSchedule, disabled: uncertain || busy, onCommand, onOpenMore: canEdit ? openTaskEditor : void 0 }),
-          (0, import_react55.createElement)(PeopleBlock, { task, actors }),
+          (0, import_react55.createElement)(StatusBlock, { task, commands, canMove, canSchedule, disabled: uncertain || busy, onCommand }),
+          (0, import_react55.createElement)(PeopleBlock, { task, actors, canEdit, disabled: uncertain || busy, onAssign: assignPeople }),
           !legacy ? (0, import_react55.createElement)(CardTextEditor, { task, field: "stage", editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }) : null,
           (0, import_react55.createElement)(TypeBlock, { task, editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }),
           (0, import_react55.createElement)(DueEditor, { task, editable: canDetails, disabled: uncertain || busy, legacy, onSave: detailsSave }),
