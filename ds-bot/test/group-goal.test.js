@@ -1183,6 +1183,31 @@ test('a persisted admin completion can rearm after runtime restart', async (t) =
   assert.equal(restarted.agentOf('r1').calls.length, 1)
 })
 
+test('a completed inspection closes behind a historical batch without touching its work', async t => {
+  const host = await start(t)
+  const goal = await parkForReview(host)
+  const room = host.rt.roomOf('r1')
+  const batch = { roomId:room.id, pending:['b'] }
+  host.rt.state.roomBatches = { old:batch }
+  host.rt.roomBatchPending = id => id === room.id
+  await host.rt.testScheduleOccurrence(goal.reviewAt)
+  const attempt = goal.reviewAttempt
+  assert.equal(attempt.inspectOnly, true)
+  attempt.adminCompleted = true
+  host.agentOf('r1').inbox.nextTurn.length = 0
+
+  // A real waiter still prevents declaring the group idle.
+  host.rt.roomWaiters.set('live', { roomId:room.id })
+  assert.equal(await host.rt.testScheduleOccurrence(goal.reviewAt + 1000), 'busy')
+  assert.equal(goal.reviewAttempt, attempt)
+  host.rt.roomWaiters.delete('live')
+
+  assert.equal(await host.rt.testScheduleOccurrence(goal.reviewAt + 2000), 'pending')
+  assert.equal(goal.reviewAttempt, undefined)
+  assert.deepEqual(batch.pending, ['b'])
+  assert.equal(host.agentOf('gb').calls.length, 0)
+})
+
 test('a real prepared worker delivery blocks completed review recovery after restart', async (t) => {
   const host = await start(t)
   const g = await parkForReview(host)
@@ -1243,6 +1268,72 @@ test('legacy same-room recovery notes permit only inspection and cannot dispatch
   await host.rt.testScheduleOccurrence(g.reviewAt)
   assert.equal(host.agentOf('r1').calls.length, 1)
   assert.equal(host.agentOf('r1').calls[0].source.reviewInspect, true)
+})
+
+test('a scheduled review sends one read-only follow-up for a held assignment', async (t) => {
+  const host = await start(t)
+  const g = await parkForReview(host)
+  const resolve = host.ctx.sessionController.resolveAgent
+  host.ctx.sessionController.resolveAgent = async id => {
+    if (id === 'gb') throw new Error('unresolved original delivery')
+    return resolve(id)
+  }
+  await assert.rejects(host.rt.deliver({
+    toId: 'b', sessionId: 'gb', role: 'room', roomId: 'r1',
+    exchangeId: 'original-assignment', text: 'original work',
+  }))
+  host.ctx.sessionController.resolveAgent = resolve
+  await host.rt.testScheduleOccurrence(g.reviewAt)
+  const post = host.takeGoal()
+  assert.equal(post.source.reviewInspect, true)
+  host.agentOf('r1').inbox.nextTurn.length = 0
+  const result = host.round('held-assignment-follow-up', post)
+  await settle(() => host.agentOf('ga').calls.length === 1)
+  host.begin('ga')
+
+  const task = g.stages[0].tasks[0]
+  const initialStatus = task.status
+  const { review_task, review_fingerprint } = reviewArgs(task)
+  const args = { action: 'review-follow-up', review_task, review_fingerprint }
+  const decisions = (id, name, arguments_) => host.ctx.guards.map(guard => guard({ agent: { id }, name, arguments: arguments_ }))
+  await host.tool('group_goal', { action: 'show' }, 'ga')
+  assert.ok(decisions('ga', 'group_goal', args).every(value => value === undefined))
+  const reply = await host.tool('group_goal', args, 'ga')
+  assert.match(reply, /@Writer/)
+  assert.equal(host.agentOf('gb').calls.length, 1)
+  const [question] = host.agentOf('gb').calls
+  assert.equal(question.source.reviewInspect, true)
+  assert.equal(question.source.reviewReceipt, true)
+  assert.notEqual(question.source.exchangeId, 'original-assignment')
+  assert.match(text(question), /Do not start, repeat or resume work/)
+  await host.tool('group_goal', args, 'ga')
+  assert.equal(host.agentOf('gb').calls.length, 1)
+
+  const step = async messages => {
+    const payload = { agent: { ...host.agentOf('gb'), id: 'gb' }, messages, step: 1, turn: 1,
+      signal: new AbortController().signal, modelSelection: {} }
+    const listeners = host.ctx.listeners.get('agent/pre-step')
+    const run = index => index === listeners.length
+      ? { kind: 'enter', messages }
+      : listeners[index](payload, () => run(index + 1))
+    return (await run(0)).messages.filter(message => !['snapshot', 'catalog'].includes(message.source?.form))
+  }
+  const userInput = host.say('Separate work from the user')
+  assert.deepEqual(await step([question, userInput]), [userInput])
+  assert.deepEqual(await step([question]), [question])
+
+  host.begin('gb')
+  for (const name of ['bash', 'message_bot']) {
+    assert.ok(decisions('gb', name, {}).some(value => typeof value === 'string'))
+  }
+  assert.ok(decisions('gb', 'group_goal', args).some(value => typeof value === 'string'))
+  assert.ok(decisions('gb', 'group_goal', { action: 'show' }).every(value => value === undefined))
+  host.finish('gb', 'Received the original assignment. Waiting for the draft evidence.')
+  await settle(() => logLines(host).some(line => line.botId === 'b' && line.text?.includes('Received the original assignment')))
+  assert.equal(task.status, initialStatus)
+  assert.ok(host.rt.unreadOf('gb').some(item => item.exchangeId === 'original-assignment'))
+  host.finish('ga', '[PASS]')
+  await settle(() => result() !== undefined)
 })
 
 for (const [kind, reply] of [
@@ -1311,6 +1402,33 @@ test('confirmed inspection recovery remains read-only while legacy notes remain 
   assert.equal(host.agentOf('r1').calls.length, 1)
   assert.equal(host.agentOf('r1').calls[0].source.reviewInspect, true)
   assert.equal(host.agentOf('gb').calls.length, 0)
+})
+
+test('an overdue scheduled follow-up escalates once to the original board reviewer', async t => {
+  const host = await start(t)
+  const g = await parkForReview(host)
+  const task = g.stages[0].tasks[0]
+  const args = { ...reviewArgs(task), action:'review-follow-up' }
+  g.reviewFollowUps = { stageId:g.stages[0].id, records:{ [task.id]:{
+    fingerprint:args.review_fingerprint, contactId:'b', state:'sent', deadline:Date.now() - 1000,
+  } } }
+  host.rt.goalItemReviewer = () => 'c'
+  await host.rt.testScheduleOccurrence(g.reviewAt)
+  const post = host.takeGoal()
+  host.agentOf('r1').inbox.nextTurn.length = 0
+  const result = host.round('overdue-follow-up', post)
+  await settle(() => host.agentOf('ga').calls.length === 1)
+  host.begin('ga')
+  assert.match(await host.tool('group_goal', args, 'ga'), /@Tester/)
+  assert.equal(host.agentOf('gb').calls.length, 0)
+  const calls = host.agentOf('gc').calls
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].source.reviewReceipt, true)
+  assert.match(text(calls[0]), /missed its response deadline/)
+  assert.match(await host.tool('group_goal', args, 'ga'), /response due/)
+  assert.equal(calls.length, 1)
+  host.finish('ga', '[PASS]')
+  await settle(() => result() !== undefined)
 })
 
 test('an admin inspection preserves pending business inputs for a later ordinary turn', async t => {
@@ -2803,7 +2921,13 @@ test('read-only review asks for show and does not count silent pass as successfu
   await host.rt.testScheduleOccurrence(g.reviewAt); const post = host.takeGoal(); host.agentOf('r1').inbox.nextTurn.length = 0
   const read = host.round('inspect-without-show', post); await settle(() => host.agentOf('ga').calls.length > 0)
   const input = host.begin('ga')
-  assert.match(text(input), /first action must be group_goal show/)
+  assert.match(text(input), /First call group_goal show/)
+  assert.match(text(input), /plain-text @Name/)
+  assert.match(text(input), /receipt\/status or exact missing-evidence question/)
+  assert.match(text(input), /response deadline/)
+  assert.match(text(input), /status-only group reply with plain-text @Name/)
+  assert.match(text(input), /explicitly say not to repeat the work/)
+  assert.match(text(input), /[Dd]o not leave the group with only “waiting”/)
   assert.match(text(input), /Only after successfully reading the current goal may you reply \[PASS\]/)
   assert.doesNotMatch(text(input), /Reply \[PASS\] to stay silent when you have nothing new/)
   assert.doesNotMatch(text(input), /Nothing new in this round since your last message/)
@@ -2977,6 +3101,14 @@ test('unresolved delivery restricts its owner while another unique owner can be 
   assert.match(await host.tool('group_goal',reviewArgs(tester),'ga'),/recorded|check/i)
   assert.ok(g.ownerReview?.checks?.[tester.id])
   assert.equal(g.ownerReview?.checks?.[writer.id],undefined)
+  writer.status='reported'
+  assert.ok(decide('group_goal',reviewArgs(writer)).some(value=>typeof value==='string'))
+  assert.ok(decide('read',{path:'reported-evidence.txt'}).every(value=>value===undefined))
+  const partial={...reviewArgs(writer),review_complete:false,review_assignment:'original delivery outcome unknown'}
+  assert.ok(decide('group_goal',partial).every(value=>value===undefined))
+  assert.match(await host.tool('group_goal',partial,'ga'),/Recorded/)
+  assert.equal(g.ownerReview.checks[writer.id].unresolved,true)
+  assert.ok(decide('bash',{}).some(value=>typeof value==='string'))
   // A new ambiguous note arriving after the first check must close the gate.
   const unread=host.rt.unreadRoomOf
   host.rt.unreadRoomOf=id=>unread(id).map(item=>item.toId==='b'?{...item,toId:undefined}:item)

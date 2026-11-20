@@ -60,6 +60,13 @@ const inspectionFingerprint = (goal, includeRevision = true) => {
   })).digest('hex')
 }
 
+const receiptStatus = (receipt, now = Date.now()) => {
+  if (receipt.state === 'needs-decision') return 'user decision needed; no independent board reviewer is assigned'
+  if (receipt.state === 'answered') return 'reply recorded (self-report; check evidence)'
+  if (now < receipt.deadline) return `follow-up ${receipt.state}; response due ${new Date(receipt.deadline).toISOString()}`
+  return `follow-up ${receipt.state}; deadline passed without a reply. Check the original group record, then escalate to the authorized reviewer or ask the user for a decision. Do not resend the same question.`
+}
+
 const openReviewTasks = goal => (goal?.stages?.[goal.current]?.tasks ?? []).filter(task => task.status !== 'done')
 const reviewMissing = (goal, checkCurrent = () => false) => {
   const stage = goal?.stages?.[goal.current]
@@ -609,7 +616,7 @@ export function markTasks(room, botId, from, to, note, now = Date.now()) {
 }
 
 const DUTY_ACTIVE = "You run this goal. First check current task states, existing owners and work in other conversations, dependencies, authorization, resource locks and available capacity. Call only members whose tasks are ready and need assignment; members named in one message start together. Do not redispatch working or reported work without a concrete reason. Review every task in the current stage and every stage acceptance item with evidence; group_goal pass marks every stage task done, so pass only when each task to be marked done is actually complete and verified. If a task is no longer applicable, first record the authorized scope decision and safely reconcile the stage; never falsely mark it done just to advance. If a specific member must redo work, first verify that member has an affected task in the current stage, preserve evidence and the affected task notes before group_goal rework with that bot; targeted rework also clears that member's affected task notes, while leaving bot out resets every task and clears all task notes. If the member has no current task, track the work on the project board or use a safe scoped revision. Record external blockers and work on independent authorized actions rather than treating waiting as rework. Revise this goal for an explicit user correction, or for necessary task or dependency adjustments within its existing authorized objective and acceptance; never materially change the user objective or acceptance scope or weaken its standard without explicit user direction; refine verification details within the authorized original acceptance and record the change. Use task to update one member status without passing stages. Revising constraints replaces the entire list. Revising stages rebuilds current and future stages and loses task notes, stage rework and feedback, and original IDs; show omits complete future task definitions. Before such a replacement, retrieve and preserve the complete current and future definitions, task states, notes, feedback and evidence from verifiable records; if unavailable, do not guess or rebuild, and track the work on the project board. When calling revise, supply only fields that need changing and reconcile all affected work after the revision. Track independent new user goals separately without overwriting this goal. Each stage should have at most one aggregated task per Bot; track separate acceptance items on the project board. Pause or resume this goal only on an explicit user request; an external blocker is not a pause, and do not attribute a Bot action to the user. Stop can stop other group members and their work; use it only for an explicit request to stop this whole goal after assessing impact. Keep all work within applicable user authorization and rules. Ask the user only for decisions you cannot make."
-const OWNER_REVIEW = 'Read the current group goal and this group’s task board first. Reuse original cards, items, owners, recent evidence and handoff receipts. Select the next authorized, unblocked action on the highest-priority item and advance it through its existing owner. Follow the assigned independent reviewer for reported work. Record progress or the actual blocker, the person who can clear it and the next check on the original item. Do not duplicate an outstanding or uncertain message. Contact an owner only for a concrete missing action or overdue handoff. Avoid a full audit or a round of status requests when nothing material changed.'
+const OWNER_REVIEW = 'Read the current group goal and this group’s task board first. Reuse original cards, items, owners, recent evidence and handoff receipts. When the group is idle and the goal is incomplete, take a concrete authorized next step this cycle: advance the highest-priority item through its existing owner, follow the assigned independent reviewer, or act on its blocker. In a group reply, name the specific person with a plain-text @Name, task ID, requested action or evidence, and a feedback deadline; never put a mention in backticks/code and never use @all. Make at most one effective follow-up per owner for the same task in this cycle. Record progress, blocker owner, and next check on the original item. Do not duplicate an outstanding or uncertain assignment; query its original recipient for receipt/status without restarting the work. Do not repeat a follow-up before its deadline. If the deadline is missed or two scheduled checks pass without confirmation, escalate to the specific person authorized to unblock or decide and continue independent authorized work. Do not leave an incomplete goal in an ownerless or open-ended wait. Honor explicit user pause/stop and do not mark reported work done without acceptance evidence.'
 const DUTY_PASSED = 'Every stage passed. Check the overall "done when", then call group_goal complete with the evidence and a summary for the user.'
 const DUTY_PAUSED = "This group goal is paused. Do not assume who paused it without evidence, assign new work or pass stages for it. Continue unrelated user-authorized work that does not depend on the paused goal. Resume only on an explicit user request."
 const dutyOf = goal => (goal.status === 'paused' ? DUTY_PAUSED : goal.stages[goal.current] === undefined ? DUTY_PASSED : `${DUTY_ACTIVE} ${OWNER_REVIEW}`)
@@ -620,9 +627,9 @@ const DUTY_DRAFT = [
   '2. List the decisions only the user can make. Ask them in one message, numbered, each with your recommended answer, so the user can reply "as recommended". Skip this when nothing is open.',
   '3. When the goal is sufficiently clear, call group_goal start with objective, acceptance, rules and stages; use at most one aggregated task per Bot in each stage and track independent items on the project board.',
 ].join('\n')
-const NUDGE_LINE = `Goal check from DS Bot: no work is currently running in this group and this goal is not finished; members may still be working elsewhere. ${OWNER_REVIEW} Dispatch only ready, authorized tasks that need assignment and fit capacity; review reported work without redispatching it. Record external blockers and their owners, or complete the goal only when all requirements are verified. If no authorized step can progress while waiting, record the unblock condition and reply [PASS].`
-const INSPECTION_DUTY = 'This is a read-only goal inspection because earlier work or a stop is unresolved. Your first action must be group_goal show for the current group; read the result and identify the current stage, unfinished owners and evidence gaps. Read the original items on this group’s task board with board_task list or show using its exact room_id. Use read_group_chat for this group to check related handoffs if needed. Do not call review-check, assign, dispatch, send reminders, change task state, or take external actions. The shown goal is not proof that an owner accepted or completed work. If show fails, report the failure; otherwise give a short factual inspection or reply [PASS] if nothing changed. Full owner checks and follow-up remain pending.'
-const SCOPED_INSPECTION_DUTY = 'First call group_goal show for this group and read its original board items with board_task list or show using its exact room_id. Earlier deliveries have unresolved outcomes for specific owners; do not repeat or dispatch their work. For other owners, inspect status, evidence, dependencies and capacity and record review-check for the exact task and current fingerprint. You may read evidence for independently reviewable reported work. You may assign one uniquely owned pending task only when it is ready, with message_bot when="queue", the task ID and full task text, and request_id "goal-review:<reviewId>:<taskId>:assign". For a reported task, first record an unresolved review-check with a concrete evidence gap; then you may ask its unblocked owner only for the exact missing item in review_next, with request_id "goal-review:<reviewId>:<taskId>:evidence" and when="now". These are separate requests and must use separate IDs. Never message blocked or unknown owners, repeat working or completed work, or use a new request ID to retry an uncertain request. Do not change task status or pass a stage from this inspection. A goal panel is not proof of acceptance or completion; unknown facts remain unknown.'
+const NUDGE_LINE = `Goal check from DS Bot: no work is currently running in this group and this goal is not finished; members may still be working elsewhere. ${OWNER_REVIEW} Dispatch only ready, authorized tasks that need assignment and fit capacity; review reported work without redispatching it. Record external blockers and their owners, or complete the goal only when all requirements are verified. Use group_goal review-follow-up with the exact task ID and fingerprint from show for a real status question; do not post a second copy. Do not reply [PASS] while an authorized action, targeted follow-up, or overdue escalation is due. If an existing follow-up is still within its stated deadline, do not repeat it; continue independent authorized work and record the exact next-check time.`
+const INSPECTION_DUTY = 'This is a bounded inspection because an earlier delivery or stop is unresolved. First call group_goal show for the current group; read the original board items with board_task list/show using the exact room_id and check read_group_chat for handoffs if needed. Do not assign or restart the uncertain work, change task state, pass a stage, or override an explicit user pause/stop. Do not leave the group with only “waiting”. If the active goal is incomplete and a current task needs a receipt or evidence, call group_goal review-follow-up with the exact task ID and fingerprint from show. This sends and records a status-only group reply with plain-text @Name (not in backticks/code and never @all), the task ID, and a concrete receipt/status or exact missing-evidence question with a response deadline. For uncertain delivery, explicitly say not to repeat or restart the original work. Make at most one effective follow-up per owner for the same task in this cycle and do not repeat a follow-up before its deadline. Once the recorded deadline passes without a reply, call review-follow-up again for that task. It sends one status-only escalation to the linked board reviewer or records that the user needs to name a reviewer; keep only the affected action frozen and continue independent authorized work. If no safe owner can be identified, state the exact uncertainty and who must resolve it; do not guess or wait without a next-check time. A goal panel is not proof of acceptance or completion; reported work remains incomplete until verified.'
+const SCOPED_INSPECTION_DUTY = 'First call group_goal show for this group and read its original board items with board_task list/show using the exact room_id. Earlier deliveries have unresolved outcomes for specific owners; never repeat or redispatch that work. For every other current owner, inspect status, evidence, dependencies and capacity and record review-check for the exact task and current fingerprint. If the active goal is incomplete and this group is idle, take one concrete authorized step this cycle: read evidence for reported work; assign one uniquely owned, ready pending task with message_bot when="queue", full task text and request_id "goal-review:<reviewId>:<taskId>:assign"; or request exact missing evidence from an unblocked reported owner after recording review-check, using its review_next and request_id "goal-review:<reviewId>:<taskId>:evidence" with when="now". If an earlier delivery to a uniquely identifiable owner is unresolved, call group_goal review-follow-up with the exact task ID and fingerprint from show to send a status-only group reply with a plain-text @Name, task ID and receipt/status question; explicitly do not repeat the task. Do not put @Name in backticks/code and never use @all. Do not repeat a follow-up before its deadline; after the recorded deadline, call review-follow-up again to escalate once to the linked board reviewer or record that the user needs to name a reviewer. Never use a new request ID to retry an uncertain assignment. Do not change task status or pass a stage from this inspection. A goal panel is not proof of acceptance or completion; unknown facts remain unknown.'
 const RESUME_LINE = 'The user resumed the goal. Take the next step now.'
 
 export const goalReviewGuard = (live, roomOf = () => undefined, pickRoom = () => undefined, scoped = () => false) => exec => {
@@ -635,7 +642,7 @@ export const goalReviewGuard = (live, roomOf = () => undefined, pickRoom = () =>
   if (exec.name === 'read_group_chat' && room && typeof exec.arguments?.group === 'string'
     && exec.arguments.group.trim() === room.name && pickRoom(exec.arguments.group, exec.agent?.id)?.room?.id === room.id) return undefined
   if (room && scoped(room, info, exec) === true) return undefined
-  return 'This goal review is inspection only because a stop or earlier group delivery is unresolved. Report evidence and do not assign or change work.'
+  return 'This action is blocked in a delivery inspection. The original work is held. Use the allowed evidence reads, review-check or the task-bound follow-up described in your group goal.'
 }
 
 export function install(rt) {
@@ -777,6 +784,14 @@ export function install(rt) {
       || !room.members.includes(task.botId) || scope.blocked.has(task.botId))return undefined
     return task
   }
+  const reportedReviewTask = (room, id) => {
+    if (inspectionOnlyIdle(room.goal) || stopsPending.has(room.id) || room.goal?.status !== 'active') return undefined
+    const matches = (room.goal.stages?.[room.goal.current]?.tasks ?? []).filter(task => task.id === id)
+    const task = matches[0]
+    if (matches.length === 1 && task.status === 'reported' && room.members.includes(task.botId)) return task
+  }
+  const canRecordReviewCheck = (room, args) => scopedReviewTask(room, args.review_task) !== undefined
+    || (args.review_complete === false && reportedReviewTask(room, args.review_task) !== undefined)
   const scopedReviewMessage = (room, info, exec) => {
     const args=exec.arguments
     if(exec.name!=='message_bot' || !args || typeof args!=='object' || Array.isArray(args)
@@ -800,15 +815,126 @@ export function install(rt) {
       && typeof check.review_next==='string' && check.review_next.trim()!=='' && message.includes(check.review_next.trim())
   }
   const scopedReviewAction = (room, info, exec) => {
-    if(info?.reviewInspect!==true || !goalReviewAllowed(room,info.reviewId))return false
-    if(exec.name==='group_goal' && exec.arguments?.action==='review-check')return scopedReviewTask(room,exec.arguments.review_task)!==undefined
+    if(info?.reviewInspect!==true || info.reviewReceipt || !goalReviewAllowed(room,info.reviewId)
+      || room.goal.reviewAttempt.adminSessionId !== exec.agent?.id) return false
+    if (exec.name === 'group_goal' && exec.arguments?.action === 'review-follow-up') return !inspectionOnlyIdle(room.goal)
+    if (exec.name === 'group_goal' && exec.arguments?.action === 'review-check') return canRecordReviewCheck(room, exec.arguments)
     if(exec.name==='message_bot')return scopedReviewMessage(room,info,exec)
     if(['read','glob','grep'].includes(exec.name)) {
       const stage=room.goal?.stages?.[room.goal.current]
-      return (stage?.tasks ?? []).some(task=>task.status==='reported' && task.botId!==room.admin && scopedReviewTask(room,task.id)!==undefined)
+      return (stage?.tasks ?? []).some(task => reportedReviewTask(room, task.id) !== undefined)
     }
     return false
   }
+  // This action asks for information only, including when an older assignment
+  // to this owner cannot be safely replayed. The reply never settles that work.
+  async function followUpOnReview(room, self, sessionId, args, info) {
+    const goal = room.goal, attempt = goal?.reviewAttempt, stage = goal?.stages?.[goal.current]
+    const task = stage?.tasks.find(item => item.id === args.review_task && item.status !== 'done')
+    const fingerprint = args.review_fingerprint
+    const stageRecords = () => goal?.reviewFollowUps?.stageId === stage?.id ? goal.reviewFollowUps?.records ?? {} : {}
+    const previous = task && stageRecords()[task.id]
+    const escalating = !!previous && previous.fingerprint === fingerprint && previous.state !== 'answered' && Date.now() >= previous.deadline
+    const recordKey = task && (escalating ? `${task.id}:escalation` : task.id)
+    const reviewer = () => rt.goalItemReviewer?.(room.id, currentGoalBoardTaskId(room, goal, stage, task))
+    const contact = rt.botOf(escalating ? reviewer() : task?.botId)
+    const taskCurrent = () => !!attempt && !info?.reviewReceipt && room.admin === self
+      && attempt.adminSessionId === sessionId && attempt.id === info?.reviewId && goalReviewAllowed(room, attempt.id)
+      && !inspectionOnlyIdle(goal) && !!task && !goalDispatchBlocked(room, task.botId)
+      && room.goal === goal && goal.stages[goal.current] === stage
+      && stage.tasks.includes(task) && task.status !== 'done' && reviewFingerprint(task) === fingerprint
+    const current = () => taskCurrent() && !!contact && contact.id !== self && contact.private !== true
+      && rt.botOf(contact.id) === contact && room.members.includes(contact.id) && !goalDispatchBlocked(room, contact.id)
+      && (!escalating || (contact.id !== task.botId && contact.id === reviewer() && previous.state !== 'answered'))
+    if (!taskCurrent()) return 'Choose an unfinished task and its exact fingerprint from show in the active scheduled review.'
+    const exists = stageRecords()[recordKey]
+    if (exists?.fingerprint === fingerprint) return `Task ${task.id} follow-up: ${receiptStatus(exists)}`
+    const used = () => Object.values(stageRecords()).some(record => record.reviewId === attempt.id)
+    if (used()) return 'One follow-up is allowed per scheduled review.'
+    if (!current()) {
+      if (!escalating) return 'This task has no available group recipient. Inspect the board or ask for an explicit decision.'
+      const decision = { reviewId:attempt.id, fingerprint, state:'needs-decision' }
+      goal.reviewFollowUps = { stageId:stage.id, records:{ ...stageRecords(), [recordKey]:decision } }
+      await rt.save({ required:true })
+      await rt.postToRoom(room, rt.botOf(self), `Task ${task.id} @${nameOf(self)}: the owner’s response deadline passed and there is no available independent board reviewer. Ask the user to name the person who should verify the original handoff.`, { quiet:true })
+      return receiptStatus(decision)
+    }
+    const target = await rt.ensureGroupTaskSession(room.id, contact.id)
+    // Recheck after opening the target. A concurrent call may already have claimed this cycle.
+    if (!current() || room.sessions?.[contact.id] !== target) return 'The task or recipient changed. Read the group goal again.'
+    const latest = stageRecords()
+    if (latest[recordKey]?.fingerprint === fingerprint || used()) return 'This review already recorded a follow-up.'
+    const receipt = { exchangeId:randomUUID(), reviewId:attempt.id, fingerprint, escalation:escalating,
+      taskId:task.id, contactId:contact.id, adminId:self, sessionId:target, deadline:Date.now() + 20 * 60 * 1000, state:'claimed' }
+    goal.reviewFollowUps = { stageId:stage.id, records:{ ...latest, [recordKey]:receipt } }
+    await rt.save({ required:true })
+    const request = escalating
+      ? `The follow-up to @${nameOf(task.botId)} missed its response deadline. As the original board reviewer, check the group record and say who can confirm the handoff and what evidence is still needed.`
+      : 'Confirm whether you received the original handoff, its current status and existing evidence or blocker.'
+    const question = `Task ${task.id}: ${request} Do not start, repeat or resume work. Reply in this group by ${new Date(receipt.deadline).toISOString()}.`
+    let refused = false
+    try {
+      await rt.deliver({ roomId:room.id, toId:contact.id, sessionId:target, role:'room', fromId:self, exchangeId:receipt.exchangeId,
+        note:'scheduled status question', reviewId:attempt.id, reviewInspect:true, reviewReceipt:true, text:question }, {
+        beforeAdmission(agent, message) {
+          if (!current() || !rt.goalReceiptCurrent(target, message.source)
+            || !quietInbox(agent) || agent.status === 'running'
+            || rt.live.get(target)?.turn !== undefined || rt.hasSubagents?.(target) || rt.waitsForApproval?.(target)) {
+            throw new Error('The receipt recipient is busy or the review changed')
+          }
+        },
+        onNotAdmitted() { refused = true },
+      })
+    } catch {
+      if (refused) {
+        rt.forgetDelivery?.(receipt.exchangeId, target)
+        const currentRecords = goal.reviewFollowUps?.records
+        if (currentRecords?.[recordKey] === receipt) delete currentRecords[recordKey]
+      } else if (receipt.state === 'claimed') receipt.state = 'uncertain'
+      await rt.save({ required:true })
+      return refused ? 'The status question was not admitted. Check again when the recipient is idle.'
+        : 'The status question may have reached the recipient. Check its original record before any further action.'
+    }
+    if (receipt.state === 'claimed') receipt.state = 'sent'
+    await rt.save({ required:true })
+    try {
+      await rt.postToRoom(room, rt.botOf(self), `@${contact.name} ${question}`, { quiet:true })
+    } catch (error) {
+      rt.warn('ds-bot: status question %s was sent but its group post could not be confirmed: %s', receipt.exchangeId, error)
+      return `Sent a read-only status question for ${task.id} to @${contact.name}; the group post could not be confirmed. Do not send another copy.`
+    }
+    return `Sent a read-only status question for ${task.id} to @${contact.name} in this group. The original task and delivery are unchanged. Next check: ${new Date(receipt.deadline).toISOString()}.`
+  }
+
+  rt.goalReceiptCurrent = (sessionId, info) => {
+    if (info?.kind !== SOURCE_KIND || info.form !== 'relay' || info.role !== 'room'
+      || info.reviewReceipt !== true || info.reviewInspect !== true || !info.reviewId) return false
+    const room = rt.roomOf(info.roomId), goal = room?.goal, stage = goal?.stages?.[goal.current]
+    if (!room || !stage || goal.status !== 'active' || inspectionOnlyIdle(goal)
+      || goal.reviewFollowUps?.stageId !== stage.id || rt.readOnly() !== undefined) return false
+    const receipt = Object.values(goal.reviewFollowUps.records ?? {}).find(record => record.exchangeId === info.exchangeId
+      && record.reviewId === info.reviewId && record.sessionId === sessionId && record.adminId === info.senderSessionId)
+    const task = stage.tasks.find(item => item.id === receipt?.taskId)
+    if (!task || task.status === 'done' || reviewFingerprint(task) !== receipt.fingerprint || receipt.adminId !== room.admin) return false
+    const contactId = receipt.contactId
+    const isCurrentContact = receipt.escalation
+      ? contactId !== task.botId && contactId === rt.goalItemReviewer?.(room.id, currentGoalBoardTaskId(room, goal, stage, task))
+      : contactId === task.botId
+    return isCurrentContact && room.members.includes(contactId) && room.sessions?.[contactId] === sessionId
+      && !goalDispatchBlocked(room, task.botId) && !goalDispatchBlocked(room, contactId)
+      && ['claimed', 'sent', 'uncertain'].includes(receipt.state) && Date.now() <= receipt.deadline
+  }
+
+  rt.goalReceiptResult = async (room, sessionId, info, answered) => {
+    const state = room.goal?.reviewFollowUps
+    const receipt = Object.values(state?.records ?? {}).find(record => record.exchangeId === info.exchangeId
+      && record.sessionId === sessionId && record.reviewId === info.reviewId)
+    if (!receipt || receipt.state === 'answered') return
+    receipt.state = answered ? 'answered' : 'unanswered'
+    await rt.save({ required:true })
+    return receipt.taskId
+  }
+
   // Every consumer treats a scoped assertion as unresolved if its original
   // queue generation is unavailable, changed, or its owner is now blocked.
   const missingFor = room => {
@@ -861,6 +987,14 @@ export function install(rt) {
       else if (index === goal.current) {
         lines.push(`[current] ${n}. ${stage.title} — done when: ${stage.acceptance}`)
         for (const task of stage.tasks) lines.push(`  - ${nameOf(task.botId)}: ${task.task} [${TASK_LABEL[task.status] ?? 'status unknown'}]${taskNoteText(task) || taskStatusTimeText(task)} (stage ${stage.id}, task ${task.id}, review fingerprint ${reviewFingerprint(task)})${board ? boardLocator(room, goal, stage, task) : ''}`)
+        if (goal.reviewFollowUps?.stageId === stage.id) {
+          for (const task of stage.tasks) {
+            const receipt = goal.reviewFollowUps.records?.[task.id]
+            const escalation = goal.reviewFollowUps.records?.[`${task.id}:escalation`]
+            if (receipt?.fingerprint === reviewFingerprint(task)) lines.push(`  - Status question ${task.id} @${nameOf(receipt.contactId)}: ${receiptStatus(receipt)}`)
+            if (escalation?.fingerprint === reviewFingerprint(task)) lines.push(`  - Escalation for ${task.id}: ${receiptStatus(escalation)}`)
+          }
+        }
         if (stage.reworks > 0) lines.push(`  Sent back ${stage.reworks} ${stage.reworks === 1 ? 'time' : 'times'}. Latest feedback: ${stage.feedback ?? ''}`)
       } else lines.push(`[next] ${n}. ${stage.title}: ${[...new Set(stage.tasks.map(task => nameOf(task.botId)))].join(', ')}`)
     })
@@ -912,7 +1046,9 @@ export function install(rt) {
         : ['<group_goal status="drafting">', `The admin is aligning a new goal for this group with the user: ${headOf(goal.brief ?? '', 300)}. Help with facts when you are asked.`, '</group_goal>'].join('\n')
     } else if (isAdmin) {
       const scoped=inspectOnly && (goal.stages?.[goal.current]?.tasks ?? []).some(task=>scopedReviewTask(room,task.id)!==undefined)
-      block = [`<group_goal status="${goal.status}">`, ...ledgerLines(room, goal, { board: false }), inspectOnly ? (scoped ? SCOPED_INSPECTION_DUTY : INSPECTION_DUTY) : dutyOf(goal), '</group_goal>'].join('\n')
+      const evidence = inspectOnly && !inspectionOnlyIdle(goal) && openReviewTasks(goal).some(task => reportedReviewTask(room, task.id))
+        ? 'For reported tasks, inspect existing evidence with read, glob or grep under normal file permissions. Record findings with group_goal review-check and review_complete=false while an original outcome is unresolved. This does not change the card status. Shell commands are unavailable during a delivery inspection.' : ''
+      block = [`<group_goal status="${goal.status}">`, ...ledgerLines(room, goal, { board: false }), inspectOnly ? (scoped ? SCOPED_INSPECTION_DUTY : INSPECTION_DUTY) : dutyOf(goal), evidence, '</group_goal>'].filter(Boolean).join('\n')
     } else {
       const view = memberLines(room, goal, member)
       block = [`<group_goal status="${goal.status}" stage="${view.stage}">`, ...view.lines, '</group_goal>'].join('\n')
@@ -920,6 +1056,7 @@ export function install(rt) {
     if (isAdmin && nudge && reviewId && goal.reviewAttempt?.id === reviewId && goal.reviewAttempt.adminId === member.id
       && goal.reviewAttempt.scheduledPrompt) {
       block += '\nRoom schedule instructions, within the current goal, permissions and review restrictions:\n' + goal.reviewAttempt.scheduledPrompt
+        + '\nA status question in this scheduled review is sent by group_goal review-follow-up. Choose an overdue task first, then an unfinished task with no question yet. Do not post a second copy or repeat a question from the goal ledger.'
     }
     if (goal.status !== 'drafting') block += '\nApply each saved goal rule only to its stated scope. Honor the latest explicit user instruction and any still-valid approval for the same action, object, environment and conditions; do not ask for the same approval again. Do not extend a lock rule beyond the operations it actually covers: evidence from a different scope can be reported for its own scope but is not a substitute for the required gate evidence. If the applicable authorization or rule scope cannot be verified, pause only the affected action and continue independent authorized work. Tell the goal owner when saved rules need a scoped update.'
     if (isAdmin && nudge && !inspectOnly) block += `\n${NUDGE_LINE}\nFor each current unfinished task you actually checked, call group_goal review-check with its task ID and exact review fingerprint from show plus the requested structured fields and evidence. Unknown or unverified facts must be marked unknown and review_complete false; only set review_complete true when the required check is actually finished. The runtime records your assertion and will continue missing or changed tasks in another turn; it does not verify the truth of your evidence.`
@@ -1246,6 +1383,10 @@ export function install(rt) {
   // inspect and report, but do not permit tools with possible side effects.
   ctx.tools.guard(exec => {
     const info = rt.live.get(exec.agent?.id)?.info
+    if (info?.reviewReceipt === true) {
+      if (!info.reviewId || info.reviewInspect !== true) return 'This status question is not bound to a review.'
+      return goalReviewGuard(rt.live, rt.roomOf, (name, agentId) => rt.pickRoom(name, rt.selfOf(agentId)))(exec)
+    }
     if (info?.reviewId && !goalReviewAllowed(rt.roomOf(info.roomId), info.reviewId)) {
       if (exec.name === 'list_bots' || (exec.name === 'group_goal' && exec.arguments?.action === 'show')) return undefined
       return 'The goal review was stopped or its identity changed; no further action is allowed.'
@@ -1401,10 +1542,12 @@ export function install(rt) {
           const quiet = agent => quietInbox(agent)
             && rt.live.get(agent.session.id)?.turn === undefined && rt.hasSubagents?.(agent.session.id) !== true
             && rt.waitsForApproval?.(agent.session.id) !== true
+          // Finalizing an inspection records what the admin checked. An old
+          // batch still fences its original work but cannot keep that inspection open.
+          const heldWork = hasUnreadRoomDeliveries(room) || rt.roomBatchPending?.(room.id) === true
           if (!goalReviewAllowed(room, attempt.id) || !quiet(root) || !quiet(adminAgent)
-            || [...rt.roomProgress.values()].some(round => round.roomId === room.id)
-            || (!attempt.inspectOnly && hasUnreadRoomDeliveries(room)) || (rt.workingInRoom?.(room) ?? []).length > 0 || rt.roomBatchPending?.(room.id) === true
-            || (rt.roomInbox.get(room.id)?.length ?? 0) > 0 || (rt.roomLaterCount?.(room.id) ?? 0) > 0) return
+            || rt.roomBusyForPatrol(room) || (rt.workingInRoom?.(room) ?? []).length > 0
+            || (!attempt.inspectOnly && heldWork)) return
           finishReview(room, 'admin-pass', now)
           await rt.save({ required: true })
         } catch (error) {
@@ -1623,13 +1766,13 @@ export function install(rt) {
 
   rt.teamTools.push(defineTool({
     name: 'group_goal',
-    description: "Track independent goals separately. Show the target before changes. Copy room_id, goal_id and expected_revision. On conflict re-read and reconcile. Read authorized groups, write in the target group. Start only without an active/paused goal. Pass marks all current-stage tasks done. Verify each completion and its evidence or reconcile scope first. Pause/resume need explicit user direction. Stop requires a request to stop the whole goal and may halt members. Review-check cites sources and marks unknowns.",
+    description: "Track independent goals separately. Show the target before changes. Copy room_id, goal_id and expected_revision. On conflict re-read and reconcile. Read authorized groups, write in the target group. Start only without an active/paused goal. Pass marks all current-stage tasks done. Verify each completion and its evidence or reconcile scope first. Pause/resume need explicit user direction. Stop requires a request to stop the whole goal and may halt members. Review-check cites sources and marks unknowns. Review-follow-up sends one read-only status question to the current task owner from a scheduled review.",
     parameters: {
       group: { type: 'string', description: 'Exact name from list_bots. Must match room_id if both supplied.' },
       room_id: { type: 'string', description: 'Exact target group ID. Defaults to this group.' },
       goal_id: { type: 'string', description: 'From show. Use none for an empty room.' },
       expected_revision: { type: 'integer', description: 'From the same goal ledger.' },
-      action: { type: 'string', required: true, enum: ['show', 'draft', 'start', 'revise', 'task', 'pass', 'rework', 'complete', 'pause', 'resume', 'stop', 'review-check'] },
+      action: { type: 'string', required: true, enum: ['show', 'draft', 'start', 'revise', 'task', 'pass', 'rework', 'complete', 'pause', 'resume', 'stop', 'review-check', 'review-follow-up'] },
       review_task: { type: 'string', description: 'Task ID from show.' },
       review_fingerprint: { type: 'string', description: 'Exact task fingerprint from show.' },
       review_assignment: { type: 'string', description: 'Received/queued/unknown and source.' },
@@ -1757,13 +1900,15 @@ export function install(rt) {
           }
           return ledger
         }
+        case 'review-follow-up':
+          return followUpOnReview(room, self, sessionId, args, review)
         case 'review-check': {
           const info = rt.live.get(exec.agent?.id)?.info
           const goal = room.goal
           const stage = goal?.stages?.[goal.current]
           const reviewId = info?.reviewId
           if (!reviewId || !rt.isAdminOf(room, self) || !goalReviewAllowed(room, reviewId)
-            || (info.reviewInspect === true && scopedReviewTask(room,args.review_task)===undefined)) return 'Only an active review with an unrelated, unblocked task may record a check.'
+            || (info.reviewInspect === true && !canRecordReviewCheck(room, args))) return 'Only an active review with an unrelated, unblocked task may record a completed check. For a reported task, record available evidence as unresolved.'
           const task = stage?.tasks?.find(item => item.id === args.review_task && item.status !== 'done')
           if (!task || args.review_fingerprint !== reviewFingerprint(task)) return 'Task changed or is not an unfinished task in the current stage; show the goal again.'
           const fields = ['review_assignment', 'review_progress', 'review_dependencies', 'review_next', 'review_deadline', 'evidence']
