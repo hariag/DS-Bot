@@ -346,7 +346,11 @@ export function install(rt) {
       // current cwd is not exposed to this guard, so relative aliases cannot
       // be checked reliably. The user can still operate their own terminal.
       if (name === 'terminal_send') throw new Error('The terminal working directory cannot be verified. Use a one-shot shell with a known working directory.')
-      const text = strings(args).join('\n')
+      // Only fields the shell actually runs (and the folder it runs in). A free-text
+      // description is not shell: an apostrophe in it ("the other session's state")
+      // made the quote scan see an unterminated quote and refuse the whole call.
+      const text = ['command', 'text', 'workdir', 'cwd']
+        .filter(key => typeof args[key] === 'string').map(key => args[key]).join('\n')
       const flat = fold(text.replace(/\\/g, '/'))
       blocked = flat.includes('board-v1') || flat.includes('tasks.sqlite')
       // A path to the ordinary workspace may share rt.home with board-v1.
