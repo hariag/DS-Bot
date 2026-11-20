@@ -372,8 +372,10 @@ const releaseIsDone = release => {
       if (parent && !parent.stale && ['reported','done'].includes(parent.status)) {
         db.prepare("UPDATE actions SET state='cancelled' WHERE task_id=? AND state='pending'").run(parent.id)
         db.prepare("UPDATE actions SET state='uncertain',receipt=COALESCE(receipt,'item acceptance changed') WHERE task_id=? AND state IN ('claimed','accepted')").run(parent.id)
+        const priorItems = parent.blocked?.reason === 'item acceptance changed' && Array.isArray(parent.blocked.itemTaskIds) ? parent.blocked.itemTaskIds : []
         save(parent, { ...parent, revision:parent.revision + 1, stale:true,
-          blocked:{ reason:'item acceptance changed', condition:'revalidate items and card', owner:parent.reviewer } })
+          blocked:{ reason:'item acceptance changed', condition:'revalidate items and card', owner:parent.reviewer,
+            itemTaskIds:[...new Set([...priorItems, after.id])] } })
       }
     }
     if (after.parentTaskId) {
@@ -454,6 +456,31 @@ const releaseIsDone = release => {
   const dependenciesDone = task => task.dependencies.every(id => { const dep = getTask(id); return dep?.status === 'done' && dep.stale !== true && validDependency(task, dep) })
   const unfinishedItems = db.prepare("SELECT 1 FROM tasks WHERE json_extract(body,'$.parentTaskId')=? AND (json_extract(body,'$.status')!='done' OR json_extract(body,'$.stale')=1 OR json_type(body,'$.blocked')='object') LIMIT 1")
   const hasItems = db.prepare("SELECT 1 FROM tasks WHERE json_extract(body,'$.parentTaskId')=? LIMIT 1")
+  const mentionsItemId = (text, id) => {
+    let at = -1
+    while ((at = text.indexOf(id, at + 1)) >= 0) {
+      const before = text[at - 1], after = text[at + id.length]
+      if ((!before || !/[A-Za-z0-9_-]/.test(before)) && (!after || !/[A-Za-z0-9_-]/.test(after))) return true
+    }
+    const numbered = /^(.*?)(\d+)$/.exec(id)
+    if (!numbered) return false
+    const [, prefix, suffix] = numbered
+    at = -1
+    while ((at = text.indexOf(prefix, at + 1)) >= 0) {
+      const before = text[at - 1]
+      if (before && /[A-Za-z0-9_-]/.test(before)) continue
+      const shorthand = /^(\d+(?:\/\d+)+)/.exec(text.slice(at + prefix.length))?.[1]
+      if (shorthand?.split('/').includes(suffix)) return true
+    }
+    return false
+  }
+  const blockedItemIds = parent => {
+    if (!parent?.blocked) return []
+    if (Array.isArray(parent.blocked.itemTaskIds)) return parent.blocked.itemTaskIds
+    const text = [parent.blocked.reason, parent.blocked.condition].filter(value => typeof value === 'string').join('\n')
+    if (!text) return []
+    return getAll().filter(task => task.parentTaskId === parent.id && mentionsItemId(text, task.id)).map(task => task.id)
+  }
   // A parent is blocked automatically when one of its accepted items regresses.
   // Re-check that machine-managed block whenever the parent or any item changes:
   // once every item is done again, reopen the parent for independent review
@@ -470,13 +497,30 @@ const releaseIsDone = release => {
   const itemContextOpen = task => {
     if (!task.parentTaskId) return true
     const parent = getTask(task.parentTaskId)
-    return parentOpen(parent) && (!parent.releaseId || getRelease(parent.releaseId)?.status === 'running')
+    const parentCanRunItem = !!parent && !parent.archivedAt && !parent.stale && !['reported','done','cancelled'].includes(parent.status)
+      && (!parent.blocked || blockedItemIds(parent).includes(task.id))
+    return parentCanRunItem && (!parent.releaseId || getRelease(parent.releaseId)?.status === 'running')
   }
   const ready = task => {
     if (isManualBoardTask(task) || task.archivedAt || task.status !== 'waiting' || task.blocked || task.stale || !dependenciesDone(task)) return task
     const next = { ...task, revision: task.revision + 1, actionRevision: task.revision + 1, status: 'ready' }; save(task, next); action(next, 'execute', next.owner); return next
   }
   const unresolved = id => db.prepare("SELECT 1 FROM actions WHERE task_id=? AND state IN ('claimed','accepted','uncertain') LIMIT 1").get(id)
+  const unblockParentAfterItems = task => {
+    if (!task.parentTaskId || task.status !== 'done' || task.stale || task.blocked) return
+    const parent = getTask(task.parentTaskId)
+    if (!parent?.blocked || parent.stale) return
+    const itemIds = blockedItemIds(parent)
+    if (!itemIds.includes(task.id) || itemIds.length === 0) return
+    if (itemIds.some(id => {
+      const item = getTask(id)
+      return !item || item.parentTaskId !== parent.id || item.status !== 'done' || item.stale || item.blocked
+    })) return
+    const next = { ...parent, revision:parent.revision + 1 }
+    delete next.blocked
+    save(parent, next)
+    ready(next)
+  }
   const finishAction = (id, kind) => {
     const changes = db.prepare("UPDATE actions SET state='done' WHERE task_id=? AND kind=? AND state='accepted'").run(id, kind).changes
     if (changes !== 1) throw new Error('verified action receipt required')
@@ -1277,10 +1321,22 @@ const releaseIsDone = release => {
               const acceptedExecution = old.status === 'working' && actor === old.owner ? actionId(old.id, old.actionRevision, 'execute') : ''
               if (db.prepare("SELECT 1 FROM actions WHERE task_id=? AND state IN ('claimed','accepted','uncertain') AND NOT (id=? AND state='accepted') LIMIT 1").get(old.id, acceptedExecution)) throw new Error('action outcome unresolved')
             }
-            keysOnly(value, ['reason','condition','owner'])
+            keysOnly(value, ['reason','condition','owner','itemTaskIds'])
             db.prepare("UPDATE actions SET state='cancelled' WHERE task_id=? AND state='pending'").run(old.id)
             if (old.status === 'ready') next.status = 'waiting'
             next.blocked = { reason: string(value?.reason, 'reason'), condition: string(value?.condition, 'condition'), owner: requireId(value?.owner, 'block owner') }
+            if (value.itemTaskIds !== undefined) {
+              if (!Array.isArray(value.itemTaskIds) || !value.itemTaskIds.length || value.itemTaskIds.length > 100
+                || new Set(value.itemTaskIds).size !== value.itemTaskIds.length) throw new Error('invalid blocked items')
+              for (const id of value.itemTaskIds) {
+                requireId(id, 'blocked item id')
+                if (getTask(id)?.parentTaskId !== old.id) throw new Error('invalid blocked items')
+              }
+              next.blocked.itemTaskIds = [...value.itemTaskIds]
+            } else {
+              const referencedItems = blockedItemIds({ ...old, blocked:next.blocked })
+              if (referencedItems.length) next.blocked.itemTaskIds = referencedItems
+            }
             if (stable(old.blocked ?? null) === stable(next.blocked)) return old
             reply = { text:next.blocked.reason, condition:next.blocked.condition, blockOwner:next.blocked.owner }; break
           case 'unblock':
@@ -1385,6 +1441,7 @@ const releaseIsDone = release => {
         if (type === 'register' || type === 'schedule' || type === 'review' && value.result === 'rework' || type === 'unblock' || type === 'dependencies') next = ready(next)
         if (type === 'unblock' && next.status === 'reported') action(next, 'review', next.reviewer)
         if (type === 'review' && value.result === 'pass') for (const id of dependents(taskId)) { const task = getTask(id); if (task) ready(task) }
+        unblockParentAfterItems(next)
         if (next.status === 'done' && next.releaseId) reconcileRelease(next.releaseId)
         if (type === 'invalidate') {
           db.prepare("UPDATE actions SET state='cancelled' WHERE task_id=? AND state='pending'").run(taskId)

@@ -10,6 +10,7 @@ import { fakeContext } from './fake-ctx.js'
 import { ROOM_WORK_GRACE_MS } from '../src/host/constants.js'
 import { GOAL_REVIEW_INTERVAL_MS } from '../src/host/goals.js'
 import { inspectionMessageHash } from '../src/host/inspection-terminal.mjs'
+import { mentionsIn } from '../src/host/groups.js'
 import { privateTempDir } from './private-temp.mjs'
 
 const passiveScheduleNotice = {
@@ -167,8 +168,8 @@ const startGoal = (host, extra = {}) => host.tool('group_goal', {
   action: 'start', title: 'Ship it', objective: 'Ship the thing', acceptance: 'it is shipped', stages: STAGES, ...extra,
 }, 'ga')
 
-async function parkForReview(host) {
-  await startGoal(host)
+async function parkForReview(host, stages = STAGES) {
+  await startGoal(host, { stages })
   await host.rt.goalDrive(host.rt.roomOf('r1'), { goalNudge: true, slots: [{ id: 'a', status: 'passed' }] })
   return host.rt.roomOf('r1').goal
 }
@@ -762,7 +763,7 @@ test('task progress does not postpone the review of every owner', async (t) => {
   const prompt = host.rt.goalBlock(room, host.rt.state.bots.a, { nudge: true })
   assert.match(prompt, /original cards, items, owners/)
   assert.match(prompt, /do not duplicate an outstanding or uncertain assignment/i)
-  assert.match(prompt, /assigned independent reviewer/)
+  assert.match(prompt, /specific person authorized to unblock or decide/)
 })
 
 test('a busy group skips this review period durably and admits the next idle occurrence', async (t) => {
@@ -1328,10 +1329,64 @@ test('a scheduled review sends one read-only follow-up for a held assignment', a
   }
   assert.ok(decisions('gb', 'group_goal', args).some(value => typeof value === 'string'))
   assert.ok(decisions('gb', 'group_goal', { action: 'show' }).every(value => value === undefined))
+  host.finish('ga', '[PASS]')
+  await settle(() => result() !== undefined)
   host.finish('gb', 'Received the original assignment. Waiting for the draft evidence.')
-  await settle(() => logLines(host).some(line => line.botId === 'b' && line.text?.includes('Received the original assignment')))
   assert.equal(task.status, initialStatus)
   assert.ok(host.rt.unreadOf('gb').some(item => item.exchangeId === 'original-assignment'))
+  await settle(() => host.agentOf('r1').calls.length > 0)
+  const replyPost = host.takePost()
+  assert.match(text(replyPost), /Status reply for [\s\S]*Self-report only; not acceptance/)
+  assert.deepEqual(replyPost.source.goalReceiptFollowup, { taskId:task.id, ownerName:'Writer' })
+  host.round('receipt-replies-wake-admin', replyPost)
+  await settle(() => host.agentOf('ga').calls.length === 2)
+  const adminReply = host.begin('ga')
+  assert.match(text(adminReply), /Status reply for [\s\S]*Self-report only; not acceptance/)
+  assert.match(text(adminReply), /@Chief Review this self-report/)
+  assert.match(text(adminReply), /Do not reply \[PASS\].*take one concrete next step now/s)
+  host.finish('ga', `@Writer Task ${task.id}: attach the missing draft evidence and name the acceptance check it proves by the next review.`)
+  await settle(() => host.agentOf('gb').calls.length === 2)
+  const ownerFollowup = host.agentOf('gb').calls.at(-1)
+  assert.match(text(ownerFollowup), new RegExp(`Task ${task.id}`))
+  assert.ok(logLines(host).some(line => line.text?.startsWith(`@Writer Task ${task.id}: attach the missing draft evidence`)))
+  assert.ok(mentionsIn(`@Writer Task ${task.id}: attach the missing draft evidence`, host.rt.roomOf('r1').members.map(id => host.rt.state.bots[id])).found.some(bot => bot.name === 'Writer'))
+})
+
+test('one scheduled inspection can follow multiple independent task owners', async t => {
+  const host = await start(t)
+  const g = await parkForReview(host, [{
+    title:'Draft', acceptance:'the draft and its checks are ready',
+    tasks:[{ bot:'Writer', task:'write the draft' }, { bot:'Tester', task:'check the draft' }],
+  }])
+  const resolve = host.ctx.sessionController.resolveAgent
+  host.ctx.sessionController.resolveAgent = async id => {
+    if (id === 'gb' || id === 'gc') throw new Error('unresolved original delivery')
+    return resolve(id)
+  }
+  for (const [botId, sessionId] of [['b','gb'], ['c','gc']]) {
+    await assert.rejects(host.rt.deliver({ toId:botId, sessionId, role:'room', roomId:'r1', text:'original work' }))
+  }
+  host.ctx.sessionController.resolveAgent = resolve
+  await host.rt.testScheduleOccurrence(g.reviewAt)
+  const post = host.takeGoal()
+  assert.equal(post.source.reviewInspect, true)
+  host.agentOf('r1').inbox.nextTurn.length = 0
+  const result = host.round('multi-owner-follow-up', post)
+  await settle(() => host.agentOf('ga').calls.length === 1)
+  host.begin('ga')
+
+  const [writer, tester] = g.stages[0].tasks
+  const followUp = task => host.tool('group_goal', { ...reviewArgs(task), action:'review-follow-up' }, 'ga')
+  assert.match(await followUp(writer), /@Writer/)
+  assert.match(await followUp(tester), /@Tester/)
+  assert.match(await followUp(writer), /response due/)
+  assert.equal(host.agentOf('gb').calls.length, 1)
+  assert.equal(host.agentOf('gc').calls.length, 1)
+
+  const members = host.rt.roomOf('r1').members.map(id => host.rt.state.bots[id]).filter(Boolean)
+  const questions = logLines(host).filter(line => line.text?.startsWith('@Writer Task ') || line.text?.startsWith('@Tester Task '))
+  assert.equal(questions.length, 2)
+  assert.deepEqual(questions.map(line => mentionsIn(line.text, members).found.map(bot => bot.name)), [['Writer'], ['Tester']])
   host.finish('ga', '[PASS]')
   await settle(() => result() !== undefined)
 })
@@ -2925,7 +2980,7 @@ test('read-only review asks for show and does not count silent pass as successfu
   assert.match(text(input), /plain-text @Name/)
   assert.match(text(input), /receipt\/status or exact missing-evidence question/)
   assert.match(text(input), /response deadline/)
-  assert.match(text(input), /status-only group reply with plain-text @Name/)
+  assert.match(text(input), /status-only group reply with one exact plain-text @Name/)
   assert.match(text(input), /explicitly say not to repeat the work/)
   assert.match(text(input), /[Dd]o not leave the group with only “waiting”/)
   assert.match(text(input), /Only after successfully reading the current goal may you reply \[PASS\]/)
