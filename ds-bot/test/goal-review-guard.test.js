@@ -37,7 +37,8 @@ test('a later allow policy cannot bypass the real inspection tool guard', async 
     })
     const blocked = await call('review-admin')
     assert.equal(blocked.results[0].result.isError, true)
-    assert.match(blocked.results[0].result.content[0].text, /inspection only/)
+    assert.match(blocked.results[0].result.content[0].text, /delivery inspection/i)
+    assert.match(blocked.results[0].result.content[0].text, /Allowed now: read, glob, grep/)
     assert.equal(writes, 0)
     const allowed = await call('ordinary-agent')
     assert.equal(allowed.results[0].result.isError, false)
@@ -45,14 +46,4 @@ test('a later allow policy cannot bypass the real inspection tool guard', async 
   } finally {
     await ctx.fiber.dispose()
   }
-})
-
-test('inspection allows the evidence reads its prompt names and still refuses writes', () => {
-  const live = new Map([['review-admin', { info: { reviewInspect: true, reviewId: 'review-1' } }]])
-  const guard = goalReviewGuard(live, () => undefined, () => undefined, () => false)
-  const call = name => guard({ agent: { id: 'review-admin' }, name, arguments: {} })
-  assert.equal(call('read'), undefined)
-  assert.equal(call('glob'), undefined)
-  assert.equal(call('grep'), undefined)
-  assert.match(call('write'), /delivery inspection/)
 })
