@@ -1,4 +1,5 @@
 import { installProjectCoordination, projectRolesChanged } from './project-coordination.mjs'
+import { verifyGitEvidence } from './evidence-verify.mjs'
 import { isManualBoardTask } from './board-intake.mjs'
 import { legacyGoalCards } from './legacy-goal.js'
 import { mkdirSync, lstatSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
@@ -296,7 +297,8 @@ export function install(rt) {
     return detail.join('\n')
   }
   const botWorkflowEvidence = (task, value, actor, phase) => currentBinding(task) && goalAllows(task, actor)
-    && (phase === 'report' ? actor === task.owner && taskParticipant(task, actor) && value?.kind === 'personal'
+    && (phase === 'report' ? actor === task.owner && taskParticipant(task, actor)
+      && (value?.kind === 'personal' || (value?.kind === 'git' && verifyGitEvidence(rt.config?.evidenceRepo, value)))
       : (phase === 'review' || phase === 'revalidate') && actor === task.reviewer && actor !== task.owner
         && (actor === 'user' || taskParticipant(task, actor)) && value?.kind !== 'git')
   const botWorkflow = installHostWorkflow(rt, {
