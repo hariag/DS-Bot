@@ -655,15 +655,5 @@ export function install(rt) {
 
   // A request DS Bot makes of a local agent CLI outside the model stream.
   const recordUsage = entry => record(entry)
-  // The usage view used to be the only caller of scan(), so the ledger lagged
-  // until somebody opened it. Fold new Session events on a timer as well, so the
-  // token record stays current for audits without waiting for a page visit. Five
-  // minutes: a one-minute pass over every cold Session is enough to push a 4 GB
-  // heap into OOM on a large team.
-  ctx.effect(() => {
-    const timer = setInterval(() => { void scan().catch(error => rt.warn('ds-bot: usage scan failed: %s', error)) }, 300_000)
-    timer.unref?.()
-    return () => clearInterval(timer)
-  }, 'ds-bot: usage scan')
   Object.assign(rt, { usageView, tagUsage, carryUsageTag, ownRequest, recordUsage })
 }
