@@ -78,6 +78,13 @@ const reviewMissing = (goal, checkCurrent = () => false) => {
 }
 // The reconciliation horizon for existing review receipts. Native schedules own new occurrences.
 export const GOAL_REVIEW_INTERVAL_MS = 30 * 60 * 1000
+// A resolution or a skip stores the next review time, but the native room timer
+// keeps ticking every ten minutes. Without this gate every tick opened a review,
+// so an unchanged goal cost a full administrator turn three times an hour.
+export function reviewIsDue(goal, now = Date.now()) {
+  const due = [goal?.reviewAt, goal?.ownerReviewAt].filter(value => Number.isFinite(value))
+  return due.length === 0 || now >= Math.min(...due)
+}
 const AUTO_IDLE_REASONS = new Set(['admin-pass', 'nudge-limit'])
 
 function automaticIdle(goal) {
@@ -1644,6 +1651,9 @@ export function install(rt) {
       }
       if (goal.status === 'complete') return await result('completed')
       if (!reviewEligible(goal)) return await result('paused')
+      // The room timer is a ten-minute heartbeat, not a review schedule: keep the
+      // heartbeat but open a review only when the goal's next review time has come.
+      if (!goal.reviewAttempt && !reviewIsDue(goal, now)) return await result('fresh')
       const admin = rt.botOf(room.admin)
       if (!admin) return await result('invalid')
       const id = randomUUID()
