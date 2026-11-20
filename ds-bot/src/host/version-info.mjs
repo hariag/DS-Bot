@@ -20,17 +20,6 @@ function readManifest() {
   return manifest
 }
 
-function runtimeInfo() {
-  const bin = process.argv[1] ?? ''
-  const match = /[\\/]dsh-runtime[\\/]([^\\/]+)[\\/]/.exec(bin)
-  return {
-    runtime: match?.[1] ?? null,
-    node: process.version,
-    pid: process.pid,
-    uptimeSeconds: Math.round(process.uptime()),
-  }
-}
-
 export function versionInfo(state, home) {
-  return { ...readManifest(), ...runtimeInfo(), stateRevision: state?.revision, home, readAt: new Date().toISOString() }
+  return { ...readManifest(), stateRevision: state?.revision, home, readAt: new Date().toISOString() }
 }
