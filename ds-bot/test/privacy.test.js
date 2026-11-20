@@ -150,6 +150,10 @@ test('board guard allows the ordinary workspace and rejects explicit board alias
   assert.deepEqual(await run('bash', { command: 'cd child && cd grand && cat ./ordinary.txt', workdir: team }, 'b'), { ran: true })
   assert.deepEqual(await run('bash', { command: `echo ${Array(300).fill('ordinary').join(' ')}`, workdir: team }, 'b'), { ran: true })
   assert.deepEqual(await run('bash', { command: "cat <<'EOF'\nIt's a normal note.\nEOF", workdir: team }, 'b'), { ran: true })
+  // A lone / in here-document data is not access to the board. Real commands wrote
+  // report tables like "200 / 1,499,007 B" and were refused as board reads.
+  assert.deepEqual(await run('bash', { command: "cat <<'EOF'\nentry: 200 / 1,499,007 B\ndisk /: 355,862,488 used\nEOF", workdir: team }, 'b'), { ran: true })
+  assert.deepEqual(await run('bash', { command: "echo '200 / 421 B'", workdir: team }, 'b'), { ran: true })
   const tooComplex = await run('bash', { command: `cd child && cd grand && echo ${Array(3000).fill('ordinary').join(' ')}`, workdir: team }, 'b')
   assert.equal(tooComplex.ran, false)
   assert.match(tooComplex.error, /split it into smaller calls/)
