@@ -124,11 +124,13 @@ async function main() {
     const edited = await api('board-command', { scope, operationId:'lifecycle-board-edit', taskId:design.id, expectedRevision:design.revision,
       type:'card-details', value:{ description:'Board edit sync check: the release group must see this change.' } })
     if (edited.description !== 'Board edit sync check: the release group must see this change.') fail('board edit did not persist')
-    await sleep(1200)
-    const rows = await api('group-search', { roomId:release.groupId, query:'Board change' })
-    const rowText = JSON.stringify(rows)
-    if (!/Board change|Board edit sync check/.test(rowText)) fail('board edit was not synchronized to the release group', { rows:rowText.slice(0, 1500) })
-    log('sync: board edit reached the release group')
+    // The host posts the board change in the background; a loaded machine may need longer
+    // than one poll interval, so wait for the group message instead of sleeping once.
+    const rows = await waitFor('the release group to receive the board change', async () => {
+      const found = await api('group-search', { roomId:release.groupId, query:'Board change' })
+      return /Board change|Board edit sync check/.test(JSON.stringify(found)) ? found : undefined
+    }, 20_000)
+    log('sync: board edit reached the release group (' + JSON.stringify(rows).length + ' bytes)')
 
     const started = await api('board-release-start', { scope, operationId:'lifecycle-start', releaseId:release.id, expectedRevision:release.revision })
     if (started.status !== 'running') fail('release did not start', { started })

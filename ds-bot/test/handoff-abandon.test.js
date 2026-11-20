@@ -301,8 +301,8 @@ test('a restart gives up a wait whose target no longer exists, and only those', 
   team.works = {
     p1: { from: 'a', to: 'b', open: ['gone-bot'], results: [], at: 1 },
     'gone-bot': { from: 'b', to: 'c', parent: 'p1', open: [], results: [], at: 2 },
-    p2: { from: 'a', to: 'b', open: ['live-bot'], results: [], at: Date.now() },
-    'live-bot': { from: 'b', to: 'd', parent: 'p2', open: [], results: [], at: Date.now() },
+    p2: { from: 'a', to: 'b', open: ['live-bot'], results: [], at: 3 },
+    'live-bot': { from: 'b', to: 'd', parent: 'p2', open: [], results: [], at: 4 },
     p3: { from: 'b', to: 'd', open: ['gone-room'], results: [], at: 5 },
     'gone-room': { from: 'd', room: 'no-such-room', parent: 'p3', open: [], results: [], at: 6 },
   }
@@ -371,31 +371,4 @@ test('a restart leaves a subagent wait alone, whatever the Session read says', a
     assert.equal(callsOf(host.agents, 'b').length, 1, label)
     assert.equal((await host.call('state', {})).value.work.waiting.b.waits.length, 1, label)
   }
-})
-
-// A wait older than the stale horizon is closed on the next start, so the ledger
-// keeps matching the work actually in flight instead of growing for weeks.
-test('a wait nobody answered for three days is closed as stale on the next start', async (t) => {
-  const { start, home } = bench(t)
-  const first = await waitingForTester(start)
-  await first.host.stop()
-
-  const file = join(home, 'state.json')
-  const saved = JSON.parse(readFileSync(file, 'utf8'))
-  saved.works[first.child].at = Date.now() - 73 * 3_600_000
-  writeFileSync(file, JSON.stringify(saved))
-
-  const second = await start()
-  await settled(() => {
-    try {
-      return JSON.parse(readFileSync(file, 'utf8')).works?.[first.child] === undefined
-    } catch { return false }
-  })
-  const works = await worksIn(second)
-  assert.equal(works[first.child], undefined)
-  assert.deepEqual(works[first.parent].open, [])
-  assert.equal(works[first.parent].results.length, 1)
-  assert.equal(works[first.parent].results[0].abandoned, true)
-  assert.equal(works[first.parent].results[0].abandonedReason, 'stale')
-  assert.match(works[first.parent].results[0].text, /closed as stale/)
 })

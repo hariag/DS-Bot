@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { legacyGoalCards } from '../../src/host/legacy-goal.js'
+import { currentGoalBoardTaskId, legacyGoalCards } from '../../src/host/legacy-goal.js'
 
 const goal = { id: 'goal1', status: 'active', current: 0, revision: 3, stages: [{ id: 's1', title: 'Repair', acceptance: 'Evidence required', tasks: [
   { id: 't1', botId: 'one', status: 'reported', task: 'Review' },
@@ -40,4 +40,33 @@ test('the original task ID survives text edits but changes with goal, stage or t
     const changed=legacyGoalCards({scope:{kind:'room',id:'first'},principal:user,rooms:{first:{members:['one'],goal:copy}},bots})[0]
     assert.notEqual(changed.id,before.id)
   }
+})
+
+test('a current goal locator is omitted for ambiguous originals and invalid board overlays', () => {
+  for (const conflict of ['goal', 'stage', 'task', 'overlay']) {
+    const room = {id:'first', members:['one', 'two'], goal:structuredClone(goal)}
+    const stage = room.goal.stages[0], task = stage.tasks[0]
+    const locator = () => currentGoalBoardTaskId(room, room.goal, stage, task)
+    const project = () => legacyGoalCards({scope:{kind:'room', id:room.id}, principal:user, rooms:{first:room}, bots})
+    const id = locator()
+    assert.equal(id, project()[0].id)
+    if (conflict === 'goal') room.pastGoals = [structuredClone(room.goal)]
+    if (conflict === 'stage') room.goal.stages.push(structuredClone(stage))
+    if (conflict === 'task') stage.tasks.push({...task})
+    if (conflict === 'overlay') room.goal.boardCards = {[id]: {roomId:'unrelated'}}
+    assert.equal(locator(), undefined, conflict)
+    assert.ok(project().every(card => card.id !== id), conflict)
+  }
+})
+
+test('the original goal item can still be located after a stage transition', () => {
+  const room = { id:'first', members:['one', 'two'], goal:structuredClone(goal) }
+  const stage = room.goal.stages[0], task = stage.tasks[0]
+  const first = currentGoalBoardTaskId(room, room.goal, stage, task)
+  room.goal.stages.push({id:'s2', tasks:[]})
+  room.goal.current = 1
+  assert.equal(currentGoalBoardTaskId(room, room.goal, stage, task), first)
+  assert.equal(currentGoalBoardTaskId(room, room.goal, stage, {...task}), undefined)
+  const cards = legacyGoalCards({scope:{kind:'room', id:room.id}, principal:user, rooms:{first:room}, bots})
+  assert.equal(cards.find(card => card.id === first)?.legacy.current, false)
 })

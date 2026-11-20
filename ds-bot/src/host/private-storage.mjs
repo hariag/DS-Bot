@@ -20,6 +20,41 @@ const WINDOWS_ACL_CHECK = [
   'exit 0',
 ].join('\n')
 
+const WINDOWS_ACL_CACHE_LIMIT = 4096
+const windowsAclCache = new Map()
+
+// Node does not expose Windows DACLs in stat mode bits. A positive result can be
+// reused for the same file identity: only its owner, SYSTEM or an administrator
+// can change that DACL, and those are the identities the check already trusts.
+// Negative results are never cached; external callback boundaries clear the cache.
+function windowsAclCacheKey(path) {
+  try {
+    const stat = lstatSync(path, { bigint: true })
+    if (stat.ino === 0n) return undefined
+    return `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`
+  } catch {
+    return undefined
+  }
+}
+
+function rememberPrivateWindowsAcl(key) {
+  windowsAclCache.delete(key)
+  windowsAclCache.set(key, true)
+  if (windowsAclCache.size > WINDOWS_ACL_CACHE_LIMIT) windowsAclCache.delete(windowsAclCache.keys().next().value)
+}
+
+function windowsAclIsPrivateForIdentity(path) {
+  const key = windowsAclCacheKey(path)
+  if (key && windowsAclCache.has(key)) {
+    windowsAclCache.delete(key)
+    windowsAclCache.set(key, true)
+    return true
+  }
+  const valid = windowsAclIsPrivate(path)
+  if (valid && key) rememberPrivateWindowsAcl(key)
+  return valid
+}
+
 function windowsAclIsPrivate(path) {
   const systemRoot = process.env.SystemRoot
   if (typeof systemRoot !== 'string' || !systemRoot) return false
@@ -28,7 +63,11 @@ function windowsAclIsPrivate(path) {
     encoding: 'utf8', timeout: 5_000, maxBuffer: 32 * 1024, windowsHide: true,
     env: { ...process.env, DSBOT_PRIVATE_PATH: path },
   })
-  return result.error === undefined && result.status === 0
+  const valid = result.error === undefined && result.status === 0
+  if (!valid && process.env.DSBOT_TEST_PRIVATE_ACL_DIAGNOSTICS === '1') {
+    process.stderr.write(`[ds-bot test] Windows ACL check ${JSON.stringify({ path, status:result.status, signal:result.signal, error:result.error?.message, stderr:result.stderr?.trim(), stdout:result.stdout?.trim() })}\n`)
+  }
+  return valid
 }
 
 const sameIdentity = (left, right) => left.dev === right.dev && left.ino === right.ino
@@ -39,13 +78,26 @@ export function isPrivatePath(path, stat, kind, { platform = process.platform, u
   const absolute = platform === 'win32' ? win32.isAbsolute(path) : isAbsolute(path)
   if (!absolute || stat.isSymbolicLink?.() === true || (kind === 'file' ? !stat.isFile() : !stat.isDirectory())) return false
   if (platform !== 'win32') return uid !== undefined && stat.uid === uid && (stat.mode & 0o077) === 0
-  if (checkWindowsAcl(path) !== true) return false
+  const aclIsPrivate = checkWindowsAcl === windowsAclIsPrivate
+    ? windowsAclIsPrivateForIdentity(path, stat)
+    : checkWindowsAcl(path)
+  if (aclIsPrivate !== true) return false
   try {
     const after = inspectPath(path)
     return !after.isSymbolicLink() && (kind === 'file' ? after.isFile() : after.isDirectory()) && sameIdentity(stat, after)
   } catch {
     return false
   }
+}
+
+// Use after an intentional ACL change or an external callback so the next verification reads the DACL again.
+export function invalidateWindowsAclCache(path) {
+  if (path === undefined) {
+    windowsAclCache.clear()
+    return
+  }
+  const key = windowsAclCacheKey(path)
+  if (key) windowsAclCache.delete(key)
 }
 
 export const isPrivateDirectory = (path, stat = lstatSync(path), options) => isPrivatePath(path, stat, 'directory', options)

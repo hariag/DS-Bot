@@ -40,18 +40,17 @@ async function start(){
 }
 async function stop(){if(!host)return;const proc=host;host=undefined;if(proc.exitCode!==null)return;proc.kill('SIGTERM');await Promise.race([new Promise(resolve=>proc.once('exit',resolve)),sleep(5000)]);if(proc.exitCode===null)proc.kill('SIGKILL')}
 async function board(page){return page.evaluate(()=>fetch('/api/bot',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({endpoint:'board-list',payload:{scope:{kind:'personal',id:'user'}}})}).then(r=>r.json()))}
+async function waitBoard(page,predicate,timeout){const deadline=Date.now()+timeout;let result;while(Date.now()<deadline){result=await board(page);if(result.ok&&predicate(result.value.remoteChanges))return result;await sleep(250)}throw new Error(`board fixture timed out: ${JSON.stringify(result?.value?.remoteChanges)}`)}
 try {
   let url=await start()
   browser=await chromium.launch({headless:true,...(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{}),args:['--no-sandbox','--disable-background-networking']})
   let page=await browser.newPage()
   await page.route('**/*',route=>{const u=new URL(route.request().url());return u.hostname==='127.0.0.1'||u.hostname==='localhost'?route.continue():route.abort()})
   await page.goto(url)
-  await page.waitForFunction(async()=>{try{const r=await fetch('/api/bot',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({endpoint:'board-list',payload:{scope:{kind:'personal',id:'user'}}})}).then(r=>r.json());return r.ok&&r.value.remoteChanges?.status==='ok'}catch{return false}},null,{timeout:45_000})
-  let result=await board(page);assert.equal(result.value.remoteChanges.events.length,1);assert.equal(result.value.remoteChanges.events[0].sha,c)
+  let result=await waitBoard(page,watch=>watch?.status==='ok',45_000);console.log('fixture watch:',JSON.stringify(result.value.remoteChanges));assert.equal(result.value.remoteChanges.events.length,1);assert.equal(result.value.remoteChanges.events[0].sha,c)
   await stop();await page.close()
   url=await start();page=await browser.newPage();await page.route('**/*',route=>{const u=new URL(route.request().url());return u.hostname==='127.0.0.1'||u.hostname==='localhost'?route.continue():route.abort()});await page.goto(url)
-  await page.waitForFunction(async()=>{try{const r=await fetch('/api/bot',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({endpoint:'board-list',payload:{scope:{kind:'personal',id:'user'}}})}).then(r=>r.json());return r.ok&&r.value.remoteChanges?.events?.length===1}catch{return false}},null,{timeout:30_000})
-  result=await board(page);assert.equal(result.value.remoteChanges.events[0].sha,c)
+  result=await waitBoard(page,watch=>watch?.events?.length===1,30_000);assert.equal(result.value.remoteChanges.events[0].sha,c)
   const revoke=await page.evaluate(()=>fetch('/api/bot',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({endpoint:'secret-set',payload:{name:'GITHUB_TOKEN',value:'isolated-test-token',scope:[]}})}).then(r=>r.json()))
   assert.equal(revoke.ok,true)
   result=await board(page);assert.equal(result.value.remoteChanges.status,'authorization unavailable');assert.equal(result.value.remoteChanges.events.length,0)

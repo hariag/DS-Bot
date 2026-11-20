@@ -33,7 +33,7 @@ const shim = {
   setup(b) {
     b.onResolve({ filter: /^(react|react-dom|\.\/api\.js|\.\/i18n\.js)$/ }, x => ({ path: x.path, namespace: 'fixture' }))
     b.onLoad({ filter: /.*/, namespace: 'fixture' }, x => {
-      if (x.path === 'react') return { contents: 'export const {createElement,useEffect,useLayoutEffect,useRef,useState}=globalThis.React' }
+      if (x.path === 'react') return { contents: 'export const {createElement,useCallback,useEffect,useLayoutEffect,useRef,useState}=globalThis.React' }
       if (x.path === 'react-dom') return { contents: 'export const {createPortal,flushSync}=globalThis.ReactDOM' }
       if (x.path.endsWith('i18n.js')) return { contents: 'export const hostText=x=>x;export const dateLocale=()=>"en-US";export const t=(x,v={})=>x.replace(/\\{(\\w+)\\}/g,(_,k)=>String(v[k]??""))' }
       return { contents: 'export const call=()=>{throw Error("request injection required")}' }
@@ -57,10 +57,26 @@ const images={png:{mediaType:'image/png',data:canvas.toDataURL('image/png').spli
 state.images=images;
 function record(scope){const status=state.mode==='schedule'?(state.boardStatus??'proposed'):state.mode==='manual'?'proposed':'reported';const card=state.card;return {id:'T1',title:state.boardTitles[scope.kind+':'+scope.id]??(scope.id==='g1'?'Group task':'Personal task'),description:card.description||'',labels:card.labels,checklist:card.checklist,dueDate:card.dueDate||'',dueComplete:card.dueComplete===true,...(card.coverImageId?{coverImageId:card.coverImageId}:{}),comments:card.comments,owner:state.mode==='manual'?'user':'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:state.revision,status,...(state.mode==='schedule'&&status==='ready'?{dispatchState:'accepted'}:{}),...(state.mode==='manual'?{personalProgress:state.progress??'todo'}:{}),shares:state.shares,images:state.gallery}}
 globalThis.resetBoardState=()=>{state.calls=[];state.revision=1;state.progress='todo';state.boardStatus='proposed';state.card={description:'',labels:[],checklist:[],dueDate:'',dueComplete:false,comments:[],coverImageId:null};state.shares=[{id:'grant-old',targetRoomId:'g2',fields:['status']}];state.gallery=[{id:'png',name:'existing.png',mediaType:'image/png'},{id:'jpeg',name:'existing.jpg',mediaType:'image/jpeg'},{id:'bad',name:'broken.png',mediaType:'image/gif'}];state.created=[];state.commentSeq=0}
-function phase2Commands(task){const commands=[...(task.fixtureCommands??[]),{type:'edit'},{type:'card-details'},{type:'reorder'},{type:'card-comment'}];if(task.status==='draft')commands.push({type:'submit'},{type:'cancel'});else if(task.status==='cancelled')commands.push({type:'restore'});else commands.push({type:'cancel'});if(task.archivedAt)commands.push({type:'unarchive'});else commands.push({type:'archive'});if(!['done','cancelled'].includes(task.status)&&(state.releases??[]).some(release=>['draft','queued'].includes(release.status)))commands.push({type:'release-assign'});return commands}
+function phase2Commands(task){const commands=[...(task.fixtureCommands??[]),{type:'edit'},{type:'card-details'},{type:'reorder'},{type:'card-comment'}];if(task.status==='draft'){if(!(task.parentTaskId&&!task.owner&&!task.reviewer))commands.push({type:'submit'});commands.push({type:'cancel'})}else if(task.status==='cancelled')commands.push({type:'restore'});else commands.push({type:'cancel'});if(task.archivedAt)commands.push({type:'unarchive'});else commands.push({type:'archive'});if(!['done','cancelled'].includes(task.status)&&(state.releases??[]).some(release=>['draft','queued'].includes(release.status)))commands.push({type:'release-assign'});return commands}
 globalThis.initPhase2=()=>{state.phase2Tasks=[{id:'T1',title:'Phase task',type:'feature',owner:'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:1,status:'proposed',comments:[]}];state.releases=[{id:'rel-1',name:'Release one',version:'1.0',status:'draft',revision:1,position:0},{id:'rel-2',name:'Release two',version:'2.0',status:'queued',revision:1,position:1}];state.proposals=[{id:'p1',revision:1,kind:'update',status:'pending',taskId:'T1',taskTitle:'Phase task',proposer:'a',createdAt:1700000000000,note:'Confirm change',before:{title:'Phase task'},after:{title:'Phase task renamed'}}];state.calls=[];state.phase2Reject={id:'p2',revision:1,kind:'update',status:'pending',taskId:'T1',taskTitle:'Phase task',proposer:'b',createdAt:1700000001000,note:'Reject change',before:{type:'bugfix'},after:{type:'test'}}}
 async function request(endpoint,payload){
  state.calls.push({endpoint,payload});
+ if(endpoint==='board-project'){
+  const availableRooms=[{id:'g1',name:'Development'},{id:'g2',name:'UX'}];
+  return structuredClone({project:state.project??null,availableRooms,events:state.projectEvents??[],receipt:state.projectReceipt?.operationId===payload.operationId ? state.projectReceipt:null});
+ }
+ if(endpoint==='board-project-bind'){
+  state.project={id:payload.projectId,name:payload.name,revision:1,coordinatorRoomId:payload.scope.id,rooms:[{id:'g1',name:'Development'},{id:'g2',name:'UX'}]};
+  return {operationId:payload.operationId,revision:1,projectId:payload.projectId};
+ }
+ if(endpoint==='board-project-decide'){
+  if(state.project.revision!==payload.expectedRevision)throw Object.assign(Error('stale project revision'),{code:'bot/invalid'});
+  state.project.revision++;
+  state.projectReceipt={operationId:payload.operationId,revision:state.project.revision,projectId:state.project.id};
+  state.projectEvents=[{...payload,revision:state.project.revision,createdAt:1700000000000,actor:'user',originRoomId:payload.scope.id,audience:payload.roomIds,acknowledgements:[]}];
+  if(state.dropProjectReply){state.dropProjectReply=false;throw Error('response lost')}
+  return state.projectReceipt;
+ }
  if(endpoint==='board-list'){
   if(state.mode==='phase2'){
    const tasks=state.phase2Tasks.map(task=>({...task}));
@@ -153,6 +169,12 @@ async function request(endpoint,payload){
    if(type==='cancel')task.status='cancelled';
    if(type==='archive')task.archivedAt=1700000000000;
    if(type==='unarchive')delete task.archivedAt;
+   if(type==='edit'){
+    if('title' in value)task.title=value.title;
+    if('owner' in value)task.owner=value.owner;
+    if('reviewer' in value)task.reviewer=value.reviewer;
+    if('acceptance' in value)task.acceptance=value.acceptance;
+   }
    task.revision++;
    return {};
   }
@@ -275,6 +297,40 @@ async function runBrowserCases() {
   await page.addScriptTag({ path: reactDom })
   await page.addScriptTag({ content: bundle.outputFiles[0].text })
 
+  await page.evaluate(() => globalThis.renderFixture({kind:'room',id:'g1'}, 'normal', true))
+  await page.getByRole('button',{name:'Project coordination',exact:true}).click()
+  const coordination = page.getByRole('region',{name:'Project coordination'})
+  await coordination.getByRole('button',{name:'Link project groups'}).click()
+  await coordination.getByLabel('Project ID').fill('engineering')
+  await coordination.getByLabel('Name',{exact:true}).fill('Engineering')
+  await coordination.getByLabel('UX',{exact:true}).check()
+  await coordination.getByRole('button',{name:'Save',exact:true}).click()
+  await coordination.getByRole('button',{name:'Record a decision'}).click()
+  await coordination.getByLabel('Shared resource').fill('docs/tasks')
+  await coordination.getByLabel('Decision',{exact:true}).fill('Preserve earlier revisions')
+  await page.evaluate(() => { globalThis.fixture.project.revision++; globalThis.fixture.dropProjectReply=true })
+  await coordination.getByRole('button',{name:'Save',exact:true}).click()
+  await coordination.getByText('stale project revision').waitFor()
+  assert.equal(await coordination.getByRole('button',{name:'Save',exact:true}).isDisabled(),true)
+  await coordination.getByRole('button',{name:'Use reviewed revision 2'}).click()
+  await coordination.getByRole('button',{name:'Save',exact:true}).click()
+  await coordination.getByRole('button',{name:'Check action'}).click()
+  await coordination.getByRole('listitem').getByText(/Preserve earlier revisions/).waitFor()
+  assert.equal(await page.evaluate(()=>globalThis.fixture.calls.filter(c=>c.endpoint==='board-project-decide').length),2)
+  assert.equal(await coordination.getByRole('button',{name:'Check action'}).count(),0)
+  if (process.env.BOARD_PROJECT_SCREENSHOT) await coordination.screenshot({path:process.env.BOARD_PROJECT_SCREENSHOT})
+
+  await page.evaluate(() => {
+    globalThis.fixture.projectEvents[0].taskId='T1'
+    globalThis.renderFixture({kind:'room',id:'g2'},'normal',true)
+  })
+  await page.getByRole('button',{name:'Project coordination',exact:true}).click()
+  await coordination.getByText('Awaiting acknowledgement from Development · Awaiting acknowledgement from UX').waitFor()
+  await coordination.getByRole('listitem').getByRole('button').click()
+  await page.locator('.bt-card-dialog, .bt-card-modal').first().waitFor()
+  assert.equal(await page.evaluate(()=>globalThis.fixture.calls.filter(c=>c.endpoint==='board-list').at(-1).payload.scope.id),'g1','opens the original group board')
+
+  assert.deepEqual(errors,[])
   const openCardItems = async card => {
     const details = card.locator('.bt-board-items')
     await details.waitFor()
@@ -1636,6 +1692,29 @@ async function runBrowserCases() {
   await page.waitForFunction(()=>globalThis.fixture.calls.some(call=>call.endpoint==='board-command'&&call.payload.type==='unarchive'&&call.payload.taskId==='A1'))
   const bulkUnarchive=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-command'&&call.payload.type==='unarchive'))
   assert.equal(bulkUnarchive.payload.taskId,'A1','Archive view restores selected archived cards')
+
+  // An unassigned group task item can set its owner and reviewer inline, then
+  // submit it without hunting through More actions.
+  await page.evaluate(()=>{const s=globalThis.fixture;s.phase2Tasks=[
+    {id:'T1',title:'Assign parent',type:'feature',owner:'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:1,status:'proposed',comments:[]},
+    {id:'U1',title:'Unassigned item',type:'development',owner:null,reviewer:null,acceptance:'Item evidence',dependencies:[],revision:1,status:'draft',parentTaskId:'T1',comments:[]},
+  ];s.phase2Reject=undefined;s.calls=[];globalThis.renderFixture({kind:'room',id:'assign-item'},'phase2',true)})
+  const assignParent=page.locator('article[data-task-id="T1"]')
+  await assignParent.waitFor()
+  await openCardItems(assignParent)
+  await assignParent.locator('[data-item-id="U1"]').click()
+  const assignItem=page.getByRole('dialog',{name:'Unassigned item',exact:true})
+  await assignItem.getByText('This task item is unassigned. Choose an owner and an independent reviewer.').waitFor()
+  assert.equal(await assignItem.getByRole('button',{name:'Set owner and reviewer'}).isVisible(),true)
+  await assignItem.getByRole('button',{name:'Set owner and reviewer'}).click()
+  await assignItem.getByLabel('Owner').selectOption('a')
+  await assignItem.getByLabel('Independent reviewer').selectOption('b')
+  await assignItem.locator('form.bt-card-form').getByRole('button',{name:'Save',exact:true}).click()
+  await assignItem.locator('.bt-card-confirm').getByRole('button',{name:'Confirm',exact:true}).click()
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(call=>call.endpoint==='board-command'&&call.payload.type==='edit'&&call.payload.taskId==='U1'))
+  await assignItem.getByRole('button',{name:'Submit card'}).waitFor()
+  const assigned=await page.evaluate(()=>{const item=globalThis.fixture.phase2Tasks.find(task=>task.id==='U1');return {owner:item.owner,reviewer:item.reviewer}})
+  assert.deepEqual(assigned,{owner:'a',reviewer:'b'})
 
   assert.deepEqual(errors, [])
   console.log('PASS ' + assertions + ' assertions: board images, legacy cards, description/labels/due/checklist/comments, attachments and covers, quick add, personal progress, group scheduling, sharing, explicit cancellation, late response, reopen, scoped rendering and conflicts, task types, draft/cancelled, releases and proposals')

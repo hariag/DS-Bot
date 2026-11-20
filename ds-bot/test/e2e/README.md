@@ -1,8 +1,6 @@
 # Task-board end-to-end check
 
-`board.e2e.mjs` starts an isolated bench (mock model + `dsh web` with this checkout linked
-into a throwaway `DSH_HOME`), seeds two public Bots and a room through `POST /api/bot`, then
-drives the real Web UI with Playwright/Chrome.
+`board.e2e.mjs` starts an isolated bench (mock model + the npm-installed `dsh web` from `ds-bot/dev/harness`, with this checkout linked into a throwaway `DSH_HOME`), seeds two public Bots and a room through `POST /api/bot`, then drives the real Web UI with Playwright/Chrome. No DeepSeek Harness source checkout is needed; `npm run harness` installs the official packages.
 
 It deliberately ignores the ambient `DSH_HOME`: the bench home defaults to
 `<repo>/.dsh-test-board-e2e` and can be changed with `BOARD_E2E_HOME`. Never point it at

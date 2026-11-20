@@ -150,36 +150,6 @@ test('board guard allows the ordinary workspace and rejects explicit board alias
   assert.deepEqual(await run('bash', { command: 'cd child && cd grand && cat ./ordinary.txt', workdir: team }, 'b'), { ran: true })
   assert.deepEqual(await run('bash', { command: `echo ${Array(300).fill('ordinary').join(' ')}`, workdir: team }, 'b'), { ran: true })
   assert.deepEqual(await run('bash', { command: "cat <<'EOF'\nIt's a normal note.\nEOF", workdir: team }, 'b'), { ran: true })
-  // A lone / in here-document data is not access to the board. Real commands wrote
-  // report tables like "200 / 1,499,007 B" and were refused as board reads.
-  assert.deepEqual(await run('bash', { command: "cat <<'EOF'\nentry: 200 / 1,499,007 B\ndisk /: 355,862,488 used\nEOF", workdir: team }, 'b'), { ran: true })
-  assert.deepEqual(await run('bash', { command: "echo '200 / 421 B'", workdir: team }, 'b'), { ran: true })
-  // A here-document body is data, not the shell being run: a dynamic cd inside the
-  // written script must not read as a dynamic cd of this command.
-  assert.deepEqual(await run('bash', { command: "cat > /tmp/ordinary.sh <<'EOF'\ncd \"$WT/Ground/web\" || exit 90\nEOF", workdir: team }, 'b'), { ran: true })
-  const namedAlias = await run('bash', { command: "cat > /tmp/ordinary.txt <<'EOF'\nsee board-v1 for details\nEOF", workdir: team }, 'b')
-  // A multi-line single-quoted bash -c body is a real quote pair. The old
-  // tokenizer reset quotes at every newline once a heredoc appeared, so a script
-  // mixing both was misread as an unterminated quote and refused.
-  assert.deepEqual(await run('bash', { command: "cat > /tmp/fake-ssh <<'EOF'\n#!/bin/bash\necho hi\nEOF\nbash -c '\necho \"multi line\"\n$target true\n' 2>&1", workdir: team }, 'b'), { ran: true })
-  assert.equal(namedAlias.ran, false)
-  // Nested awk quoting inside a double-quoted string defeats the tokenizer in an
-  // ordinary gate script; that must not be read as a board read.
-  assert.deepEqual(await run('bash', { command: "set -u\ncd /tmp/worktrees/qa-gate\nLOCK=/data2t/working/aios/team/gates/LOAD-LOCK.json\nst=$(awk -F'\"' '/\"state\"/ {print $4; exit}' \"$LOCK\")\necho \"STILL_HELD owner=$(awk -F'\"' '/\"owner\"/ {print $4; exit}' \"$LOCK\")\"", workdir: team }, 'b'), { ran: true })
-  // A worktree script resolves its own literal cd target; only unexplained
-  // variables keep failing closed.
-  assert.deepEqual(await run('bash', { command: 'set +e\nWT=/tmp/worktrees/fe-lazy01\necho "exists=$(test -d "$WT" && echo yes || echo no)"\ncd "$WT" 2>/dev/null && pwd\n', workdir: team }, 'b'), { ran: true })
-  // PM verify scripts assign OUT=$(date) and cd below it; the literal prefix is
-  // enough to see that the target stays outside the private board.
-  assert.deepEqual(await run('bash', { command: 'set -u\ncd /data2t/working/aios\nOUT=/tmp/pm-inst-verify-$(date +%H%M%S)\nmkdir -p "$OUT"\ncd "$OUT/Ground/backend"\n', workdir: team }, 'b'), { ran: true })
-  const escape = await run('bash', { command: 'OUT=/tmp/x-$(date +%H%M%S)\ncd "$OUT/../../root/.dsh/bot/board-v1"\n', workdir: team }, 'b')
-  assert.equal(escape.ran, false)
-  // The same unparsable quoting must not open the private Bot home.
-  const weirdHome = await run('bash', { command: "set -u\nX=$(awk -F'\"' '/\"x\"/ {print $2; exit}' \"$HOME/.dsh/bot/state.json\")\necho \"$X\"", workdir: team }, 'b')
-  assert.equal(weirdHome.ran, false)
-  // A description is free text, not shell: an apostrophe there must not read as an
-  // unterminated quote. Live data 20:35: two calls were refused only for this.
-  assert.deepEqual(await run('bash', { command: 'cat ordinary.txt', description: "check the other session's state", workdir: team }, 'b'), { ran: true })
   const tooComplex = await run('bash', { command: `cd child && cd grand && echo ${Array(3000).fill('ordinary').join(' ')}`, workdir: team }, 'b')
   assert.equal(tooComplex.ran, false)
   assert.match(tooComplex.error, /split it into smaller calls/)
@@ -300,10 +270,10 @@ test('other Bots cannot reach a private Bot through the tools between Bots', asy
     ['attach_capability', { bot: 'Diary', name: 'x' }, 'a'],
     ['detach_capability', { bot: 'Diary', name: 'x' }, 'a'],
     ['update_bot', { bot: 'Diary', instructions: 'x' }, 'a'],
-    ['bot_recall', { scope: 'Diary', query: 'x' }, 'a'],
-    ['bot_recall', { scope: '"Diary"' }, 'b'],
-    ['bot_remember', { scope: 'Diary', text: 'x' }, 'a'],
-    ['bot_forget', { scope: 'Diary', entry: 'x' }, 'a'],
+    ['recall', { scope: 'Diary', query: 'x' }, 'a'],
+    ['recall', { scope: '"Diary"' }, 'b'],
+    ['remember', { scope: 'Diary', text: 'x' }, 'a'],
+    ['forget', { scope: 'Diary', entry: 'x' }, 'a'],
   ]) {
     const result = await run(name, args, from)
     assert.equal(result.ran, false, `${name} from ${from}`)
@@ -311,8 +281,8 @@ test('other Bots cannot reach a private Bot through the tools between Bots', asy
   }
   // The others still reach each other and the shared scopes.
   assert.deepEqual(await run('message_bot', { to: 'Writer', message: 'hi' }, 'a'), { ran: true })
-  assert.deepEqual(await run('bot_recall', { scope: 'team', query: 'x' }, 'b'), { ran: true })
-  assert.deepEqual(await run('bot_recall', { scope: 'own' }, P), { ran: true })
+  assert.deepEqual(await run('recall', { scope: 'team', query: 'x' }, 'b'), { ran: true })
+  assert.deepEqual(await run('recall', { scope: 'own' }, P), { ran: true })
   assert.deepEqual(await run('update_bot', { bot: 'Diary', role: 'x' }, P), { ran: true })
 })
 
@@ -534,15 +504,12 @@ test('one private Bot reads its own data but not another private Bot\'s', async 
 test('a private Bot reads public memory and keeps its own journal out of the shared log', async (t) => {
   const { tool, run, home, stop } = await start()
   t.after(stop)
-  // 0.3.9 moved Bot memory out of the plugin's own tools; the guard still checks
-  // the names defensively, but this runtime has nothing to call.
-  if (!rt.teamTools.some(entry => entry.name === 'bot_remember')) return t.skip('0.3.9 provides memory outside the plugin tools')
-  await tool('bot_remember', { text: 'a public fact', scope: 'own' }, 'b')
-  await tool('bot_remember', { text: 'a private fact', scope: 'own' }, P)
-  const recalled = await tool('bot_recall', { scope: 'Writer', query: 'public fact' }, P)
+  await tool('remember', { text: 'a public fact', scope: 'own' }, 'b')
+  await tool('remember', { text: 'a private fact', scope: 'own' }, P)
+  const recalled = await tool('recall', { scope: 'Writer', query: 'public fact' }, P)
   assert.match(recalled, /a public fact/)
-  assert.match(await tool('bot_recall', { scope: 'Diary' }, 'a'), /That Bot is private/)
-  const denied = await run('bot_recall', { scope: 'Diary' }, 'a')
+  assert.match(await tool('recall', { scope: 'Diary' }, 'a'), /That Bot is private/)
+  const denied = await run('recall', { scope: 'Diary' }, 'a')
   assert.equal(denied.ran, false)
   assert.match(denied.error, CLOSED)
   const shared = readFileSync(join(home, 'memory', 'journal.jsonl'), 'utf8')

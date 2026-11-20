@@ -152,7 +152,7 @@ const zh = {
   uploadImages: /^(上传文件|Upload files)$/,
   chooseFiles: /^(选择文件|Choose files)$/,
   setCover: /^(Set as cover|Set cover|设为封面)$/,
-  draft: /^(Save as draft|保存草稿|保存为草稿)$/,
+  draft: /^(Save as draft|保存起草|保存为起草)$/,
   cancelCard: /^(Cancel card|取消卡片)$/,
   restoreCard: /^(Restore card|恢复卡片)$/,
   closeCard: /^(关闭卡片|Close card)$/,
@@ -354,12 +354,12 @@ async function main() {
   await page.waitForTimeout(2500)
 
   let createdTask
-  const boardCheck = await step('UI: open the group board from the header and render six workflow lanes', async () => {
+  const boardCheck = await step('UI: open the group board from the header and render the workflow lanes', async () => {
     await ensureBoard()
     const lanes = await page.locator('.bt-board-lane, .bt-board-column').evaluateAll(els => els.map(el => el.getAttribute('data-stage')).filter(Boolean))
     const text = await page.locator('.bt-board-dialog').innerText()
     if (/Board directory is not private|看板不可用|Board unavailable/.test(text)) throw new StepError('board is unavailable', { text: text.slice(0, 500) })
-    if (!['proposed', 'waiting', 'ready', 'working', 'reported', 'done'].every(stage => lanes.includes(stage))) {
+    if (!['proposed', 'waiting', 'working', 'reported', 'done'].every(stage => lanes.includes(stage))) {
       throw new StepError('workflow lanes are missing', { lanes })
     }
     return { lanes, screenshot: await shot('board-open') }
@@ -498,9 +498,9 @@ async function main() {
         }, 25_000)
         const stage = await waitFor('card to render in a dispatch lane', async () => {
           const current = await page.locator('.bt-board-card[data-task-id="' + createdTask.id + '"]').evaluate(el => el.closest('[data-stage]')?.getAttribute('data-stage')).catch(() => undefined)
-          return ['waiting', 'ready', 'working'].includes(current) ? current : undefined
+          return ['waiting', 'working'].includes(current) ? current : undefined
         }, 20_000)
-        if (!['waiting', 'ready', 'working'].includes(stage)) throw new StepError('card is not in a dispatch lane after the drop', { stage, status: moved.status })
+        if (!['waiting', 'working'].includes(stage)) throw new StepError('card is not in a dispatch lane after the drop', { stage, status: moved.status })
         if (!['pending', 'claimed', 'accepted', 'uncertain'].includes(moved.dispatchState)) throw new StepError('no dispatch action was recorded', { dispatchState: moved.dispatchState, status: moved.status })
         return { status: moved.status, dispatchState: moved.dispatchState, stage, screenshot: await shot('card-dispatched') }
       })
@@ -715,7 +715,7 @@ async function main() {
         const card = page.locator('.bt-board-card[data-task-id="' + createdTask.id + '"]').first()
         await card.waitFor({ state: 'visible', timeout: 15_000 })
         const stage = await card.evaluate(el => el.closest('[data-stage]')?.getAttribute('data-stage'))
-        if (stage !== 'ready' && stage !== 'waiting') throw new StepError('card is not in its dispatch lane after reload', { stage })
+        if (stage !== 'waiting' && stage !== 'working') throw new StepError('card is not in its dispatch lane after reload', { stage })
         if (!current.coverImageId) throw new StepError('card cover did not survive reload')
         await card.locator('.bt-board-card-cover img').first().waitFor({ state: 'visible', timeout: 10_000 })
         await withCard(createdTask.id, async dialog => {

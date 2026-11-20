@@ -1,21 +1,32 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { openTaskStore } from '../../src/host/task-store.mjs'
+import { describePrivateTempAcl, privateTempDir } from '../private-temp.mjs'
+import { stoppedBeforeSuccess } from '../process-stop.mjs'
 
 const hex = 'a'.repeat(40)
 const opts = { assertWriteLock() {}, authorize() { return true }, verifyRegistration() { return true }, verifyEvidence() { return true }, verifyReceipt() { return true }, verifyInvalidation() { return true }, verifyAttachment() { return true }, verifyAdmission() { return true } }
+function managedTempDir(t, prefix) {
+  const dir = privateTempDir(join(tmpdir(), prefix)), stores = []
+  t.after(() => {
+    const closeErrors = []
+    for (const store of stores.reverse()) { try { store.close() } catch (error) { closeErrors.push(error.message) } }
+    try { rmSync(dir, { recursive:true, force:true }) }
+    catch (error) { error.message += `\n${describePrivateTempAcl(dir)}\nclose errors: ${closeErrors.join(' | ') || 'none'}`; throw error }
+  })
+  return { dir, trackStore:store => { stores.push(store); return store } }
+}
 function fixture(t, options = opts) {
-  const dir = mkdtempSync(join(tmpdir(), 'dsbot-task-test-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
-  const path = join(dir, 'store.sqlite'), store = openTaskStore(path, options)
-  t.after(() => { try { store.close() } catch {} })
-  return { path, store }
+  const { dir, trackStore } = managedTempDir(t, 'dsbot-task-test-')
+  const path = join(dir, 'store.sqlite')
+  const store = trackStore(openTaskStore(path, options))
+  return { path, store, trackStore }
 }
 const task = (id, dependencies = []) => ({ id, title: `task ${id}`, scope: 'personal:user', owner: 'owner', reviewer: 'reviewer', acceptance: 'independent acceptance', dependencies })
 const create = (s, id, deps = []) => s.create({ operationId: `create-${id}`, actor: 'user', task: task(id, deps) })
@@ -24,11 +35,11 @@ const register = (s, id) => command(s, id, 'register', 'user', { kind: 'personal
 const evidence = { kind: 'git', evidence: 'artifact', targetCommit: hex, targetBlob: hex, acceptanceBlob: hex, environment: 'test' }
 
 test('version history preserves before and after across restart without exposing unrelated metadata', t => {
-  const {store, path} = fixture(t)
+  const {store, path, trackStore} = fixture(t)
   create(store, 'history')
   command(store, 'history', 'card-details', 'user', {description:'Original'})
   command(store, 'history', 'card-details', 'user', {description:'Changed'}, 'changed')
-  store.close(); const reopened = openTaskStore(path, opts); t.after(() => reopened.close())
+  store.close(); const reopened = trackStore(openTaskStore(path, opts))
   const history = reopened.history('history')
   assert.equal(history.entries[0].before.description, 'Original')
   assert.equal(history.entries[0].after.description, 'Changed')
@@ -38,7 +49,7 @@ test('version history preserves before and after across restart without exposing
 })
 
 test('card details persist with CAS and idempotency without completing dependencies', t => {
-  const { store, path } = fixture(t)
+  const { store, path, trackStore } = fixture(t)
   create(store, 'card'); create(store, 'dependent', ['card']); register(store, 'dependent')
   const value = { description:'Notes\nwith details', dueDate:'2028-02-29', labels:['Urgent', '后端'], checklist:[{id:'item-1', text:'Verify', checked:true}] }
   const input = { operationId:'details-1', taskId:'card', expectedRevision:1, actor:'user', type:'card-details', value }
@@ -50,7 +61,7 @@ test('card details persist with CAS and idempotency without completing dependenc
   assert.equal(store.get('dependent').status, 'waiting')
   assert.equal(store.listActions('card').length, 0)
   command(store, 'card', 'card-details', 'user', { dueDate:null, labels:[] }, 'details-2')
-  store.close(); const reopened = openTaskStore(path, opts); t.after(() => reopened.close())
+  store.close(); const reopened = trackStore(openTaskStore(path, opts))
   const saved = reopened.get('card')
   assert.equal(saved.description, value.description); assert.equal(saved.dueDate, null)
   assert.deepEqual(saved.labels, []); assert.deepEqual(saved.checklist, value.checklist)
@@ -72,7 +83,7 @@ test('card details reject malformed or oversized fields without partial writes',
 })
 
 test('personal progress is durable, scoped and never completes a dependency', t => {
-  const { store, path } = fixture(t)
+  const { store, path, trackStore } = fixture(t)
   const mine = { ...task('mine'), owner:'user', reviewer:'reviewer' }
   store.create({ operationId:'create-mine', actor:'user', task:mine })
   create(store, 'dependent', ['mine']); register(store, 'dependent')
@@ -88,20 +99,20 @@ test('personal progress is durable, scoped and never completes a dependency', t 
   create(store, 'bot')
   assert.throws(() => command(store, 'bot', 'personal-progress', 'user', {progress:'doing'}), /personal progress unavailable/)
   assert.throws(() => command(store, 'mine', 'personal-progress', 'user', {progress:'done'}), /invalid personal progress/)
-  store.close(); const reopened = openTaskStore(path, opts); t.after(() => reopened.close())
+  store.close(); const reopened = trackStore(openTaskStore(path, opts))
   assert.equal(reopened.get('mine').personalProgress, 'finished'); assert.equal(reopened.get('mine').status, 'proposed')
   assert.equal(reopened.get('dependent').status, 'waiting')
 })
 
 test('personal progress can be selected atomically at creation without scheduling work', t => {
-  const {store, path} = fixture(t)
+  const {store, path, trackStore} = fixture(t)
   const input = {operationId:'create-doing', actor:'user', task:{...task('doing'), owner:'user', personalProgress:'doing'}}
   const created = store.create(input)
   assert.equal(created.personalProgress, 'doing'); assert.equal(created.status, 'proposed')
   assert.deepEqual(store.create(input), created); assert.equal(store.listActions(created.id).length, 0)
   assert.throws(() => store.create({...input, operationId:'bad', task:{...input.task, id:'bad', scope:'room:group'}}), /personal progress/)
   assert.throws(() => store.create({...input, operationId:'bad2', task:{...input.task, id:'bad2', owner:'bot'}}), /personal progress/)
-  store.close(); const reopened = openTaskStore(path, opts); t.after(() => reopened.close())
+  store.close(); const reopened = trackStore(openTaskStore(path, opts))
   assert.equal(reopened.get('doing').personalProgress, 'doing')
 })
 const intentFor = action => ({ admissionId:`admission-${action.id}`, messageId:`message-${action.id}`, targetBotId:action.actor, targetSessionId:`session-${action.actor}`, payload:{ id:`message-${action.id}`, role:'user', content:[{type:'text',text:'work'}], source:{kind:'bot',exchangeId:`admission-${action.id}`} } })
@@ -115,6 +126,63 @@ function finish(s, id) {
   accept(s, id, 'execute'); command(s, id, 'start', 'owner'); command(s, id, 'report', 'owner', evidence)
   accept(s, id, 'review'); command(s, id, 'review', 'reviewer', { evidence: 'independent review', result: 'pass' })
 }
+
+test('child blockers keep referenced items runnable and auto-unblock the parent after independent acceptance', t => {
+  const { store } = fixture(t)
+  const roomTask = (id, type, parentTaskId) => ({ ...task(id), scope:'room:release-group', type, ...(parentTaskId ? { parentTaskId } : {}) })
+  const createRoomTask = (id, type, parentTaskId) => store.create({ operationId:`create-${id}`, actor:'user', task:roomTask(id, type, parentTaskId) })
+  createRoomTask('feature', 'feature')
+  const itemIds = ['T-VER-01','T-VER-02','T-VER-03']
+  for (const id of itemIds) createRoomTask(id, 'development', 'feature')
+  register(store, 'feature')
+  for (const id of itemIds) register(store, id)
+
+  const blocked = command(store, 'feature', 'block', 'user', {
+    reason:'Child acceptance is pending', condition:'T-VER-01/02/03 must pass independent review', owner:'owner',
+  }, 'block-feature-for-items')
+  assert.deepEqual(blocked.blocked.itemTaskIds, itemIds)
+  assert.equal(blocked.status, 'waiting')
+  assert.deepEqual(store.listSchedule().filter(item => itemIds.includes(item.id) && item.status === 'ready').map(item => item.id), itemIds)
+
+  finish(store, itemIds[0])
+  assert.equal(store.get('feature').blocked.itemTaskIds.length, 3)
+  assert.equal(store.get('feature').status, 'waiting')
+  finish(store, itemIds[1])
+  assert.ok(store.get('feature').blocked)
+  finish(store, itemIds[2])
+
+  const resumed = store.get('feature')
+  assert.equal(resumed.blocked, undefined)
+  assert.equal(resumed.status, 'ready')
+  assert.ok(store.listActions('feature').some(action => action.kind === 'execute' && action.state === 'pending'))
+})
+
+test('an unrelated parent blocker still holds child items', t => {
+  const { store } = fixture(t)
+  const roomTask = (id, type, parentTaskId) => ({ ...task(id), scope:'room:release-group', type, ...(parentTaskId ? { parentTaskId } : {}) })
+  store.create({ operationId:'create-external-feature', actor:'user', task:roomTask('external-feature', 'feature') })
+  store.create({ operationId:'create-external-item', actor:'user', task:roomTask('external-item', 'development', 'external-feature') })
+  register(store, 'external-feature'); register(store, 'external-item')
+  command(store, 'external-feature', 'block', 'user', {
+    reason:'External dependency unavailable', condition:'Wait for the gateway', owner:'owner',
+  }, 'block-external-feature')
+  assert.equal(store.listSchedule().some(item => item.id === 'external-item'), false)
+})
+
+test('an explicit parent blocker only releases its named child items', t => {
+  const { store } = fixture(t)
+  const roomTask = (id, type, parentTaskId) => ({ ...task(id), scope:'room:release-group', type, ...(parentTaskId ? { parentTaskId } : {}) })
+  store.create({ operationId:'create-scoped-feature', actor:'user', task:roomTask('scoped-feature', 'feature') })
+  store.create({ operationId:'create-scoped-item-a', actor:'user', task:roomTask('scoped-item-a', 'development', 'scoped-feature') })
+  store.create({ operationId:'create-scoped-item-b', actor:'user', task:roomTask('scoped-item-b', 'development', 'scoped-feature') })
+  register(store, 'scoped-feature'); register(store, 'scoped-item-a'); register(store, 'scoped-item-b')
+  command(store, 'scoped-feature', 'block', 'user', {
+    reason:'One child item needs follow-up', condition:'Resolve the selected item', owner:'owner', itemTaskIds:['scoped-item-a'],
+  }, 'block-scoped-feature')
+  const scheduled = new Set(store.listSchedule().filter(item => item.status === 'ready').map(item => item.id))
+  assert.equal(scheduled.has('scoped-item-a'), true)
+  assert.equal(scheduled.has('scoped-item-b'), false)
+})
 
 test('card details do not disrupt an already accepted work and its independent review', t => {
   const { store } = fixture(t); create(store, 'active'); register(store, 'active')
@@ -196,7 +264,7 @@ test('full human and workflow reply quotas still allow reporting and independent
 })
 
 test('editing running work creates one separate change proposal with an immutable baseline', t => {
-  const {store, path} = fixture(t); create(store, 'active'); register(store, 'active')
+  const {store, path, trackStore} = fixture(t); create(store, 'active'); register(store, 'active')
   accept(store, 'active', 'execute'); command(store, 'active', 'start', 'owner')
   const old = store.get('active')
   const value = {title:'Changed', owner:old.owner, reviewer:old.reviewer, acceptance:'New acceptance', dependencies:[], dependencyGrants:[], description:'New description'}
@@ -218,19 +286,19 @@ test('editing running work creates one separate change proposal with an immutabl
   accept(store, 'active', 'review'); command(store, 'active', 'review', 'reviewer', {evidence:'independent',result:'pass'})
   assert.equal(store.get(proposal.id).status, 'ready')
   assert.equal(store.listActions(proposal.id).filter(action=>action.state==='pending').length, 1)
-  store.close(); const reopened = openTaskStore(path, opts); t.after(() => reopened.close())
+  store.close(); const reopened = trackStore(openTaskStore(path, opts))
   assert.deepEqual(reopened.get(proposal.id).change, proposal.change)
   assert.deepEqual(reopened.proposeChange(input), proposal)
 })
 
 test('delivery and independent review drive dependencies immediately and survive restart', t => {
-  const { store, path } = fixture(t)
+  const { store, path, trackStore } = fixture(t)
   create(store, 'a'); create(store, 'b', ['a']); register(store, 'a'); register(store, 'b')
   assert.equal(store.get('a').status, 'ready'); assert.equal(store.get('b').status, 'waiting')
   assert.throws(() => command(store, 'a', 'start', 'owner'), /receipt/)
   finish(store, 'a'); assert.equal(store.get('a').status, 'done'); assert.equal(store.get('b').status, 'ready')
   assert.equal(store.listActions('b').filter(x => x.state === 'pending').length, 1)
-  const restarted = openTaskStore(path, opts); t.after(() => restarted.close())
+  const restarted = trackStore(openTaskStore(path, opts))
   assert.equal(restarted.get('a').status, 'done'); assert.equal(restarted.get('b').status, 'ready')
   assert.equal(restarted.operation('review-a').status, 'committed')
 })
@@ -246,7 +314,7 @@ test('operation id is idempotent, payload conflicts and graph cycles are rejecte
 })
 
 test('refresh version advances only for committed changes and survives reopening', t => {
-  const { store, path } = fixture(t)
+  const { store, path, trackStore } = fixture(t)
   assert.equal(store.version(), 0)
   const input = { operationId: 'versioned-create', actor: 'user', task: task('a') }
   store.create(input)
@@ -257,7 +325,7 @@ test('refresh version advances only for committed changes and survives reopening
   register(store, 'a'); assert.ok(store.version() > created)
   const beforeClaim = store.version(), a = store.listActions('a')[0]
   claim(store, a); assert.ok(store.version() > beforeClaim)
-  const reopened = openTaskStore(path, opts); t.after(() => reopened.close())
+  const reopened = trackStore(openTaskStore(path, opts))
   assert.equal(reopened.version(), store.version())
 })
 
@@ -281,11 +349,11 @@ test('admission intent is immutable and repeated claim is lookup-only', t => {
 })
 
 test('process death after admission intent commit preserves original identity without replay', t => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsbot-admission-crash-')); t.after(() => rmSync(dir, { recursive:true, force:true }))
+  const { dir, trackStore } = managedTempDir(t, 'dsbot-admission-crash-')
   const path = join(dir, 'tasks.sqlite')
   const child = spawnSync(process.execPath, [fileURLToPath(new URL('./admission-crash-child.mjs', import.meta.url)), path], { encoding:'utf8' })
-  assert.equal(child.signal, 'SIGKILL')
-  const store = openTaskStore(path, opts); t.after(() => store.close())
+  assert.equal(stoppedBeforeSuccess(child), true, child.stderr)
+  const store = trackStore(openTaskStore(path, opts))
   const action = store.listActions('t')[0], saved = store.admission(action.id)
   assert.equal(saved.state, 'claimed'); assert.equal(saved.admissionId, 'admission-1'); assert.equal(saved.targetSessionId, 'session-1')
   const intent = { admissionId:'admission-1', messageId:'message-1', targetBotId:'bot', targetSessionId:'session-1', payload:{ id:'message-1', role:'user', content:[{type:'text',text:'work'}], source:{kind:'bot',exchangeId:'admission-1'} } }
@@ -294,11 +362,11 @@ test('process death after admission intent commit preserves original identity wi
 })
 
 test('startup converts interrupted admissions to durable uncertainty exactly once', t => {
-  const {store,path}=fixture(t);create(store,'restart');register(store,'restart')
+  const {store,path,trackStore}=fixture(t);create(store,'restart');register(store,'restart')
   const action=store.listActions('restart')[0],intent=intentFor(action);claim(store,action,intent)
   store.markAction({actionId:action.id,actor:'host',expectedState:'claimed',state:'accepted',receipt:'verified'})
   store.close()
-  const reopened=openTaskStore(path,opts);t.after(()=>reopened.close())
+  const reopened=trackStore(openTaskStore(path,opts))
   assert.equal(reopened.holdInterruptedAdmissions(),1)
   const held=reopened.admission(action.id)
   assert.equal(held.state,'uncertain');assert.equal(held.admissionId,intent.admissionId);assert.equal(held.messageId,intent.messageId)
@@ -406,10 +474,10 @@ test('cancellation and action state roll back together if the home lock is lost'
 })
 
 test('process death after cancellation commit retains uncertain intent and decision', t => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsbot-decision-crash-')); t.after(() => rmSync(dir, { recursive:true, force:true }))
+  const { dir, trackStore } = managedTempDir(t, 'dsbot-decision-crash-')
   const path = join(dir, 'tasks.sqlite'), child = spawnSync(process.execPath, [fileURLToPath(new URL('./decision-crash-child.mjs', import.meta.url)), path], { encoding:'utf8' })
-  assert.equal(child.signal, 'SIGKILL')
-  const store = openTaskStore(path, opts); t.after(() => store.close())
+  assert.equal(stoppedBeforeSuccess(child), true, child.stderr)
+  const store = trackStore(openTaskStore(path, opts))
   const action = store.listActions('t')[0], intent = store.admission(action.id)
   assert.equal(action.state, 'uncertain'); assert.equal(intent.admissionId, 'admission-1'); assert.equal(store.operation('cancel-1').status, 'committed')
   assert.equal(store.inspectAdmission({ admissionId:intent.admissionId, messageId:intent.messageId, targetSessionId:intent.targetSessionId, payloadHash:intent.payloadHash }).decision, 'unknown')
@@ -455,10 +523,10 @@ test('invalidating a reported task holds its accepted review without deleting it
 })
 
 test('SIGKILL after upstream invalidation preserves uncertain downstream intent', t => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsbot-invalidate-crash-')); t.after(() => rmSync(dir, { recursive:true, force:true }))
+  const { dir, trackStore } = managedTempDir(t, 'dsbot-invalidate-crash-')
   const path = join(dir, 'tasks.sqlite'), child = spawnSync(process.execPath, [fileURLToPath(new URL('./invalidation-crash-child.mjs', import.meta.url)), path], { encoding:'utf8' })
-  assert.equal(child.signal, 'SIGKILL')
-  const store = openTaskStore(path, opts); t.after(() => store.close())
+  assert.equal(stoppedBeforeSuccess(child), true, child.stderr)
+  const store = trackStore(openTaskStore(path, opts))
   const action = store.listActions('b')[0], intent = store.admission(action.id)
   assert.equal(action.state, 'uncertain'); assert.equal(store.get('b').stale, true)
   assert.equal(intent.state, 'uncertain'); assert.equal(intent.payload.id, intent.messageId)
@@ -485,7 +553,7 @@ test('home lock loss before commit rolls back task and operation together', t =>
 })
 
 test('unknown database is never overwritten', t => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsbot-task-unknown-')); t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const { dir } = managedTempDir(t, 'dsbot-task-unknown-')
   const path = join(dir, 'unknown.sqlite'); writeFileSync(path, 'not sqlite', { mode: 0o600 })
   assert.throws(() => openTaskStore(path, opts))
 })
