@@ -488,6 +488,20 @@ export function passGoal(room, input, by, now = Date.now()) {
   const evidence = String(input.evidence ?? '').trim()
   if (evidence === '') return { error: required('evidence', 'pass') }
   if (evidence.length > TEXT_MAX) return { error: tooLong('evidence', TEXT_MAX) }
+  // A stage passes on its tasks' results, not on the admin's say-so: every task
+  // must have been reported (or already done), and each report must carry a note.
+  const unfinished = stage.tasks.filter(task => !['reported', 'done'].includes(task.status))
+  if (unfinished.length > 0) {
+    const names = unfinished.slice(0, 5).map(task => task.task ?? task.id).join('; ')
+    return { error: `Stage ${goal.current} has ${unfinished.length} task(s) not reported yet (${names}); check each result before pass.` }
+  }
+  const unproven = stage.tasks.filter(task => task.status === 'reported'
+    && !(task.goalBoardReplies ?? []).some(reply => String(reply.text ?? '').trim() !== '')
+    && String(task.evidence ?? '').trim() === '')
+  if (unproven.length > 0) {
+    const names = unproven.slice(0, 5).map(task => task.task ?? task.id).join('; ')
+    return { error: `Stage ${goal.current} has ${unproven.length} task(s) without evidence (${names}); record each result before pass.` }
+  }
   stage.status = 'passed'
   stage.evidence = evidence
   stage.passedAt = now
@@ -1650,6 +1664,14 @@ export function install(rt) {
       goal.revision += 1
       if (goal.idle) goal.idleRevision = goal.revision
       goal.updatedAt = now
+      // The scheduled prompt already carries this goal's ledger block. Bind that
+      // delivered ledger now, so a turn that acts on it is not counted as one that
+      // never produced a ledger; a goal that changes during the turn still reads
+      // stale at finish and is reported as such.
+      if (attempt.inspectOnly) {
+        attempt.inspectionLedgerAt = now
+        attempt.inspectionLedgerFingerprint = inspectionFingerprint(goal)
+      }
       occurrence.reviewId = id
       await result(message ? 'admitted' : 'admitting')
       const valid = () => activeRoom() && room.scheduledReviewOccurrence === occurrence && goalReviewAllowed(room, id)
