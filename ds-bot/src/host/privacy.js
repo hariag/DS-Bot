@@ -403,7 +403,11 @@ export function install(rt) {
               if (!/[\\/]/.test(path) && path !== '.' && path !== '..') {
                 try { if (!lstatSync(resolve(absolute)).isSymbolicLink()) continue } catch { continue }
               }
-              if (await matches(absolute, true)) { blocked = true; break }
+              // A shell word that is an ancestor of the board (a bare /, /root or ~) is
+              // not an access to it: here-document bodies are command data and routinely
+              // carry a lone "/" in tables and units. Any word that resolves inside the
+              // board still blocks, and the literal alias check above catches named paths.
+              if (await matches(absolute)) { blocked = true; break }
             }
             if (blocked) break
           }
