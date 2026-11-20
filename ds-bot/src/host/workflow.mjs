@@ -5,7 +5,6 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 
-const own = (value, key) => value != null && Object.hasOwn(value, key) ? value[key] : undefined
 const id = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\x00-\x1f]/.test(value)
 const refused = () => new Error('Task is unavailable or the action is not authorized')
 const actions = new Set(['reply', 'start', 'progress', 'report', 'review', 'block', 'unblock'])

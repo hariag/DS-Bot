@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { test } from 'node:test'
@@ -363,3 +363,26 @@ test('the receipt of a request is kept in the team file', async (t) => {
   assert.equal(receipts[0].outcome, 'delivered')
   assert.match(receipts[0].receipt, /^Delivered to Writer/)
 })
+
+for (const reason of ['stopped', 'lock lost']) {
+  test(`a named request is not delivered when its state save is skipped: ${reason}`, async (t) => {
+    const home = tempHome()
+    const host = await boot(home, team())
+    t.after(async () => { await host.stop(); cleanup(home) })
+    const args = { to: 'Writer', message: 'do the thing', request_id: 'r-1' }
+    let attempt
+    let closing
+    if (reason === 'stopped') {
+      attempt = host.tool('message_bot', args, 'a')
+      // The call has started but has not reached admission when its host closes.
+      closing = host.stop()
+    } else {
+      writeFileSync(join(home, 'state.lock'), JSON.stringify({ pid: 1, host: `${hostname()}-other`, token: 'other-writer', since: Date.now() }))
+      attempt = host.tool('message_bot', args, 'a')
+    }
+    await assert.rejects(attempt, /cannot save|cannot be saved/i)
+    await closing
+    assert.equal(host.agentOf('b').calls.length, 0)
+    assert.equal(Object.keys(JSON.parse(readFileSync(join(home, 'state.json'), 'utf8')).requests ?? {}).length, 0)
+  })
+}

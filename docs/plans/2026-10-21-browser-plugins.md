@@ -1,7 +1,7 @@
 # 浏览器插件：全团队一个后端，每个 Bot 一份 profile
 
 - 日期：2026-10-21
-- 相关：[浏览器、搜索、密钥和连接器](2026-10-08-browser-and-secrets.md)
+- 相关：改 [浏览器、搜索、密钥和连接器](2026-10-08-browser-and-secrets.md) 里「Bot 不操作浏览器」。维护者确认：那条是等这次做的。
 - 代码：`ds-bot/src/host/browser-plugins.js`、`ds-bot/src/host/browser/`、`browser-plugins/`
 
 ## 为什么

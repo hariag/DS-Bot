@@ -50,7 +50,12 @@ function rig() {
   const mask = raw.slice(raw.indexOf('<mask'), raw.indexOf('</mask>') + 7)
     .replace('<g class="bt-gaze">', '<g id="gaze" class="bt-gaze">')
     .replace('<g class="bt-eyes" fill="#000">', '<g id="eye-pair" class="bt-eyes" fill="#000">')
-  let layers = group(raw, '<g fill-rule="evenodd">')
+  // The start whale keeps the highlight layer and the stronger shade it was designed
+  // with; the runtime characters draw the body without them.
+  let layers = `<g fill-rule="evenodd"><path d="${whale.body}" fill="var(--bt-ink-deepseek)"/>`
+    + (whale.paints ?? []).map(([d, fill, opacity]) => `<path d="${d}" fill="${fill}" fill-opacity="${opacity}"/>`).join('')
+    + `<path d="${whale.shade}" fill="#000" fill-opacity=".14"/>`
+    + `<path d="${whale.light}" fill="#fff" fill-opacity=".16"/></g>`
   layers = wrap(layers, 'w-body', `<path d="${whale.body}"`)
   layers = wrap(layers, 'w-belly', `<path d="${whale.paints[0][0]}"`)
   layers = wrap(layers, 'w-shade', `<path d="${whale.shade}"`)
@@ -75,10 +80,16 @@ function rig() {
 }
 
 const rules = css => [...css.matchAll(/\{([^}]*)\}/gu)].map(([, body]) => new Map(body.split(';').filter(Boolean).map(item => item.split(/:(.*)/su).slice(0, 2))))
+// The start page carries no skin variables, so a surface color that the app writes as
+// `var(--bt-skin-main, #fcfcfc)` is copied at its theme fallback here.
+const themeFallback = value => {
+  const wrapped = /^var\(\s*--[\w-]+\s*,\s*([\s\S]+)\)$/u.exec(value)
+  return wrapped === null ? value : wrapped[1].trim()
+}
 function pick(vars, names, from) {
   return names.map((name) => {
     if (!vars.has(name)) throw new Error(`${from} no longer sets ${name}`)
-    return `${name}:${vars.get(name)}`
+    return `${name}:${themeFallback(vars.get(name))}`
   }).join(';')
 }
 

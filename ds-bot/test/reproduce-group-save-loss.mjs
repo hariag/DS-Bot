@@ -18,9 +18,12 @@ test('queued group posts survive a failed save before dispatch', async (t) => {
   host.emit('r1', 'user/message', host.say('@Tester second request'))
   assert.equal(rt.roomInbox.get('r1')?.length, 2)
   const save = rt.save
-  rt.save = async () => { throw new Error('fixture-save-failed') }
+  let saveFailed = false
+  rt.save = async () => { saveFailed = true; throw new Error('fixture-save-failed') }
   try {
-    await assert.rejects(host.tool('group_relay', {}, 'r1', { callId: 'queued-posts', signal: new AbortController().signal }), /fixture-save-failed/)
+    // Newer group_relay returns the anchor while the round runs in the background.
+    await host.tool('group_relay', {}, 'r1', { callId: 'queued-posts', signal: new AbortController().signal })
+    await settle(() => saveFailed && !rt.roomProgress.has('queued-posts'))
   } finally { rt.save = save }
   assert.equal(rt.roomInbox.get('r1')?.length ?? 0, 2, 'queued posts must survive save failure')
 })

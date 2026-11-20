@@ -142,9 +142,35 @@ describe('docx', () => {
   test('all-or-nothing: a failing op writes nothing', () => {
     const dir = tmp()
     const out = join(dir, 'out.docx')
-    assert.throws(() => execFileSync(NODE, [CLI, 'docx', 'edit', fixture('sample.docx'), '-o', out, '--ops',
-      JSON.stringify([{ delete: { paragraphs: ['p1'] } }, { insert: { after: 'p999', text: 'x' } }]), '--json']))
-    assert.ok(!existsSync(out))
+    for (const op of [{ insert: { after: 'p999', text: 'x' } }, { comment: { paragraph: 'p1', text: 'gone' } }]) {
+      assert.throws(() => execFileSync(NODE, [CLI, 'docx', 'edit', fixture('sample.docx'), '-o', out, '--ops',
+        JSON.stringify([{ delete: { paragraphs: ['p1'] } }, op]), '--json']))
+      assert.ok(!existsSync(out))
+    }
+  })
+  test('a batch keeps the original paragraph ids after deletions', () => {
+    const dir = tmp()
+    const out = join(dir, 'out.docx')
+    cli('docx', 'edit', fixture('sample.docx'), '-o', out, '--ops', JSON.stringify([
+      { delete: { paragraphs: ['p1'] } },
+      { delete: { paragraphs: ['p2'] } },
+    ]))
+    assert.equal(docxRead(Package.open(out)).blocks.find(b => b.type === 'paragraph').text, 'Second paragraph with a field:')
+  })
+  test('insertions keep later anchors, style references and comments on the original paragraphs', () => {
+    const dir = tmp()
+    const out = join(dir, 'out.docx')
+    cli('docx', 'edit', fixture('sample.docx'), '-o', out, '--ops', JSON.stringify([
+      { insert: { before: 'p1', text: 'Introduction' } },
+      { insert: { after: 'p3', text: 'Follow-up', like: 'p1' } },
+      { comment: { paragraph: 'p2', text: 'Check the revenue.' } },
+    ]))
+    const { blocks, comments } = docxRead(Package.open(out))
+    const following = blocks.find(b => b.text === 'Follow-up')
+    assert.equal(following.style, 'Title')
+    assert.equal(blocks[blocks.indexOf(following) - 1].text, 'Second paragraph with a field:')
+    const comment = comments.find(c => c.text === 'Check the revenue.')
+    assert.equal(blocks.find(b => b.id === comment.anchorsTo).text, 'Revenue grew  fast in the north region. moved')
   })
   test('accept and reject changes resolve to expected text', () => {
     const dir = tmp()
@@ -312,6 +338,26 @@ describe('property change restore (review 2)', () => {
 })
 
 describe('replace edge cases (review 3)', () => {
+  test('zero-width regex replacements include paragraph ends and empty paragraphs', () => {
+    const runs = '<w:r><w:rPr><w:b/></w:rPr><w:t>ab</w:t></w:r><w:r><w:t>cd</w:t></w:r><w:r><w:t/></w:r>'
+    for (const [content, find, expected] of [
+      [runs, '$', 'abcd!'],
+      [runs, '^|$', '!abcd!'],
+      [runs, '(?=cd)|$', 'ab!cd!'],
+      [runs, 'd?$', 'abc!!'],
+      ['', '^$', '!'],
+    ]) {
+      const pkg = Package.open(fixture('sample.docx'))
+      const doc = pkg.xml('word/document.xml')
+      const body = childrenOf(doc.documentElement, 'w:body')[0]
+      for (const child of [...body.childNodes]) body.removeChild(child)
+      const p = parseXml(`<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${content}</w:p>`).documentElement
+      body.appendChild(doc.importNode(p, true))
+      pkg.putXml('word/document.xml', doc)
+      docxEdit(pkg, [{ replace: { find, with: '!', regex: true } }])
+      assert.equal(docxRead(pkg).blocks[0].text, expected, find)
+    }
+  })
   test('a→aa terminates (no re-scan of inserted text)', () => {
     const dir = tmp()
     const out = join(dir, 'aa.docx')

@@ -127,6 +127,63 @@ function finish(s, id) {
   accept(s, id, 'review'); command(s, id, 'review', 'reviewer', { evidence: 'independent review', result: 'pass' })
 }
 
+test('child blockers keep referenced items runnable and auto-unblock the parent after independent acceptance', t => {
+  const { store } = fixture(t)
+  const roomTask = (id, type, parentTaskId) => ({ ...task(id), scope:'room:release-group', type, ...(parentTaskId ? { parentTaskId } : {}) })
+  const createRoomTask = (id, type, parentTaskId) => store.create({ operationId:`create-${id}`, actor:'user', task:roomTask(id, type, parentTaskId) })
+  createRoomTask('feature', 'feature')
+  const itemIds = ['T-VER-01','T-VER-02','T-VER-03']
+  for (const id of itemIds) createRoomTask(id, 'development', 'feature')
+  register(store, 'feature')
+  for (const id of itemIds) register(store, id)
+
+  const blocked = command(store, 'feature', 'block', 'user', {
+    reason:'Child acceptance is pending', condition:'T-VER-01/02/03 must pass independent review', owner:'owner',
+  }, 'block-feature-for-items')
+  assert.deepEqual(blocked.blocked.itemTaskIds, itemIds)
+  assert.equal(blocked.status, 'waiting')
+  assert.deepEqual(store.listSchedule().filter(item => itemIds.includes(item.id) && item.status === 'ready').map(item => item.id), itemIds)
+
+  finish(store, itemIds[0])
+  assert.equal(store.get('feature').blocked.itemTaskIds.length, 3)
+  assert.equal(store.get('feature').status, 'waiting')
+  finish(store, itemIds[1])
+  assert.ok(store.get('feature').blocked)
+  finish(store, itemIds[2])
+
+  const resumed = store.get('feature')
+  assert.equal(resumed.blocked, undefined)
+  assert.equal(resumed.status, 'ready')
+  assert.ok(store.listActions('feature').some(action => action.kind === 'execute' && action.state === 'pending'))
+})
+
+test('an unrelated parent blocker still holds child items', t => {
+  const { store } = fixture(t)
+  const roomTask = (id, type, parentTaskId) => ({ ...task(id), scope:'room:release-group', type, ...(parentTaskId ? { parentTaskId } : {}) })
+  store.create({ operationId:'create-external-feature', actor:'user', task:roomTask('external-feature', 'feature') })
+  store.create({ operationId:'create-external-item', actor:'user', task:roomTask('external-item', 'development', 'external-feature') })
+  register(store, 'external-feature'); register(store, 'external-item')
+  command(store, 'external-feature', 'block', 'user', {
+    reason:'External dependency unavailable', condition:'Wait for the gateway', owner:'owner',
+  }, 'block-external-feature')
+  assert.equal(store.listSchedule().some(item => item.id === 'external-item'), false)
+})
+
+test('an explicit parent blocker only releases its named child items', t => {
+  const { store } = fixture(t)
+  const roomTask = (id, type, parentTaskId) => ({ ...task(id), scope:'room:release-group', type, ...(parentTaskId ? { parentTaskId } : {}) })
+  store.create({ operationId:'create-scoped-feature', actor:'user', task:roomTask('scoped-feature', 'feature') })
+  store.create({ operationId:'create-scoped-item-a', actor:'user', task:roomTask('scoped-item-a', 'development', 'scoped-feature') })
+  store.create({ operationId:'create-scoped-item-b', actor:'user', task:roomTask('scoped-item-b', 'development', 'scoped-feature') })
+  register(store, 'scoped-feature'); register(store, 'scoped-item-a'); register(store, 'scoped-item-b')
+  command(store, 'scoped-feature', 'block', 'user', {
+    reason:'One child item needs follow-up', condition:'Resolve the selected item', owner:'owner', itemTaskIds:['scoped-item-a'],
+  }, 'block-scoped-feature')
+  const scheduled = new Set(store.listSchedule().filter(item => item.status === 'ready').map(item => item.id))
+  assert.equal(scheduled.has('scoped-item-a'), true)
+  assert.equal(scheduled.has('scoped-item-b'), false)
+})
+
 test('card details do not disrupt an already accepted work and its independent review', t => {
   const { store } = fixture(t); create(store, 'active'); register(store, 'active')
   accept(store, 'active', 'execute'); command(store, 'active', 'start', 'owner')

@@ -5,9 +5,10 @@
 // the team window hides it; the tray brings it back and its Quit ends the app (shell.mjs). Only
 // what the start window and the tray need is imported up front; the rest loads once the start
 // window is up (docs/plans/2026-10-26-start-window.md §11).
-import { app, BrowserWindow, clipboard, ipcMain, Menu, nativeImage, nativeTheme, powerMonitor, screen, session, shell as electronShell, systemPreferences, Tray, WebContentsView } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, screen, session, shell as electronShell, systemPreferences, Tray, WebContentsView } from 'electron'
 import { createComputerIndicator, indicatorHtml } from './computer-indicator.mjs'
 import { createComputerCursor } from './computer-cursor.mjs'
+import { badgeCount, createNotifications } from './notifications.mjs'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { release } from 'node:os'
@@ -26,14 +27,14 @@ import { readStartFrame, writeStartFrame } from './start-frame.mjs'
 import { explainOf, StartWindow } from './start-window.mjs'
 import { langOf } from './start/text.mjs'
 import { createDeferredPrompt } from './update-prompt.mjs'
-import { CAPTION_HEIGHT, cssColor, micaAvailable, nativeThemeSource } from './window-frame.mjs'
+import { CAPTION_HEIGHT, cssColor, frameOptions, framelessOn, keepVibrancy, materialOf, nativeThemeSource } from './window-frame.mjs'
 
 const { rm } = disk.promises
 
 const IPC = {
   caption: 'ds-bot:caption-colors', nativeTheme: 'ds-bot:native-theme', fullscreen: 'ds-bot:fullscreen',
   dataLocation: 'ds-bot:data-location', moveData: 'ds-bot:move-data', teamWorkspace: 'ds-bot:team-workspace',
-  ready: 'ds-bot:ready', handoffReady: 'ds-bot:handoff-ready', motion: 'ds-bot:motion',
+  ready: 'ds-bot:ready', handoffReady: 'ds-bot:handoff-ready', motion: 'ds-bot:motion', effects: 'ds-bot:effects',
   card: 'ds-bot:app-card', cardShown: 'ds-bot:app-card-shown', cardAnswer: 'ds-bot:app-card-answer',
   browserAcquire: 'ds-bot:browser-acquire', browserRelease: 'ds-bot:browser-release', browserForget: 'ds-bot:browser-forget',
   browserViewChanged: 'ds-bot:browser-view-changed', browserViewCreate: 'ds-bot:browser-view-create',
@@ -48,6 +49,7 @@ const IPC = {
   appUpdateInstall: 'ds-bot:app-update-install', appUpdateOpen: 'ds-bot:app-update-open',
   appUpdateChanged: 'ds-bot:app-update-changed',
   idleSeconds: 'ds-bot:idle-seconds', computer: 'ds-bot:computer', computerAction: 'ds-bot:computer-action', computerCursor: 'ds-bot:computer-cursor',
+  notify: 'ds-bot:notify', notifyStatus: 'ds-bot:notify-status', badge: 'ds-bot:badge', openSession: 'ds-bot:open-session',
 }
 // A cookie export larger than this is not a cookie export.
 const IMPORT_FILE_MAX = 32 * 1024 * 1024
@@ -68,8 +70,9 @@ const iconFile = join(assets, process.platform === 'win32' ? 'icon.ico' : 'icon.
 // The tray icon of this platform: Windows takes the .ico, macOS the template and its @2x,
 // Linux the plain png.
 const trayIconFile = () => join(assets, process.platform === 'win32' ? 'tray.ico' : process.platform === 'darwin' ? 'trayTemplate.png' : 'tray.png')
-// Windows 11 draws Mica behind the page; mica.css lets it through the sidebar.
-const mica = micaAvailable(process.platform, release())
+// Windows 11 draws Mica behind the page and macOS its sidebar vibrancy; material.css lets it
+// through the sidebar.
+const material = materialOf(process.platform, release())
 configureIdentity(app)
 if (process.env.DS_BOT_SHELL_DATA) app.setPath('userData', process.env.DS_BOT_SHELL_DATA)
 const frameFile = join(app.getPath('userData'), 'start-frame.json')
@@ -197,10 +200,10 @@ if (canonical !== undefined) {
     electron: { BrowserWindow, ipcMain, screen, shell: electronShell, clipboard, nativeTheme, systemPreferences },
     // 〔保存日志…〕 on the start window's failure cards.
     saveAs: (win, name) => askPicker(win, { mode: 'save', title: tx('dialog.saveLog'), start: knownFolder('desktop'), name }),
-    page: join(here, 'start', 'start.html'), preload: join(here, 'preload.cjs'), icon: iconFile, mica, devTools: !app.isPackaged,
+    page: join(here, 'start', 'start.html'), preload: join(here, 'preload.cjs'), icon: iconFile, material, devTools: !app.isPackaged,
     css: readFileSync(join(here, 'page-card.css'), 'utf8'),
     // On Windows the locale is known only once the app is ready.
-    lang: () => langOf(app.getLocale()), motion: readStartFrame(frameFile).motion,
+    lang: () => langOf(app.getLocale()), motion: readStartFrame(frameFile).motion, effects: readStartFrame(frameFile).effects,
     version: app.getVersion(), program: [dirname(process.execPath), process.resourcesPath, app.getAppPath()], log: logs, mainWindow: () => mainWindow,
     onRetry: () => { retry().catch(fail) },
     onReload: () => { mainWindow?.webContents.reload() },
@@ -764,6 +767,25 @@ function handleIpc() {
     shell.setComputer(list)
   })
   ipcMain.handle(IPC.idleSeconds, (event) => (fromWindow(event) ? powerMonitor.getSystemIdleTime() : 0))
+  // The renderer knows which conversation is visible; focusing the window alone
+  // does not mean a reply in another conversation has been seen.
+  const notifications = createNotifications({ Notification, systemPreferences, platform: process.platform, log: logs })
+  ipcMain.handle(IPC.notifyStatus, (event) => (fromWindow(event) ? notifications.status() : 'unsupported'))
+  ipcMain.handle(IPC.notify, (event, notice) => {
+    if (!fromWindow(event)) return false
+    const sessionId = typeof notice?.sessionId === 'string' ? notice.sessionId : undefined
+    return notifications.show({ title: String(notice?.title ?? ''), body: String(notice?.body ?? '') }, {
+      open: () => {
+        toFront(mainWindow)
+        mainWindow?.webContents.send(IPC.openSession, sessionId)
+      },
+    })
+  })
+  ipcMain.on(IPC.badge, (event, count) => {
+    if (!fromWindow(event)) return
+    try { app.setBadgeCount(process.platform === 'darwin' || process.platform === 'linux' ? badgeCount(count) : 0) } catch { /* no dock here */ }
+  })
+  app.on('browser-window-focus', () => notifications.clear())
   const computerCursor = createComputerCursor({ BrowserWindow, screen, platform: process.platform, log: logs })
   ipcMain.on(IPC.computerCursor, (event, entry) => {
     if (!fromWindow(event)) return
@@ -784,6 +806,7 @@ function handleIpc() {
     writeStartFrame(frameFile, { themeSource: value })
   })
   ipcMain.on(IPC.motion, (event, tier) => { if (fromWindow(event)) writeStartFrame(frameFile, { motion: tier }) })
+  ipcMain.on(IPC.effects, (event, tier) => { if (fromWindow(event)) writeStartFrame(frameFile, { effects: tier }) })
   ipcMain.handle(IPC.dataLocation, (event) => {
     assertWindow(event)
     return { path: places.dataDir, fixed }
@@ -1281,25 +1304,24 @@ async function flushDeferredUpdate() {
 // Hidden, on the rect the start window grows into; the start window shows it at the hand-off.
 function createWindow() {
   const dark = nativeTheme.shouldUseDarkColors
-  const win32 = process.platform === 'win32'
+  const frameless = framelessOn(process.platform)
+  const sidebarFill = () => (nativeTheme.shouldUseDarkColors ? '#1b1b1c' : '#f9fafb')
   const win = new BrowserWindow({
     // The window never squeezes the chat: RAIL_WIDTH + MIN_CHAT from ds-bot's
     // src/client/frame-layout.js is the avatar rail plus the smallest chat column.
     ...startWindow.mainBounds(), minWidth: 508, minHeight: 480,
     title: 'DS Bot', show: false, icon: iconFile,
-    backgroundColor: mica ? '#00000000' : dark ? '#1b1b1c' : '#ffffff',
-    // Frameless as in DSH Desktop: the caption buttons overlay the page's band. They keep the
-    // sidebar's colors until the page sends the colors of the surface under them.
-    ...(win32 ? {
-      titleBarStyle: 'hidden',
-      titleBarOverlay: { height: CAPTION_HEIGHT, color: dark ? '#1b1b1c' : '#f9fafb', symbolColor: dark ? '#f9fafb' : '#0f1115' },
-      ...(mica ? { backgroundMaterial: 'mica' } : {}),
-    } : {}),
+    backgroundColor: material ? '#00000000' : dark ? '#1b1b1c' : '#ffffff',
+    // Frameless as in DSH Desktop: the window controls overlay the page's band. On Windows the
+    // caption buttons keep the sidebar's colors until the page sends the colors of the surface
+    // under them.
+    ...frameOptions(process.platform, material, { color: sidebarFill(), symbolColor: dark ? '#f9fafb' : '#0f1115' }),
     webPreferences: {
       preload: join(here, 'preload.cjs'), contextIsolation: true, sandbox: true, webviewTag: true,
-      additionalArguments: [`--ds-bot-origin=${origin}`, ...(win32 ? [`--ds-bot-caption=${String(CAPTION_HEIGHT)}`, ...(mica ? ['--ds-bot-mica'] : [])] : [])],
+      additionalArguments: [`--ds-bot-origin=${origin}`, ...(frameless ? [`--ds-bot-caption=${String(CAPTION_HEIGHT)}`, ...(material ? [`--ds-bot-material=${material}`] : [])] : [])],
     },
   })
+  if (material === 'vibrancy') keepVibrancy(win, sidebarFill)
   mainWindow = win
   startWindow.placeMain(win)
   // No ready-to-show here: the first window shows at the hand-off (start-window.mjs), a window
@@ -1327,16 +1349,17 @@ function createWindow() {
       getPath: name => app.getPath(name),
     }))
   }
-  if (win32) {
-    // Fullscreen hides the caption buttons, and the page drops its band meanwhile. A reload
+  if (frameless) {
+    // Fullscreen hides the window controls, and the page drops its band meanwhile. A reload
     // registers the page's listener again, so the state goes out after every load too.
     const sendFullscreen = () => { if (mainWindow !== undefined) contents.send(IPC.fullscreen, win.isFullScreen()) }
     win.on('enter-full-screen', sendFullscreen)
     win.on('leave-full-screen', sendFullscreen)
     contents.on('did-finish-load', sendFullscreen)
   }
-  if (mica) {
-    const css = readFileSync(join(here, 'mica.css'), 'utf8')
+  for (const [on, file] of [[material !== undefined, 'material.css'], [process.platform === 'darwin', 'macos.css']]) {
+    if (!on) continue
+    const css = readFileSync(join(here, file), 'utf8')
     contents.on('dom-ready', () => { void contents.insertCSS(css) })
   }
   const fonts = readFileSync(join(here, 'fonts.css'), 'utf8')

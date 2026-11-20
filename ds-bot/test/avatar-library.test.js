@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -58,6 +58,24 @@ function start(home) {
 }
 
 const makeHome = () => mkdtempSync(join(tmpdir(), 'ds-bot-avlib-'))
+
+test('an image whose index write failed is not treated as an imported duplicate', async (t) => {
+  const home = makeHome()
+  const { call, stop } = start(home)
+  t.after(async () => { await stop(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+  const index = join(home, 'avatars', 'index.json')
+  mkdirSync(index, { recursive: true })
+  const result = (await call('avatar-import', { items: [{ name: 'first.png', image: pngUrl }, { name: 'again.png', image: pngUrl }] })).value
+  assert.equal(result.failed.length, 2)
+  assert.equal(result.imported.length, 0)
+  assert.equal(result.duplicates.length, 0)
+  assert.equal((await call('avatar-library', {})).value.total, 0)
+  rmSync(index, { recursive: true })
+  const retry = (await call('avatar-import', { items: [{ name: 'first.png', image: pngUrl }, { name: 'again.png', image: pngUrl }] })).value
+  assert.equal(retry.imported.length, 1)
+  assert.equal(retry.duplicates.length, 1)
+  assert.equal((await call('avatar-library', {})).value.total, 1)
+})
 
 test('a photo imported once is kept, and the same photo again does not make a second entry', async (t) => {
   const home = makeHome()
@@ -202,6 +220,8 @@ test('imports that overlap all land, and none is lost to another one', async (t)
 })
 
 test('the library answers page by page, so a big library is not one huge reply', async (t) => {
+  // A batch may import several images in the same millisecond.
+  t.mock.method(Date, 'now', () => 1_800_000_000_000)
   const home = makeHome()
   t.after(() => rmSync(home, { recursive: true, force: true, maxRetries: 5 }))
   const { call, stop } = start(home)

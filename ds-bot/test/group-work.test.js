@@ -7,6 +7,7 @@ import { afterRound } from './relay-rows.js'
 import { createRuntime } from '../index.js'
 import { fakeAttachments, fakeContext } from './fake-ctx.js'
 import { LONG_HEAD, MESSAGE_INLINE_MAX, ROOM_STEP_GAP_MS, ROOM_WORK_GRACE_MS } from '../src/host/constants.js'
+import { scopeTarget } from '@deepseek-ai/dsh-scope'
 import { promisesWork } from '../src/host/turns.js'
 
 let rt
@@ -82,6 +83,10 @@ async function start(t, room, services, extraRooms, bots, llm, top, files = {}) 
       if (listener.length >= 2) listener({ id }, { type, seq: ++seq, data })
     }
   }
+  const emitScoped = (parentId, name, info) => {
+    const carrier = scopeTarget({}, agentOf(parentId))
+    for (const listener of ctx.listeners.get(name) ?? []) listener.call(carrier, info)
+  }
   const tool = (name, args, sessionId, exec = {}) => rt.teamTools.find(d => d.name === name).execute(args, { agent: { id: sessionId }, ...exec })
   const call = async (endpoint, payload) => (await route.fetch(new Request('http://localhost/api/bot', { method: 'POST', body: JSON.stringify({ endpoint, payload }) }))).json()
   // A Session takes up the newest message it was sent, as a new turn.
@@ -117,9 +122,15 @@ async function start(t, room, services, extraRooms, bots, llm, top, files = {}) 
     return { content: post.content, source: post.source }
   }
   await tool('list_bots', {}, 'a')
-  return { home, ctx, agentOf, emit, tool, call, begin, finish, round, say, takePost, selected }
+  return { home, ctx, agentOf, emit, emitScoped, tool, call, begin, finish, round, say, takePost, selected }
 }
 
+// The save before a group post runs on a timer; waiting with setImmediate starves it.
+const until = async (check, ms = 3000) => {
+  const stop = Date.now() + ms
+  while (!check() && Date.now() < stop) await new Promise(resolve => setTimeout(resolve, 20))
+  assert.ok(check(), 'condition not reached')
+}
 const settle = async (check) => {
   const until = Date.now() + 3000
   while (!check() && Date.now() < until) await new Promise(resolve => setImmediate(resolve))
@@ -224,8 +235,12 @@ test('message_bot from a group to one of its members calls it there, as "@Name" 
   const first = host.round('c1', host.say('@Chief 安排一下文档'))
   await settle(() => host.agentOf('ga').calls.length === 1)
   host.begin('ga')
+  const previousGet = host.ctx.get
+  host.ctx.get = name => name === 'agents' ? { get: id => host.agentOf(id) } : previousGet(name)
+  host.agentOf('gb').inbox.nextTurn.push({ source: { kind: 'bot' } }, { source: { kind: 'bot' } }, { source: { kind: 'user' } })
   const sent = await host.tool('message_bot', { to: 'Writer', message: '把文档整理好' }, 'ga')
   assert.match(sent, /^Called Writer in "Ops"/)
+  assert.match(sent, /Nothing went to its own chat/)
   host.finish('ga', '安排好了。')
   await settle(() => host.agentOf('gb').calls.length === 1)
   const called = host.begin('gb')
@@ -1768,6 +1783,143 @@ test('a group member with a running DSH subagent stays working and stop-room-wor
 })
 
 
+for (const noticeFirst of [true, false]) {
+  test(`a failed child reaches the group once on the open anchor without synthesizing a round when its notice comes ${noticeFirst ? 'first' : 'last'} (#973)`, async (t) => {
+    const host = await start(t)
+    const first = host.round('c1', host.say('@Writer 导出这份 PPT'))
+    await settle(() => host.agentOf('gb').calls.length === 1)
+    host.begin('gb')
+    host.emit('gb', 'subagent/catalog', { childId: 'sub-1', label: 'Export the deck' })
+    host.finish('gb', '正在导出。')
+    await settle(() => first() !== undefined)
+    const revBefore = rt.state.revision
+    // An intermediate message from the running child must neither end it nor spend its label.
+    host.emit('gb', 'user/message', {
+      content: [{ type: 'text', text: 'Agent sub-1 sent a message: 进度 50%' }],
+      source: { kind: 'agent-message', form: 'relay', senderSessionId: 'sub-1' },
+    })
+    assert.equal(rt.hasSubagents('gb'), true)
+
+    const notice = {
+      content: [{ type: 'text', text: 'Background subagent sub-1 failed before it finished.\nIt left no closing message.' }],
+      source: { kind: 'subagent-settled', form: 'notice', summary: 'Background subagent sub-1 failed before it finished.', senderSessionId: 'sub-1' },
+    }
+    const ending = { runId: 'run-1', provider: 'spawn', id: 'sub-1', local: true, stopReason: 'error' }
+    if (noticeFirst) host.emit('gb', 'user/message', notice)
+    host.emitScoped('gb', 'subagent/end', ending)
+    if (!noticeFirst) host.emit('gb', 'user/message', notice)
+    host.emit('gb', 'turn/start', { turn: 2 })
+    host.finish('gb', '[PASS]')
+    await until(() => rt.state.revision > revBefore)
+    assert.deepEqual(host.agentOf('r1').calls, [], 'no fake empty round is posted to the group Session')
+    const view = (await host.call('group-rows', { roomId: 'r1', from: first().from, anchor: first().anchor })).value
+    const shown = view.rows.filter(row => row.kind === 'helper-failed')
+    assert.equal(shown.length, 1)
+    assert.equal(shown[0].name, 'Writer')
+    assert.equal(shown[0].stopReason, 'error')
+    assert.equal(shown[0].helper, 'Export the deck')
+    host.emit('gb', 'user/message', notice)
+    assert.equal(rt.groupRows('r1', 0, rt.roomOf('r1').seq).filter(row => row.kind === 'helper-failed').length, 1)
+    host.emitScoped('gb', 'subagent/end', { ...ending, runId: 'run-2', stopReason: 'completed' })
+    assert.deepEqual(host.agentOf('r1').calls, [])
+  })
+}
+
+for (const [reason, summary] of [['error', 'failed before it finished.'], ['max-tokens', 'ran out of room before it finished.']]) {
+  test(`a failure known only from its settlement notice still shows in the group (${reason}, #973)`, async (t) => {
+    const host = await start(t)
+    const first = host.round('c1', host.say('@Writer 导出这份 PPT'))
+    await settle(() => host.agentOf('gb').calls.length === 1)
+    host.begin('gb')
+    host.emit('gb', 'subagent/catalog', { childId: 'sub-1', label: 'Export the deck' })
+    host.finish('gb', '正在导出。')
+    await settle(() => first() !== undefined)
+    // No subagent/end: an in-place plugin reload lost it, so the notice is the only
+    // ending this runtime sees. The child's own turn answers it with [PASS].
+    const notice = {
+      content: [
+        { type: 'text', text: `Background subagent sub-1 ${summary}` },
+        { type: 'text', text: 'It left no closing message.' },
+      ],
+      source: { kind: 'subagent-settled', form: 'notice', summary: `Background subagent sub-1 ${summary}`, senderSessionId: 'sub-1' },
+    }
+    const revBefore = rt.state.revision
+    host.emit('gb', 'user/message', notice)
+    host.emit('gb', 'turn/start', { turn: 2 })
+    host.finish('gb', '[PASS]')
+    await until(() => rt.state.revision > revBefore)
+    assert.deepEqual(host.agentOf('r1').calls, [])
+    const view = (await host.call('group-rows', { roomId: 'r1', from: first().from, anchor: first().anchor })).value
+    const shown = view.rows.filter(row => row.kind === 'helper-failed')
+    assert.equal(shown.length, 1)
+    assert.equal(shown[0].name, 'Writer')
+    assert.equal(shown[0].stopReason, reason)
+    assert.equal(shown[0].helper, 'Export the deck')
+    assert.equal(shown[0].text, `Export the deck — subagent ended (${reason})`)
+    // The same notice again, and the lifecycle ending arriving late, add no second row.
+    host.emit('gb', 'user/message', notice)
+    host.emitScoped('gb', 'subagent/end', { runId: 'run-1', provider: 'spawn', id: 'sub-1', local: true, stopReason: reason })
+    assert.deepEqual(host.agentOf('r1').calls, [])
+    assert.equal(rt.groupRows('r1', first().from).filter(row => row.kind === 'helper-failed').length, 1)
+    // A clean ending is not a failure: it adds no row and no post.
+    host.emit('gb', 'subagent/catalog', { childId: 'sub-2', label: 'Check the slides' })
+    host.emit('gb', 'user/message', {
+      content: [{ type: 'text', text: 'Background subagent sub-2 finished.' }],
+      source: { kind: 'subagent-settled', form: 'notice', summary: 'Background subagent sub-2 finished.', senderSessionId: 'sub-2' },
+    })
+    assert.equal(rt.groupRows('r1', 0, rt.roomOf('r1').seq).filter(row => row.kind === 'helper-failed').length, 1)
+    assert.deepEqual(host.agentOf('r1').calls, [])
+  })
+}
+
+test('a child that runs again after settling gets its own failure row, and read-only hosts stay untouched (#973)', async (t) => {
+  const host = await start(t)
+  const failure = {
+    content: [
+      { type: 'text', text: 'Background subagent sub-1 failed before it finished.' },
+      { type: 'text', text: 'It left no closing message.' },
+    ],
+    source: { kind: 'subagent-settled', form: 'notice', summary: 'Background subagent sub-1 failed before it finished.', senderSessionId: 'sub-1' },
+  }
+  host.emit('gb', 'subagent/catalog', { childId: 'sub-1', label: 'First run' })
+  host.emit('gb', 'user/message', failure)
+  const rows = () => rt.groupRows('r1', 0, rt.roomOf('r1').seq).filter(row => row.kind === 'helper-failed')
+  await until(() => rows().length === 1)
+  assert.equal(rows()[0].helper, 'First run')
+  assert.equal(rows()[0].stopReason, 'error')
+  // The same child takes a new run; the earlier row must not hide this ending.
+  host.emitScoped('gb', 'subagent/start', { runId: 'run-2', provider: 'spawn', id: 'sub-1', local: true })
+  host.emit('gb', 'user/message', failure)
+  await until(() => rows().length === 2)
+  // A read-only window must never append to the ledger.
+  const prevReadOnly = rt.readOnly
+  rt.readOnly = () => ({ pid: 999 })
+  try {
+    await rt.subagentFailureNotice('gb', { stopReason: 'error', helper: 'Blocked' })
+    assert.equal(rows().length, 2)
+  } finally {
+    rt.readOnly = prevReadOnly
+  }
+})
+
+test('a helper failure in a running round preserves the idle guard, does not mark the member failed, and stays one event', async (t) => {
+  const host = await start(t)
+  const round = host.round('c1', host.say('@Writer 检查'))
+  await settle(() => host.agentOf('gb').calls.length === 1)
+  host.begin('gb')
+  host.emit('gb', 'subagent/catalog', { childId: 'sub-1', label: 'Check' })
+  const room = rt.roomOf('r1')
+  room.idleRelays = 4
+  await rt.subagentFailureNotice('gb', { stopReason: 'error', helper: 'Check' })
+  assert.equal(room.idleRelays, 4)
+  assert.equal(room.log.filter(row => row.reason === 'helper-failed').length, 1)
+  assert.equal(room.log.filter(row => row.botId === 'b').length, 0)
+  host.emitScoped('gb', 'subagent/end', { id: 'sub-1', stopReason: 'completed', runId: 'run-1', provider: 'spawn', local: true })
+  host.finish('gb', '[PASS]')
+  await settle(() => round() !== undefined)
+  assert.equal(round().failed, undefined, 'member own turn was not marked failed')
+})
+
 test('approval keeps a member inside its parallel batch until all results arrive', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const host = await start(t)
@@ -1971,6 +2123,31 @@ async function batchInBackground(t, services) {
   }
   return { host, relay }
 }
+
+// Codex on the change line: inside a parallel batch, a change-only completion line must not
+// wake the caller early. It carries `quiet`, the same as an early text result; the batch
+// end still wakes the caller exactly once.
+test('a late pass inside a parallel batch posts its change line quietly', async (t) => {
+  const { host, relay } = await batchInBackground(t)
+  const changes = { sessionId: 'gb', seq: 21, turn: 5, total: 1, added: 4, deleted: 1, files: [{ path: 'batch.md', added: 4, deleted: 1 }] }
+  rt.turnChanges = async sessionId => (sessionId === 'gb' ? changes : undefined)
+  host.emit('gb', 'tool/result', { callId: 'k1' })
+  host.finish('gb', '[PASS]')
+  await settle(() => host.agentOf('r1').calls.length > 0)
+  const post = host.takePost()
+  assert.equal(post.source.done, true)
+  assert.equal(post.source.quiet, true)
+  assert.deepEqual(post.source.changes, changes)
+  const read = host.round('late-pass-batch', post)
+  await settle(() => read() !== undefined)
+  assert.equal(host.agentOf('ga').calls.length, 1, 'the caller is not woken early')
+  // Tester finishes: the batch closes and the caller is woken once, not twice.
+  host.emit('gc', 'tool/result', { callId: 'k2' })
+  host.finish('gc', '测试全过。')
+  await relay()
+  await settle(() => host.agentOf('ga').calls.length === 2)
+  assert.equal(host.agentOf('ga').calls.length, 2)
+})
 
 test('a batch wake names who finished and carries a result that rolled out of the lines before the round', async (t) => {
   const { host, relay } = await batchInBackground(t)
@@ -2383,6 +2560,30 @@ test('a late reply and post_to_group keep missing-file claims when opening a gro
   assert.deepEqual(fromTool.source.claims, { missingFiles: [postedMissing] })
 })
 
+// Codex on the change line: a late turn that changed files and ended with [PASS] used to
+// read the summary and then post nothing on either return path. Its completion line now
+// carries the change card; a late pass that changed nothing still posts nothing.
+test('a late pass that changed files posts its completion line', async (t) => {
+  const host = await start(t)
+  const changes = { sessionId: 'gb', seq: 12, turn: 3, total: 1, added: 2, deleted: 0, files: [{ path: 'late.md', added: 2, deleted: 0 }] }
+  rt.turnChanges = async () => changes
+  await rt.lateRoomReply('gb', {}, '[PASS]', { toolCount: 1 })
+  const post = host.takePost()
+  assert.equal(post.source.done, true)
+  assert.deepEqual(post.source.changes, changes)
+  const relay = host.round('late-pass', post)
+  await settle(() => relay() !== undefined)
+  const rows = rt.groupRows('r1', 1, Number.MAX_SAFE_INTEGER)
+  assert.deepEqual(rows.find(row => row.kind === 'done')?.changes, changes)
+})
+
+test('a late pass that changed nothing posts nothing', async (t) => {
+  const host = await start(t)
+  rt.turnChanges = async () => undefined
+  await rt.lateRoomReply('gb', {}, '[PASS]', { toolCount: 1 })
+  assert.equal(host.agentOf('r1').calls.length, 0)
+})
+
 test('the first completed member of a parallel batch keeps its file claim', async (t) => {
   const { host } = await batchInBackground(t)
   const missing = join(host.home, 'missing-report.md')
@@ -2581,11 +2782,33 @@ test('after a restart a member whose pick-up is still queued keeps its batch wai
   const batch = { key: 'k-queued', roomId: 'r1', by: 'a', pending: ['b'], done: ['Tester'], doneIds: ['c'], results: [], worked: true, answered: false, at: 1 }
   const note = { at: 1, args: { toId: 'b', sessionId: 'gb', role: 'room', roomId: 'r1', note: 'your turn', text: '整理文档', exchangeId: 'x-queued', askedBy: 'a' } }
   const host = await start(t, undefined, undefined, undefined, undefined, undefined, { roomBatches: { 'k-queued': batch } }, { 'inflight.json': { turns: {}, queued: { gb: [note] } } })
+  // The Session's readable history establishes that this exchange was not taken up.
+  const inspected = []
+  host.ctx.sessionController.inspect = async id => { inspected.push(id); return { events: [] } }
   t.mock.timers.tick(3000)
   await settle(() => host.agentOf('gb').calls.length === 1)
+  assert.deepEqual(inspected, ['gb'])
   for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve))
   assert.deepEqual(rt.state.roomBatches['k-queued']?.pending, ['b'])
   assert.equal(host.agentOf('r1').calls.length, 0, 'the caller is not woken before the member answers')
+})
+
+test('a group batch stays pending when a queued delivery history cannot be inspected', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const batch = { key: 'k-uncertain', roomId: 'r1', by: 'a', pending: ['b'], done: ['Tester'], doneIds: ['c'], results: [], worked: true, answered: false, at: 1 }
+  const note = { at: 1, args: { toId: 'b', sessionId: 'gb', role: 'room', roomId: 'r1', note: 'your turn', text: '整理文档', exchangeId: 'x-uncertain', askedBy: 'a' } }
+  const host = await start(t, undefined, undefined, undefined, undefined, undefined, { roomBatches: { 'k-uncertain': batch } }, { 'inflight.json': { turns: {}, queued: { gb: [note] } } })
+  const notices = []
+  const noteFailure = rt.noteFailure
+  rt.noteFailure = entry => { notices.push(entry); return noteFailure(entry) }
+  host.ctx.sessionController.inspect = async () => { throw new Error('history unavailable') }
+  t.mock.timers.tick(3000)
+  await settle(() => notices.some(entry => entry.code === 'RESUME_DELIVERY_UNCERTAIN'))
+  await rt.settleRoomBatches()
+  assert.equal(host.agentOf('gb').calls.length, 0, 'an uncertain delivery is not resent')
+  assert.deepEqual(rt.unreadOf('gb').map(item => item.exchangeId), ['x-uncertain'])
+  assert.deepEqual(rt.state.roomBatches['k-uncertain']?.pending, ['b'])
+  assert.equal(host.agentOf('r1').calls.length, 0, 'the caller is not woken on an uncertain delivery')
 })
 
 // Stop all while a round finishes: what waited on it does not start once it is done.

@@ -54,7 +54,7 @@ function fixture({ statePath } = {}) {
     setDownloadHandler(key, handler) { handlers.set(key, handler) },
   }
   const added = []
-  let window = { contentView: { addChildView(view) { added.push(view) } } }
+  let window = { contentView: { addChildView(view) { added.push(view) }, removeChildView() {} } }
   const manager = new BotViews({ window: () => window, WebContentsView, guests, origin: () => 'http://127.0.0.1:43117', statePath, onChange: change => changes.push(change) })
   return { manager, handlers, views, changes, added, setWindow: (next) => { window = next } }
 }

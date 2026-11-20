@@ -10,6 +10,8 @@ Images on Goal cards are attached to the original task, with references and oper
 
 Task state and task execution are separate. Moving a schedulable Bot task from a waiting lane to a runnable lane creates a durable scheduled action. The card becomes ready only after admission is recorded; it becomes working when the Bot claims it. A report is not acceptance, a queue entry is not proof of execution, and a finished turn is not proof that acceptance criteria passed. Existing pauses, stops, unknown outcomes, user decisions and external blockers remain binding.
 
+When a parent card is blocked by specific child items, its blocker records those item IDs (or resolves them from an existing blocker note that names the items). Only those children remain runnable while the parent is blocked. Once every referenced child is independently accepted and is neither stale nor blocked, the store clears the parent blocker and readies the parent again. Unrelated parent blockers continue to hold child work.
+
 The instance owner's own unregistered personal cards may additionally carry a
 personal progress marker: to do, doing, or personally finished. This marker is
 written through the same durable operation receipt and revision checks as other

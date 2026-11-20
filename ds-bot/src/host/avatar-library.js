@@ -88,8 +88,8 @@ export function install(rt) {
         if (index.length >= MAX_PHOTOS) throw new Error(`The avatar library holds at most ${MAX_PHOTOS} photos.`)
         const entry = { id, name: name || 'photo', mime, bytes: bytes.length, createdAt: Date.now() }
         await writeImage(entry, bytes)
+        await writeIndex([...index, entry])
         index.push(entry)
-        await writeIndex(index)
         result.imported.push(entry)
       } catch (error) {
         result.failed.push({ name, message: error?.message ?? String(error) })
@@ -103,7 +103,7 @@ export function install(rt) {
   // is asked for page by page.
   const libraryView = async ({ offset = 0, limit = MAX_LISTED } = {}) => {
     const index = await readIndex()
-    const ordered = [...index].sort((a, b) => b.createdAt - a.createdAt)
+    const ordered = [...index].reverse().sort((a, b) => b.createdAt - a.createdAt)
     const start = Math.max(0, Math.floor(Number(offset)) || 0)
     const count = Math.min(MAX_LISTED, Math.max(1, Math.floor(Number(limit)) || MAX_LISTED))
     const items = []

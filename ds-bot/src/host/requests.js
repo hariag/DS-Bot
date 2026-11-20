@@ -95,7 +95,8 @@ export function install(rt) {
     receipts()[request.key] = fresh
     const promise = (async () => {
       try {
-        await rt.save()
+        // Ordinary saves may be skipped when this host closes or loses the lock.
+        await rt.save({ required: true })
       } catch (error) {
         delete receipts()[request.key]
         rt.warn('ds-bot: the receipt of the request was not saved: %s', error)
