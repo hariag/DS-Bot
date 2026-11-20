@@ -170,6 +170,7 @@ export const referenceNote = references => (references?.length
 const ROOM_REPLY = 'Reply with your message for the group, no name prefix: in a discussion, one or two short messages. When you are asked to do something, call your first tool in the same step as your opening note — if you stop without a tool call, your turn ends and no work runs. The group does not wait for you and sees what you write while you work: say what you will do, write again only when something matters, and end with the result, never a promise to do it later. Reply [PASS] to stay silent when you have nothing new to add or the message is for someone else.'
 const ROOM_INSPECTION_REPLY = 'This scheduled goal inspection requires action even if there are no new group messages. First call group_goal show for this group. If show fails, report the failure. Only after successfully reading the current goal may you reply [PASS] when nothing changed; follow the scoped inspection duties above.'
 const ROOM_CALLS = 'Writing "@Name" calls that member at once, to answer or do what you ask, as soon as your message is posted. When several independent goal tasks are ready, call every distinct owner in the same message, with one separate line starting with the exact plain-text @Name and listing that owner\'s task ID, action and deadline. Keep dependent tasks in order: call the prerequisite owner first and wait for its result before calling the next owner. Active @Name callouts must be outside backticks, code blocks and Markdown links; mentions there are literal text, not highlighted or dispatched. Members called in one message start together and do not see each other\'s replies until they post. When a member finishes work you gave it, you answer its result. To only mention a member, write its name without "@".'
+const RECEIPT_FOLLOWUP_DUTY = followup => `Required continuation for task ${followup?.taskId ?? '(task id unavailable)'}: this turn was opened because its owner replied to a status question. Do not reply [PASS], only acknowledge the reply, or leave the task at “waiting”. First read the current group goal and the original board item. Compare the self-report with existing, verifiable evidence and the task acceptance. Then take one concrete next step now: if evidence is sufficient, record the finding within your authority and ask the named independent reviewer to verify it; if evidence is missing, write one separate plain-text @Name line to the specific owner (the original owner is ${followup?.ownerName ?? 'shown on the card'}) or next responsible person naming the exact missing evidence/action and a deadline; if blocked, name the specific person who can clear the blocker or make the decision, with the exact request and deadline. Keep @Name outside backticks, code blocks and Markdown links. Do not mark reported work done from a self-report alone. Continue any independent eligible task while waiting, and leave a concrete next check.`
 
 const slotLabel = (slot, self) => {
   if (slot.status === 'speaking') return slot === self ? `${slot.name} (you, now)` : `${slot.name} (answering now)`
@@ -601,6 +602,7 @@ export function install(rt) {
       working.length > 0 ? `Still at work on what they were asked; each posts here when done: ${working.map(item => `${item.bot.name} (${minutesSince(item.since)} min${item.unread > 0 ? `, with ${item.unread} group message(s) it has not read yet` : ''})`).join(', ')}.` : '',
       ...placeLines(round, slot),
       round.reviewInspect && leads ? ROOM_INSPECTION_REPLY : ROOM_REPLY,
+      round.goalReceiptFollowup && leads ? RECEIPT_FOLLOWUP_DUTY(round.goalReceiptFollowup) : '',
     ].filter(Boolean).join('\n\n')
     const shown = [...earlier, ...owed.flatMap(result => result.line ?? []), ...current]
     return { text, images: shown.flatMap(line => line.images ?? []), files: shown.flatMap(line => line.files ?? []) }
@@ -1578,6 +1580,7 @@ let final = typeof reply === 'string' && !isPass(reply) ? reply : undefined
       ...(opener.goal === 'nudge' ? { goalNudge: true } : {}),
       ...(opener.reviewId ? { goalReviewId: opener.reviewId } : {}),
       ...(opener.reviewInspect ? { reviewInspect: true } : {}),
+      ...(opener.goalReceiptFollowup ? { goalReceiptFollowup: opener.goalReceiptFollowup } : {}),
       ...(opener.goal === 'resume' ? { goalResume: true } : {}),
       ...(stoppedOnly ? { stoppedOnly: true } : {}),
       ...(references.length > 0 ? { references, shown: [] } : {}),
@@ -1859,6 +1862,7 @@ let final = typeof reply === 'string' && !isPass(reply) ? reply : undefined
   function callPost(room, round, sender, text, extra) {
     if (extra.failed !== undefined && !extra.askedBy) return false
     if (extra.resumed || extra.stopped) return false
+    if (extra.goalReceiptFollowup) round.goalReceiptFollowup = extra.goalReceiptFollowup
     const post = { ...extra, botId: sender.id, name: sender.name, text }
     const everyone = room.members.map(rt.botOf).filter(Boolean)
     const named = (mentionsOf(post, everyone) ?? mentionsIn(text, everyone)).found
@@ -1941,8 +1945,11 @@ let final = typeof reply === 'string' && !isPass(reply) ? reply : undefined
         const admin = room.members.includes(result.adminId) ? rt.botOf(result.adminId) : undefined
         const handoff = admin === undefined ? ''
           : `\n@${admin.name} Review this self-report against existing evidence and take the next authorized step. It is not acceptance; do not restart the original work.`
-        await postToRoom(room, member, `Status reply for ${result.taskId} (self-report only, not acceptance): ${text}${handoff}`, {
-          late:true, ...(admin === undefined ? { quiet:true } : { askedBy:admin.id }),
+        await postToRoom(room, member, `Status reply for ${result.taskId}: ${text}\nSelf-report only; not acceptance.${handoff}`, {
+          late:true, ...(admin === undefined ? { quiet:true } : {
+            askedBy:admin.id,
+            goalReceiptFollowup:{ taskId:result.taskId, ownerName:member.name },
+          }),
         })
       }
       return
