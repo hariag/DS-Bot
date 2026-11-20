@@ -94,7 +94,7 @@
   "dsBot": {
     "build": "aios-20261120.7",
     "fork": "hariag/DS-Bot",
-    "forkCommit": "ef17afb5e500ab5afc94bbf4683d25468d1ef151",
+    "forkCommit": "0a679d6fb681c4377a76c53883e9548860ce6dba",
     "upstreamCommit": "5e9b7da8882da3b68d8a0624342708c2150a9156",
     "changes": [
       "goal-pass-gate",
