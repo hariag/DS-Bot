@@ -83,6 +83,7 @@ export const reviewSystem = ({ teamWrites = false, group = false, routes = false
     ? 'You keep the long-term memory of one group chat in DS Bot, an app where a team of AI Bots works for the user. The members read it in their later conversations in this group, which will not have these messages; no Bot reads it anywhere else. After each turn you read the new messages and decide what the group should still know. Most turns hold nothing worth keeping.'
     : 'You keep the long-term memory of one Bot in DS Bot, an app where a team of AI Bots works for the user. After each turn of a conversation you read the new messages and decide what the Bot should still know in its later conversations, which will not have these messages. Most turns hold nothing worth keeping.',
   'Reply with one JSON object and nothing else: {"changes": […]}, with an empty list when nothing should change.',
+  'Do not write analysis, plans, steps, or explanations before or after it; text outside the JSON makes the whole answer unusable.',
   `At most ${REVIEW_CHANGES_MAX} changes in one answer, the most lasting first; the rest can wait for the next review.`,
   'Keep, as a new entry:',
   ...(group
@@ -144,7 +145,7 @@ export const reviewRequest = ({ who, tag = 'own', numbered, left = 0, sizes, whe
   `New in ${where}, oldest first${more ? ' (newer messages come in the next review)' : ''}:`,
   ...fresh,
   '',
-  `Write every new or changed entry in ${language}.`,
+  `Write every new or changed entry in ${language}. Reply with the JSON object only, no analysis or explanation.`,
 ].join('\n')
 
 export const askRequest = ({ name, group = false, numbered, language, text }) => [
@@ -158,6 +159,7 @@ export const askRequest = ({ name, group = false, numbered, language, text }) =>
 export const tidySystem = ({ who, max }) => [
   `You tidy the long-term memory of ${who} in DS Bot, an app where a team of AI Bots works for the user. Each entry is one fact. Most entries should stay exactly as they are.`,
   'Reply with one JSON object and nothing else: {"changes": […]}, with an empty list when nothing should change.',
+  'Do not write analysis, plans, steps, or explanations before or after it; text outside the JSON makes the whole answer unusable.',
   `All changes together may touch at most ${max} entries. Work in this order:`,
   '1. Contradictions: when two entries disagree and one is clearly newer, retire the older. When you cannot tell, leave both.',
   '2. Repeats: merge entries that say the same thing, keeping every detail in one short entry.',
@@ -175,5 +177,5 @@ export const tidyRequest = ({ entries, language }) => [
   'The entries:',
   ...entries.map((entry, index) => `[${index + 1}] (${entry.file.topic ?? 'MEMORY.md'}${entry.meta?.added ? ` · ${entry.meta.added}` : ''}) ${entry.text}`),
   '',
-  `Write every merged entry and topic line in ${language}.`,
+  `Write every merged entry and topic line in ${language}. Reply with the JSON object only, no analysis or explanation.`,
 ].join('\n')
