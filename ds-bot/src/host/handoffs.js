@@ -15,6 +15,13 @@ import { isOpenPart, ownChatSessions } from './threads.js'
 // Board assignments and release notices have no asking Bot. Their answers stay in the recipient's chat.
 export const answersLocally = info => info.role === 'request' && (info.audience === 'user' || !info.senderSessionId)
 
+// A wait no Bot has answered for this long is closed as stale on the next start.
+// The narrow tests may shorten it; production keeps three days.
+export const STALE_WORK_MS = 72 * 3_600_000
+// One start closes at most this many stale waits, so a saved team cannot turn the
+// sweep into an unbounded burst of deliveries.
+const STALE_WORK_CLOSES = 200
+
 const minutes = since => {
   const count = Math.floor((Date.now() - since) / 60_000)
   return count < 1 ? 'for less than a minute' : `for ${count} min`
@@ -343,20 +350,27 @@ export function install(rt) {
     if (work === undefined || parent === undefined || !parent.open.includes(id)) return false
     const target = labelOfWork(work)
     const name = rt.botOf(work.to)?.name ?? work.name ?? (work.room !== undefined ? rt.roomOf(work.room)?.name : undefined) ?? 'the other Bot'
+    const stale = reason === 'stale'
     const text = reason === 'gone'
       ? cap(target) + ' is no longer on the team, so no reply can come back for the work handed to it. The user gave up waiting for that answer: this counts as its result. Go on with the work you were given, and say plainly that this answer is missing.'
-      : 'No reply came back from ' + target + ', and the user gave up waiting for it. This counts as its result: go on with the work you were given, and say plainly that this answer is missing.'
+      : stale
+        ? 'No reply came back from ' + target + ' for more than ' + Math.round(STALE_WORK_MS / 3_600_000) + ' hours, so this wait was closed as stale. This counts as its result: go on with the work you were given, and say plainly that this answer never came.'
+        : 'No reply came back from ' + target + ', and the user gave up waiting for it. This counts as its result: go on with the work you were given, and say plainly that this answer is missing.'
     rememberAbandoned(id, { at: Date.now(), from: work.from, to: work.to, room: work.room, parent: work.parent, name, reason, ...(parent.to !== undefined ? { waiting: parent.to } : {}) })
     closeWork(id, name, text, { abandoned: true, abandonedAt: Date.now(), abandonedReason: reason })
     // The wait is over now, not when the Bot next reads the result.
     parent.open = parent.open.filter(other => other !== id)
     save()
     // The Bot that waited goes on with its work now, the same way a reply brings it back.
+    // A stale closure at start is not pushed to it: the result waits in the work, and
+    // waking every Bot whose old hand-off expired would be a burst of their own.
     const waitingBot = parent.to
-    if (waitingBot !== undefined && rt.botOf(waitingBot) !== undefined) {
+    if (reason !== 'stale' && waitingBot !== undefined && rt.botOf(waitingBot) !== undefined) {
       const said = reason === 'gone'
         ? target + ' is no longer on the team, so the work you handed it has no answer. The user gave up waiting for it; this is its result. Go on with the work you were given.'
-        : 'No reply came back from ' + target + ', and the user gave up waiting for it. This is its result: go on with the work you were given.'
+        : reason === 'stale'
+          ? 'No reply came back from ' + target + ' after ' + Math.round(STALE_WORK_MS / 3_600_000) + ' hours, so this wait was closed as stale. This is its result: go on with the work you were given and say that this answer never came.'
+          : 'No reply came back from ' + target + ', and the user gave up waiting for it. This is its result: go on with the work you were given.'
       void rt.deliver({
         fromId: work.to !== undefined && rt.botOf(work.to) !== undefined ? work.to : undefined,
         fromName: name, toId: waitingBot, text: said, role: 'reply', replyTo: id,
@@ -364,6 +378,36 @@ export function install(rt) {
       }).catch(error => rt.warn('ds-bot: giving up the wait for %s was not delivered: %s', waitingBot, error))
     }
     return true
+  }
+
+  // A wait nobody answered for days is not a wait any more. Close the unanswered
+  // leaf first: the work above it then goes on with an explicit "no reply" result,
+  // and the next pass may find its own parent stale too. This keeps the hand-off
+  // ledger equal to the work actually in flight instead of growing for weeks.
+  // Applies only to an addressee that still exists: a removed Bot or group is
+  // reconcileLostWorks' job, and a subagent run is left alone on purpose.
+  function reconcileStaleWorks(now = Date.now()) {
+    if (rt.readOnly?.() !== undefined) return 0
+    let closed = 0
+    for (let pass = 0; pass < 4; pass += 1) {
+      let changed = false
+      for (const [id, work] of Object.entries(works())) {
+        if (closed >= STALE_WORK_CLOSES) return closed
+        if (work.parent === undefined || works()[work.parent]?.open?.includes(id) !== true) continue
+        if (work.child !== undefined) continue
+        if (work.to === undefined && work.room === undefined) continue
+        if ((work.open ?? []).length > 0) continue
+        if ((work.results ?? []).length > 0) continue
+        if (!Number.isFinite(work.at) || now - work.at < STALE_WORK_MS) continue
+        if (abandonWork(id, 'stale')) {
+          closed += 1
+          changed = true
+        }
+      }
+      if (!changed) break
+    }
+    if (closed > 0) rt.warn('ds-bot: closed %d stale hand-off wait(s) older than %d hours', closed, Math.round(STALE_WORK_MS / 3_600_000))
+    return closed
   }
 
   // A restart settles the waits whose target no longer exists, with the same path as a
@@ -387,7 +431,10 @@ export function install(rt) {
   // is installed before the ones that load it.
   ctx?.effect?.(() => {
     const timer = setTimeout(() => {
-      void rt.load().then(() => reconcileLostWorks()).catch(error => rt.warn('ds-bot: lost waits not settled: %s', error))
+      void rt.load().then(() => {
+        reconcileLostWorks()
+        reconcileStaleWorks()
+      }).catch(error => rt.warn('ds-bot: lost waits not settled: %s', error))
     }, 0)
     return () => clearTimeout(timer)
   }, 'ds-bot: lost hand-offs')
@@ -501,5 +548,5 @@ export function install(rt) {
     return lines.join('; ')
   }
 
-  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork, abandonWork, abandonedWork: takeAbandoned })
+  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork, abandonWork, abandonedWork: takeAbandoned, reconcileStaleWorks, staleWorkMs: () => STALE_WORK_MS })
 }
