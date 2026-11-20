@@ -32488,7 +32488,7 @@ function GroupSettingsForm({ room: room2, roster, actions, run: run2, onDeleted 
       (0, import_react38.createElement)(
         Row,
         { label: t("Notice"), hint: t("Every member reads it before speaking in this group."), stack: true },
-        (0, import_react38.createElement)(InlineText, { label: t("Group notice"), value: room2.notice, multiline: true, maxLength: 2e3, placeholder: t("Shared instructions every member reads before speaking…"), onSave: (notice) => update({ notice }) })
+        (0, import_react38.createElement)(InlineText, { label: t("Group notice"), value: room2.notice, multiline: true, maxLength: 4e3, placeholder: t("Shared instructions every member reads before speaking…"), onSave: (notice) => update({ notice }) })
       )
     ),
     (0, import_react38.createElement)(
