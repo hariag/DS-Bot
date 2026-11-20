@@ -1,6 +1,7 @@
 // Memory as text: the entry and file format (Agent Memory Repo), and the checks an
 // entry passes. Nothing here touches the disk.
 import { createHash, randomBytes } from 'node:crypto'
+import { readChanges } from './json-reply.mjs'
 
 // Sizes, in characters of entry text: metadata does not count. Each MEMORY.md rides in
 // every request of a conversation, so its size is what a scope may always have in view;
@@ -273,19 +274,11 @@ export function reviewEntries(home, team, budget = REVIEW_MEMORY_MAX, about = ''
 // are saved. Anything else is no answer: the review says so and moves on — the
 // same lines are not read again.
 export function parseReview(text) {
-  const start = text.indexOf('{')
-  const end = text.lastIndexOf('}')
-  if (start === -1 || end <= start) return undefined
-  let value
-  try {
-    value = JSON.parse(text.slice(start, end + 1))
-  } catch {
-    return undefined
-  }
-  if (value === null || typeof value !== 'object' || !Array.isArray(value.changes)) return undefined
+  const value = readChanges(text)
+  if (value === undefined) return undefined
   const changes = []
   const leftOut = []
-  for (const change of value.changes) (wellFormed(change) ? changes : leftOut).push(change)
+  for (const change of value) (wellFormed(change) ? changes : leftOut).push(change)
   return { changes, leftOut }
 }
 const wellFormed = (change) => {

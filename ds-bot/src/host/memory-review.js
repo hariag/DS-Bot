@@ -295,9 +295,18 @@ export function installReview(rt, memory) {
       const sizes = { home: bodySize(homeFiles[0]), homeLimit: mainLimit(home), team: bodySize(teamFiles[0]), teamLimit: mainLimit(TEAM) }
       const earlier = batch.earlier.map(line => reviewLine(line.who, line.text, keeper))
       const language = writtenIn(read.filter(line => line.who === 'user').map(line => line.text.replace(/^User: /, '')), languageNow())
-      const reply = await botShot(keeper, reviewSystem({ teamWrites: teamWrites(), group, routes: !group && rt.isMain(keeper.id), rooms: group || !teamWrites() ? [] : roomsOf(keeper).map(room => room.name) }), reviewRequest({ who, tag: tagged, numbered, left, sizes, where: batch.where, earlier, fresh: fresh.texts, more, language }), tag)
+      const system = reviewSystem({ teamWrites: teamWrites(), group, routes: !group && rt.isMain(keeper.id), rooms: group || !teamWrites() ? [] : roomsOf(keeper).map(room => room.name) })
+      const request = reviewRequest({ who, tag: tagged, numbered, left, sizes, where: batch.where, earlier, fresh: fresh.texts, more, language })
+      let reply = await botShot(keeper, system, request, tag)
       if (!alive()) return
-      const parsed = parseReview(reply)
+      let parsed = parseReview(reply)
+      // One corrective retry when the model explained instead of answering. The
+      // entries are already in the request, so this repeats no work and no entry.
+      if (parsed === undefined && alive()) {
+        reply = await botShot(keeper, system, request + '\n\nYour previous reply had no JSON list. Reply now with the JSON object only, and no other text.', tag)
+        if (!alive()) return
+        parsed = parseReview(reply)
+      }
       // An answer that is no list of changes keeps nothing of the batch; the miss
       // is said, and the place moves on — the same lines are not read again. A
       // change that is not well formed is set aside and said, one by one.
