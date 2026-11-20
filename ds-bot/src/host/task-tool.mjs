@@ -1,4 +1,4 @@
-export const OWNER_REPORT_FIELDS = 'For board_task report, send value exactly as {"kind":"personal","environment":"where you checked","evidence":"what you checked and observed"}. Include relevant Git commit and blob IDs in the evidence text.'
+export const OWNER_REPORT_FIELDS = 'For board_task report, send value exactly as {"kind":"personal","environment":"where you checked","evidence":"what you checked and observed"}. When the host has an evidence repository configured, {"kind":"git","targetCommit":"<40 or 64 hex>","targetBlob":"<40 or 64 hex>","evidence":"..."} is also accepted and checked against that repository. Include relevant Git commit and blob IDs in the evidence text.'
 export const REVIEW_FIELDS = 'For board_task review, send value exactly as {"result":"pass","evidence":"your independent findings"}. Use "pass" only after independently verifying the acceptance criteria. Use "rework" and identify the gap if they are unmet.'
 
 function evidenceFieldError(args, error) {
