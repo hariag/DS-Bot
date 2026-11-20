@@ -122,6 +122,7 @@ const triggerOf = info => ({
   ...(info.senderRoomId ? { senderRoomId: info.senderRoomId } : {}),
   ...(info.reviewId ? { reviewId: info.reviewId } : {}),
   ...(info.reviewInspect === true ? { reviewInspect: true } : {}),
+  ...(info.reviewReceipt === true ? { reviewReceipt: true } : {}),
   ...(info.groupKickoff === true ? { groupKickoff: true } : {}),
 })
 
@@ -587,6 +588,7 @@ export function install(rt) {
   const roomNotesForTurn = (sessionId, record) => {
     if (!record || typeof record !== 'object') return []
     const trigger = record?.trigger
+    if (trigger?.reviewReceipt === true) return []
     const explicit = record?.roomId ?? trigger?.roomId
     if (typeof explicit === 'string' && explicit !== '') return [{role:'room',roomId:explicit,toId:record?.botId}]
     const rooms = Object.values(rt.state?.rooms ?? {})
@@ -687,6 +689,7 @@ export function install(rt) {
       if (!Array.isArray(list)) { notes.push({role:'room'}); continue }
       for (const item of list) {
         const args = item?.args
+        if (args?.reviewReceipt === true) continue
         if (!args || typeof args !== 'object' || typeof args.role !== 'string') {
           for (const unknown of roomNotesForTurn(sessionId, {}))
             if (!unknown.roomId || unknown.roomId === roomId) notes.push(unknown)
@@ -822,14 +825,14 @@ export function install(rt) {
     const retained = retainedAtStartup.has(record)
     // Both the marker and the matching archive were already on disk. The
     // startup summary covers this hold. A review may still need reconciliation.
-    if (retained && !record.trigger?.reviewId) return
+    if (retained && (!record.trigger?.reviewId || record.trigger.reviewReceipt === true)) return
     if (!retained) {
       holdTurn(sessionId, record)
       update(sessionId, current => current === undefined || current === record
         ? { ...record, recoveryHold: heldReason } : current)
     }
     await persist({ required: true })
-    if (record.trigger?.reviewId) {
+    if (record.trigger?.reviewId && record.trigger.reviewReceipt !== true) {
       await rt.goalReviewFailed?.(rt.roomOf(record.roomId), sessionId, record.trigger.reviewId)
     }
     if (!retained) rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_UNCERTAIN_HOLD', text: `Interrupted work in ${sessionId} was retained without replay; inspect its original result before recovery.`, sessionId })
@@ -907,6 +910,13 @@ export function install(rt) {
       }
       if (!agents.has(target)) agents.set(target, await rt.resolveAgent(target))
       const agent = agents.get(target)
+      if (args.reviewReceipt === true) {
+        held.add(args.exchangeId)
+        const waiting = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
+          .filter(message => message.source?.exchangeId === args.exchangeId)
+        rt.keepQueued(target, waiting, () => { for (const message of waiting) agent.inbox?.remove?.(message.id) })
+        continue
+      }
       if (args.reviewId && args.role === 'room') {
         const room = rt.roomOf(args.roomId)
         const stillAllowed = rt.goalReviewAllowed?.(room, args.reviewId) === true

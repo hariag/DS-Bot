@@ -587,7 +587,7 @@ export function install(rt) {
       notice,
       rt.projectCoordinationPrompt?.(room, member),
       goal,
-      ...(round.reviewInspect ? ['Earlier delivery outcomes are unknown for specific owners. First inspect the original handoff and task. Do not reassign, restart or repeat work for an uncertain recipient, and do not guess an ambiguous owner. If the original recipient is uniquely identified, you may make one status-only group reply with plain-text @Name and the task ID, asking whether that original handoff was received and what its current status/next evidence is; explicitly say not to repeat the work. For a known reported task, ask only for its exact missing evidence. Include a response deadline and next check, do not put @Name in backticks/code and never use @all. You may advance independent, ready tasks owned by other unblocked members only through the scoped actions listed in the group goal. Do not change task state or pass a stage.'] : []),
+      ...(round.reviewInspect ? ['Earlier delivery outcomes are unknown for specific owners. First inspect the original handoff and task. Do not reassign, restart or repeat work for an uncertain recipient, and do not guess an ambiguous owner. If the original recipient is uniquely identified, call group_goal review-follow-up with the task ID and fingerprint from show to send a status-only group reply with plain-text @Name and the task ID, asking whether that original handoff was received and what its current status/next evidence is; explicitly say not to repeat the work. For a known reported task, ask only for its exact missing evidence. Include a response deadline and next check, do not put @Name in backticks/code and never use @all. You may advance independent, ready tasks owned by other unblocked members only through the scoped actions listed in the group goal. Do not change task state or pass a stage.'] : []),
       leads ? adminNote(room) : '',
       earlier.length ? `Earlier in the group, before this round (context only):\n${transcript(earlier, memberText(room))}` : '',
       owed.length ? `Results of the work you asked for that the lines here leave out (oldest first):\n${owed.map(result => (result.line
@@ -1934,6 +1934,12 @@ let final = typeof reply === 'string' && !isPass(reply) ? reply : undefined
       if(!isPass(text))await postToRoom(room,member,safeKickoffText(room,text),{late:true,quiet:true})
       return
     }
+    if (info.reviewReceipt === true) {
+      const answered = !isPass(text)
+      const taskId = await rt.goalReceiptResult(room, sessionId, info, answered)
+      if (answered && taskId) await postToRoom(room, member, `Status reply for ${taskId}: ${text}`, { late:true, quiet:true })
+      return
+    }
     if (info.reviewInspect === true) {
       if (!isPass(text)) await postToRoom(room, member, text, { late: true, quiet: true })
       return
@@ -2037,6 +2043,7 @@ let final = typeof reply === 'string' && !isPass(reply) ? reply : undefined
       await postToRoom(room,member,safeKickoffText(room,text),{progress:true,quiet:true})
       return
     }
+    if (info?.reviewReceipt === true) return
     if (info?.reviewInspect === true) {
       await postToRoom(room, member, text, { progress: true, quiet: true })
       return
@@ -2152,6 +2159,10 @@ let final = typeof reply === 'string' && !isPass(reply) ? reply : undefined
     const room = rt.roomOf(owner?.roomId ?? info.roomId)
     const member = rt.botOf(owner?.botId)
     if (room === undefined || member === undefined || !room.members.includes(member.id)) return
+    if (info.reviewReceipt === true) {
+      await rt.goalReceiptResult(room, sessionId, info, false)
+      return
+    }
     // The failed turn answers one call; without that call, every batch of the member ends.
     const owed = info.askedBy !== undefined ? [batchOf(room.id, member.id, info.askedBy)].filter(Boolean) : batchesOf(room.id, member.id)
     for (const batch of owed) leaveBatch(room, batch, member.id, { keep: true })

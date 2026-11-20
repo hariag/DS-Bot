@@ -14,6 +14,7 @@ import { threadCurrentOfPart } from './threads.js'
 import { viaOf } from '../shared/im-platforms.js'
 import { isForbiddenQuota } from '../shared/provider-quota.js'
 import { reminderText } from './schedules.js'
+import { scheduleChangeId } from './room-schedule-delivery.js'
 import { usageChunk } from './usage.js'
 
 // Failures only the user can fix: a key, a sign-in, a balance. They block the Bot
@@ -988,8 +989,17 @@ export function install(rt) {
   }
 
   ctx.on?.('agent/pre-step', async ({ agent, signal }, next) => {
-    const decision = await next()
+    let decision = await next()
     if (decision.kind === 'reject' || signal.aborted || !rt.isBotSession(agent.id)) return decision
+    const receipts = decision.messages.filter(message => message.source?.kind === SOURCE_KIND && message.source.reviewReceipt === true)
+    if (receipts.length) {
+      const other = decision.messages.some(message => !receipts.includes(message)
+        && !['snapshot', 'catalog'].includes(message.source?.form) && !scheduleChangeId(message))
+      if (receipts.length !== 1 || other || !rt.goalReceiptCurrent?.(agent.id, receipts[0].source)) {
+        decision = { ...decision, messages:decision.messages.filter(message => !receipts.includes(message)) }
+        if (!other) return { ...decision, messages:[] }
+      }
+    }
     const entry = live.get(agent.id)
     if (entry === undefined || entry.turn === undefined || entry.recoveryStepHandled) return decision
     // A periodic review must keep its own trigger through every step. A
@@ -1278,7 +1288,7 @@ export function install(rt) {
             // A result for other work than this turn's informs it, and comes back in a
             // turn of its own once this one ends, which goes on with that work.
             entry.later = [...(entry.later ?? []), { info: source, text: textOf(event.data.content).replace(/^\[(?:[^\r\n]*\]\r?\n|[^\]\r\n]*\])/, '') }]
-          } else if ((expectsReply(source) || source.role === 'room') && !answersLocally(source)
+          } else if ((expectsReply(source) || source.role === 'room') && source.reviewReceipt !== true && !answersLocally(source)
             && source.exchangeId !== entry.info?.exchangeId
             && !(entry.joined ?? []).some(joined => joined.info.exchangeId === source.exchangeId)) {
             // A request that lands inside a running turn steers that work but is
@@ -1572,6 +1582,7 @@ export function install(rt) {
           } else if (!stopped && reason?.kind !== 'aborted') {
             // The round moved on without this member; how its turn ends still reaches the group.
             if (failure !== undefined) void rt.lateRoomFailure?.(id, info, failure)
+            else if (info.reviewReceipt === true && (reason?.kind !== 'completed' || inspectIncomplete)) void rt.lateRoomFailure?.(id, info)
             else void rt.lateRoomReply?.(id, info, groupReply(), { shown, toolCount })
           }
         } else if (!retry && speaksInGroup(id, info)) {

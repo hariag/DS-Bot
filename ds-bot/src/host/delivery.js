@@ -22,7 +22,7 @@ export function install(rt) {
     if (abandoned) return `[Waiting given up · ${fromName} did not hand back this work; go on with the work it was for${goesOn}]`
     if (deferred && role === 'reply') return `[Reply from ${fromName} · you read it during your last task; go on with the work it is for now${goesOn}]`
     if (deferred && role === 'report') return `[Group chat "${roomName}" · replies to your post · you read them during your last task; go on with the work they are for now${goesOn}]`
-    if (deferred) return `[Message from ${fromName} · you read it during your last task; answer it now]`
+    if (deferred && role !== 'room') return `[Message from ${fromName} · you read it during your last task; answer it now]`
     if (retried && role !== 'room') return '[Your last reply wrote a tool call as text, so nothing ran]'
     if (resumed && role === 'resume') return '[DeepSeek Harness restarted while you were working]'
     if (resumed && role !== 'room') return `[Message from ${fromName} · DeepSeek Harness restarted while you were working on it]`
@@ -34,6 +34,9 @@ export function install(rt) {
     if (role === 'report') return `[Group chat "${roomName}" · replies to your post${goesOn}]`
     if (role === 'kickoff') return '[Bot team setup]'
     if (role === 'continue') return '[Retry after a failed turn]'
+    // The editor can be the user or a Bot (its own tool call, or a Main Bot's):
+    // the header stays neutral about who changed the profile.
+    if (role === 'update') return '[Your profile was updated — follow the latest version]'
     if (role === 'secret') return '[Secret card]'
     if (audience === 'user') return `[Message from ${fromName} · the user sees your reply here]`
     if (botRequest) return `[Message from ${fromName} · this request's turn returns your final reply]`
@@ -100,7 +103,8 @@ export function install(rt) {
   // which DSH projects for the recipient's model and tools. `length`: the whole message's
   // length when it went as a file (attachLong). `work`: the work (handoffs.js) a
   // result that came back goes on with. `merged`: a request that takes in an earlier
-  // one its recipient had not read, under that one's exchange.
+  // one its recipient had not read, under that one's exchange. `fromPart`: the Session
+  // of the sending Bot, which a reply comes back to when that is a background part.
   async function deliver(args, observation) {
     let admissionStarted = false
     try {
@@ -130,7 +134,7 @@ export function install(rt) {
     }
   }
 
-  async function deliverToAgent({ fromId, fromName: senderName, toId, sessionId, text, role, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false, merged = false, abandoned = false, recordExchange = true, askedBy, fromRoomId, images = [], files = [], length, work, recoveryIds, recoveryKey, reviewId, reviewInspect, groupKickoff, taskAction, preparedMessage }, onAdmission, onAdmitted) {
+  async function deliverToAgent({ fromId, fromName: senderName, toId, sessionId, text, role, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false, merged = false, abandoned = false, recordExchange = true, askedBy, fromRoomId, fromPart, images = [], files = [], length, work, recoveryIds, recoveryKey, reviewId, reviewInspect, reviewReceipt, groupKickoff, taskAction, preparedMessage }, onAdmission, onAdmitted) {
     const from = rt.botOf(fromId)
     const to = rt.botOf(toId)
     if (to === undefined) throw new Error(`Unknown Bot ${toId}`)
@@ -146,10 +150,12 @@ export function install(rt) {
       senderName: fromName,
       ...(work ? { work } : {}),
       ...(fromId ? { senderSessionId: fromId } : {}),
+      ...(fromPart ? { senderPart: fromPart } : {}),
       ...(replyTo ? { replyTo } : {}),
       ...(roomId ? { roomId } : {}),
       ...(reviewId ? { reviewId } : {}),
       ...(reviewInspect ? { reviewInspect: true } : {}),
+      ...(reviewReceipt ? { reviewReceipt: true } : {}),
       ...(groupKickoff === true ? { groupKickoff: true } : {}),
       ...(audience === 'user' ? { audience } : {}),
       ...(deferred ? { deferred: true } : {}),
@@ -168,8 +174,11 @@ export function install(rt) {
     // delivered with no record of it. A resend keeps the record it has; only a merged request
     // replaces it with its added text.
     const book = fromId !== undefined && from !== undefined && recordExchange && EXCHANGE_ROLES.has(role) && !deferred && !resumed && !retried ? pairBook(fromId, toId) : undefined
-    if (book !== undefined && (merged || !rt.ledger.records(book).some(record => record.event === undefined && record.id === exchangeId))) {
-      rt.ledger.append(book, { id: exchangeId, from: fromId, to: toId, role, text, time: Date.now(), ...(length !== undefined ? { length, files } : {}), ...(replyTo ? { replyTo } : {}), ...(audience === 'user' ? { audience } : {}), ...(roomId ? { roomId } : {}) })
+    if (book !== undefined) {
+      if (merged || !rt.ledger.records(book).some(record => record.event === undefined && record.id === exchangeId)) {
+        rt.ledger.append(book, { id: exchangeId, from: fromId, to: toId, role, text, time: Date.now(), ...(length !== undefined ? { length, files } : {}), ...(replyTo ? { replyTo } : {}), ...(audience === 'user' ? { audience } : {}), ...(roomId ? { roomId } : {}) })
+      }
+      // An existing in-memory record can still be waiting for, or have failed, its write.
       await rt.ledger.written(book)
     }
     await rt.ensureCapabilities(targetSessionId)

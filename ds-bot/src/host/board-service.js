@@ -575,6 +575,14 @@ export function install(rt) {
   const project = installProjectCoordination(rt,{defineTool,store:()=>service().store,run,
     availableStore:()=>instance?.store ?? (previouslyBound && !closing && !rt.stopping && !rt.readOnly() ? service().store : undefined)})
 
+  rt.goalItemReviewer = (roomId, itemId) => {
+    if (!itemId || closing || rt.readOnly() !== undefined) return
+    const parents = service().store.list().filter(task => task.scope === `room:${roomId}`
+      && ['feature', 'bugfix'].includes(task.type) && !task.archivedAt && task.status !== 'cancelled'
+      && task.goalItemIds?.includes(itemId))
+    if (parents.length === 1) return parents[0].reviewer
+  }
+
   rt.projectCoordinationPrompt = project.prompt
   let redoPreparation
   const boardCall = (endpoint, payload = {}) => endpoint === 'board-image' ? imageCall(payload) : run(async () => {
