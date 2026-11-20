@@ -75,7 +75,11 @@ test('chat work uses the same card through blocked, rework and independent accep
   assert.equal(store.get('feature').stale, true)
   assert.throws(() => update('feature', 'revalidate', 'qa', {evidence:'Old results'}), /cannot revalidate/)
   update('item', 'revalidate', 'qa', {evidence:'Updated item proof'})
-  assert.equal(update('feature', 'revalidate', 'qa', {evidence:'Rechecked feature'}).stale, false)
+  const reopened = store.get('feature')
+  assert.equal(reopened.stale, false)
+  assert.equal(reopened.blocked, null)
+  assert.equal(reopened.status, 'reported')
+  assert.equal(update('feature', 'review', 'qa', pass).status, 'done')
 })
 
 test('minor releases stay in their group, keep cards as the release members and grant normal dispatch only on launch', t => {

@@ -762,7 +762,7 @@ test('task progress does not postpone the review of every owner', async (t) => {
   assert.equal(host.agentOf('r1').calls.length, 1)
   const prompt = host.rt.goalBlock(room, host.rt.state.bots.a, { nudge: true })
   assert.match(prompt, /original cards, items, owners/)
-  assert.match(prompt, /do not duplicate an outstanding or uncertain message/i)
+  assert.match(prompt, /do not duplicate an outstanding or uncertain assignment/i)
   assert.match(prompt, /assigned independent reviewer/)
 })
 
