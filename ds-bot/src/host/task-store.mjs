@@ -479,7 +479,12 @@ const releaseIsDone = release => {
     if (Array.isArray(parent.blocked.itemTaskIds)) return parent.blocked.itemTaskIds
     const text = [parent.blocked.reason, parent.blocked.condition].filter(value => typeof value === 'string').join('\n')
     if (!text) return []
-    return getAll().filter(task => task.parentTaskId === parent.id && mentionsItemId(text, task.id)).map(task => task.id)
+    const children = getAll().filter(task => task.parentTaskId === parent.id)
+    if (/(?:子任务|任务项|任务列表|全部任务|所有任务|child\s*(?:tasks?|items?)|item\s*tasks?|all\s+(?:children|child\s+tasks?|items?))/i.test(text)) {
+      return children.map(task => task.id)
+    }
+    return children.filter(task => mentionsItemId(text, task.id)
+      || (typeof task.title === 'string' && task.title.length >= 2 && text.includes(task.title))).map(task => task.id)
   }
   // A parent is blocked automatically when one of its accepted items regresses.
   // Re-check that machine-managed block whenever the parent or any item changes:
@@ -518,8 +523,14 @@ const releaseIsDone = release => {
     })) return
     const next = { ...parent, revision:parent.revision + 1 }
     delete next.blocked
-    save(parent, next)
-    ready(next)
+    if (next.status === 'reported') {
+      next.actionRevision = next.revision
+      save(parent, next)
+      action(next, 'review', next.reviewer)
+    } else {
+      save(parent, next)
+      ready(next)
+    }
   }
   const finishAction = (id, kind) => {
     const changes = db.prepare("UPDATE actions SET state='done' WHERE task_id=? AND kind=? AND state='accepted'").run(id, kind).changes
