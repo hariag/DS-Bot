@@ -1161,17 +1161,32 @@ function AttachmentTile({ scope, task, image, request, canRemove, canCover, isCo
 function ImageUploader({ task, disabled, onUpload }) {
   const [queue, setQueue] = useState([])
   const [error, setError] = useState('')
-  const [base, setBase] = useState(null)
   const [dragging, setDragging] = useState(false)
   const [saving, setSaving] = useState(false)
+  const busy = useRef(false)
   const input = useRef(null)
   const urls = useRef(new Set())
   useEffect(() => () => { for (const url of urls.current) URL.revokeObjectURL(url); urls.current.clear() }, [])
   const remove = image => { URL.revokeObjectURL(image.url); urls.current.delete(image.url); setQueue(current => current.filter(item => item.uploadId !== image.uploadId)) }
+  // Upload against the current revision, not the one from when the files were chosen:
+  // a pasted image must survive the card moving to Working. The host still rejects a
+  // real revision conflict, and the queue stays for a retry.
+  const upload = async list => {
+    if (disabled || busy.current || !list.length) return
+    busy.current = true; setSaving(true); setError('')
+    try {
+      const result = await onUpload(task, list)
+      if (result === 'committed') {
+        const done = new Set(list.map(image => image.uploadId))
+        for (const image of list) { URL.revokeObjectURL(image.url); urls.current.delete(image.url) }
+        setQueue(current => current.filter(item => !done.has(item.uploadId)))
+      } else setError(t('The attachments could not be uploaded.'))
+    } catch (caught) { setError(caught?.message || t('The attachments could not be uploaded.')) }
+    finally { busy.current = false; setSaving(false) }
+  }
   const add = files => {
     const list = [...files]
     if (!list.length) return
-    if (!base) setBase(cardStamp(task))
     const count = imagesOf(task).length + queue.length + list.length
     const bytes = queue.reduce((sum, image) => sum + image.file.size, 0) + list.reduce((sum, file) => sum + file.size, 0)
     if (!window.crypto?.randomUUID || count > IMAGE_TASK_MAX_COUNT || queue.length + list.length > IMAGE_BATCH_MAX_COUNT || bytes > IMAGE_BATCH_MAX_BYTES || list.some(file => !FILE_TYPES.has(file.type) || file.size <= 0 || file.size > IMAGE_MAX_BYTES)) {
@@ -1186,38 +1201,34 @@ function ImageUploader({ task, disabled, onUpload }) {
         fresh.push({ file, url, uploadId: window.crypto.randomUUID() })
       }
       setQueue(current => [...current, ...fresh])
+      // Store it now: a file that only waits in the queue is what the user loses when
+      // the card changes status or the dialog closes.
+      void upload(fresh)
     } catch {
       for (const image of fresh) { URL.revokeObjectURL(image.url); urls.current.delete(image.url) }
       setError(t('Unable to preview attachments'))
     }
   }
   const choose = event => { add(event.target.files ?? []); event.target.value = '' }
-  const upload = async () => {
-    if (!base || disabled || saving) return
-    setSaving(true); setError('')
-    try {
-      const result = await onUpload(stampedTask(task, base), queue)
-      if (result === 'committed') {
-        for (const image of queue) { URL.revokeObjectURL(image.url); urls.current.delete(image.url) }
-        setQueue([]); setBase(null)
-      } else setError(t('The attachments could not be uploaded.'))
-    } catch (caught) { setError(caught?.message || t('The attachments could not be uploaded.')) }
-    finally { setSaving(false) }
+  const pasted = event => {
+    const files = [...(event.clipboardData?.files ?? [])]
+    if (!files.length) for (const item of event.clipboardData?.items ?? []) if (item.kind === 'file') { const file = item.getAsFile(); if (file) files.push(file) }
+    if (!files.length) return
+    event.preventDefault()
+    add(files)
   }
-  const changed = base && !sameCardStamp(task, base)
   return h('div', { className: 'bt-attachment-uploader' },
     h('div', { className: 'bt-dropzone' + (dragging ? ' bt-dropzone-active' : ''), onDragOver: event => { event.preventDefault(); setDragging(true) }, onDragLeave: () => setDragging(false),
-      onDrop: event => { event.preventDefault(); setDragging(false); add(event.dataTransfer.files ?? []) }, onPaste: event => { if (event.clipboardData?.files?.length) { event.preventDefault(); add(event.clipboardData.files) } } },
+      onDrop: event => { event.preventDefault(); setDragging(false); add(event.dataTransfer.files ?? []) }, onPaste: pasted },
       h(PaperclipIcon), h('span', null, t('Drop files here, paste, or')),
       h('button', { type: 'button', className: 'bt-btn bt-btn-ghost', disabled, onClick: () => input.current?.click() }, t('Choose files')),
       h('input', { ref: input, type: 'file', multiple: true, accept: 'image/png,image/jpeg,application/pdf,application/zip,text/plain,text/markdown,application/json', hidden: true, disabled, onChange: choose })),
     h('p', { className: 'bt-card-note' }, t('PNG/JPEG, PDF, ZIP, text, Markdown and JSON are supported.')),
-    changed ? h('p', { className: 'bt-card-warning', role: 'alert' }, t('Task changed. Remove selected attachments and choose them again.')) : null,
     queue.length ? h('div', { className: 'bt-attachment-queue' }, queue.map(image => h('figure', { key: image.uploadId, className: 'bt-attachment' + (image.file.type.startsWith('image/') ? '' : ' bt-attachment-file') },
       image.file.type.startsWith('image/') ? h('img', { src: image.url, alt: image.file.name }) : h('span', { className:'bt-attachment-placeholder' }, h(PaperclipIcon), h('span', null, image.file.name)),
       h('figcaption', null, h('span', { className: 'bt-attachment-name' }, image.file.name), h('button', { type: 'button', className: 'bt-card-icon-danger', 'aria-label': t('Remove attachment'), onClick: () => remove(image) }, h(TrashIcon)))))) : null,
     error ? h('p', { className: 'bt-form-error', role: 'alert' }, error) : null,
-    queue.length ? h('button', { type: 'button', className: 'bt-btn bt-btn-primary', disabled: disabled || saving || changed, onClick: () => void upload() }, t('Upload files')) : null)
+    queue.length ? h('button', { type: 'button', className: 'bt-btn bt-btn-primary', disabled: disabled || saving, onClick: () => void upload(queue) }, t('Retry upload')) : null)
 }
 
 function AttachmentsEditor({ scope, task, request, canUpload, canRemove, canCover, disabled, onUpload, onRemove, onCover, onOpenImage }) {

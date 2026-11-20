@@ -20793,7 +20793,7 @@ var COMPUTER_CSS = `
 .bt-cstep-shot-open img{max-height:280px;max-width:480px}
 `;
 
-// node_modules/deep-view/src/react/ui.js
+// ../../../dsbot-src/ds-bot/node_modules/deep-view/src/react/ui.js
 var import_react13 = require("react");
 var FallbackMarkdown = ({ text }) => (0, import_react13.createElement)("span", null, String(text ?? ""));
 var ViewUi = (0, import_react13.createContext)({ t: (key) => key, Markdown: FallbackMarkdown });
@@ -20860,7 +20860,7 @@ function useOptionKeys2(count, onPick, ownRef) {
   return count > 0 && listening <= 1;
 }
 
-// node_modules/deep-view/src/core/formula.js
+// ../../../dsbot-src/ds-bot/node_modules/deep-view/src/core/formula.js
 var FUNCTIONS = {
   min: { args: [1, Infinity], run: (...values) => Math.min(...values.map(num)) },
   max: { args: [1, Infinity], run: (...values) => Math.max(...values.map(num)) },
@@ -21141,7 +21141,7 @@ function evaluate(tree, lookup) {
   }
 }
 
-// node_modules/deep-view/src/core/views.js
+// ../../../dsbot-src/ds-bot/node_modules/deep-view/src/core/views.js
 var LAYOUT = ["stack", "row"];
 var DISPLAY = ["text", "metric", "table", "chart", "progress", "callout", "sources", "html"];
 var INPUT_TYPES = ["slider", "choice", "toggle", "number"];
@@ -21773,7 +21773,7 @@ function validateForm(node, values) {
   return { fields };
 }
 
-// node_modules/deep-view/src/react/chart.js
+// ../../../dsbot-src/ds-bot/node_modules/deep-view/src/react/chart.js
 var import_react14 = require("react");
 var PALETTE = ["var(--dv-accent)", "var(--dv-ink-tangerine)", "var(--dv-ink-green)", "var(--dv-ink-violet)", "var(--dv-ink-sky)", "var(--dv-ink-rose)", "var(--dv-ink-yellow)", "var(--dv-ink-cyan)", "var(--dv-ink-magenta)"];
 var colorAt = (index) => PALETTE[index % PALETTE.length];
@@ -22212,7 +22212,7 @@ var CHART_CSS = `
 @media (prefers-reduced-motion:reduce){.dv-chart-mark,.dv-chart-dot{transition:none}.dv-chart-tip{animation:none}}
 `;
 
-// node_modules/deep-view/src/react/frame.js
+// ../../../dsbot-src/ds-bot/node_modules/deep-view/src/react/frame.js
 var import_react15 = require("react");
 var THEME_VARS = [
   ["--view-ink", "--bt-ink", "--dv-ink"],
@@ -22294,7 +22294,7 @@ var HTML_CSS = `
 .dv-view-frame-stopped{margin:0;font-size:13px;line-height:18px;color:var(--dv-ink-2)}
 `;
 
-// node_modules/deep-view/src/react/card.js
+// ../../../dsbot-src/ds-bot/node_modules/deep-view/src/react/card.js
 var import_react16 = require("react");
 var mdLabels2 = (ui2) => ({ code: { copyLabel: ui2.t("Copy"), copiedLabel: ui2.t("Copied") }, footnotes: ui2.t("Footnotes") });
 var TONES2 = ["good", "warn", "bad"];
@@ -23036,7 +23036,7 @@ ${CHART_CSS}
 ${HTML_CSS}
 `;
 
-// node_modules/deep-view/src/react/styles.js
+// ../../../dsbot-src/ds-bot/node_modules/deep-view/src/react/styles.js
 var THEME_CSS = `
 body{
 --dv-ink:var(--dsw-alias-label-primary);
@@ -23134,10 +23134,10 @@ button.dv-q-opt:active{background:var(--dv-active)}
 @media (prefers-reduced-motion:reduce){.dv-q,.dv-view-bare,.dv-q-submit,.dv-menu,.dv-q-check{animation:none}}
 `;
 
-// node_modules/deep-view/src/react/index.js
+// ../../../dsbot-src/ds-bot/node_modules/deep-view/src/react/index.js
 var DEEP_VIEW_CSS = THEME_CSS + QUESTION_CSS + WIDGET_CSS;
 
-// node_modules/deep-view/src/core/reply.js
+// ../../../dsbot-src/ds-bot/node_modules/deep-view/src/core/reply.js
 var REPLY_KIND = "user-question-reply";
 var REPLY_SOURCE_KIND = "deep-view-reply";
 function viewCardText(args) {
@@ -34211,7 +34211,7 @@ var CONNECTORS_PAGE_CSS = `
 @media (prefers-reduced-motion:reduce){.bt-app[data-fresh]::after,.bt-app[data-fresh] .bt-app-icon,.bt-app[data-fresh] .bt-app-btn-done{animation:none}}
 `;
 
-// node_modules/qrcode-generator/dist/qrcode.mjs
+// ../../../dsbot-src/ds-bot/node_modules/qrcode-generator/dist/qrcode.mjs
 var qrcode = function(typeNumber, errorCorrectionLevel) {
   const PAD0 = 236;
   const PAD1 = 17;
@@ -41186,9 +41186,9 @@ function AttachmentTile({ scope, task, image, request, canRemove, canCover, isCo
 function ImageUploader({ task, disabled, onUpload }) {
   const [queue, setQueue] = (0, import_react55.useState)([]);
   const [error, setError] = (0, import_react55.useState)("");
-  const [base, setBase] = (0, import_react55.useState)(null);
   const [dragging, setDragging] = (0, import_react55.useState)(false);
   const [saving, setSaving] = (0, import_react55.useState)(false);
+  const busy = (0, import_react55.useRef)(false);
   const input = (0, import_react55.useRef)(null);
   const urls = (0, import_react55.useRef)(/* @__PURE__ */ new Set());
   (0, import_react55.useEffect)(() => () => {
@@ -41200,10 +41200,31 @@ function ImageUploader({ task, disabled, onUpload }) {
     urls.current.delete(image.url);
     setQueue((current2) => current2.filter((item) => item.uploadId !== image.uploadId));
   };
+  const upload = async (list) => {
+    if (disabled || busy.current || !list.length) return;
+    busy.current = true;
+    setSaving(true);
+    setError("");
+    try {
+      const result = await onUpload(task, list);
+      if (result === "committed") {
+        const done = new Set(list.map((image) => image.uploadId));
+        for (const image of list) {
+          URL.revokeObjectURL(image.url);
+          urls.current.delete(image.url);
+        }
+        setQueue((current2) => current2.filter((item) => !done.has(item.uploadId)));
+      } else setError(t("The attachments could not be uploaded."));
+    } catch (caught) {
+      setError(caught?.message || t("The attachments could not be uploaded."));
+    } finally {
+      busy.current = false;
+      setSaving(false);
+    }
+  };
   const add = (files) => {
     const list = [...files];
     if (!list.length) return;
-    if (!base) setBase(cardStamp(task));
     const count = imagesOf(task).length + queue.length + list.length;
     const bytes = queue.reduce((sum, image) => sum + image.file.size, 0) + list.reduce((sum, file) => sum + file.size, 0);
     if (!window.crypto?.randomUUID || count > IMAGE_TASK_MAX_COUNT || queue.length + list.length > IMAGE_BATCH_MAX_COUNT || bytes > IMAGE_BATCH_MAX_BYTES || list.some((file) => !FILE_TYPES.has(file.type) || file.size <= 0 || file.size > IMAGE_MAX_BYTES)) {
@@ -41219,6 +41240,7 @@ function ImageUploader({ task, disabled, onUpload }) {
         fresh.push({ file, url, uploadId: window.crypto.randomUUID() });
       }
       setQueue((current2) => [...current2, ...fresh]);
+      void upload(fresh);
     } catch {
       for (const image of fresh) {
         URL.revokeObjectURL(image.url);
@@ -41231,27 +41253,18 @@ function ImageUploader({ task, disabled, onUpload }) {
     add(event.target.files ?? []);
     event.target.value = "";
   };
-  const upload = async () => {
-    if (!base || disabled || saving) return;
-    setSaving(true);
-    setError("");
-    try {
-      const result = await onUpload(stampedTask(task, base), queue);
-      if (result === "committed") {
-        for (const image of queue) {
-          URL.revokeObjectURL(image.url);
-          urls.current.delete(image.url);
-        }
-        setQueue([]);
-        setBase(null);
-      } else setError(t("The attachments could not be uploaded."));
-    } catch (caught) {
-      setError(caught?.message || t("The attachments could not be uploaded."));
-    } finally {
-      setSaving(false);
+  const pasted = (event) => {
+    const files = [...event.clipboardData?.files ?? []];
+    if (!files.length) {
+      for (const item of event.clipboardData?.items ?? []) if (item.kind === "file") {
+        const file = item.getAsFile();
+        if (file) files.push(file);
+      }
     }
+    if (!files.length) return;
+    event.preventDefault();
+    add(files);
   };
-  const changed = base && !sameCardStamp(task, base);
   return (0, import_react55.createElement)(
     "div",
     { className: "bt-attachment-uploader" },
@@ -41269,12 +41282,7 @@ function ImageUploader({ task, disabled, onUpload }) {
           setDragging(false);
           add(event.dataTransfer.files ?? []);
         },
-        onPaste: (event) => {
-          if (event.clipboardData?.files?.length) {
-            event.preventDefault();
-            add(event.clipboardData.files);
-          }
-        }
+        onPaste: pasted
       },
       (0, import_react55.createElement)(PaperclipIcon),
       (0, import_react55.createElement)("span", null, t("Drop files here, paste, or")),
@@ -41282,7 +41290,6 @@ function ImageUploader({ task, disabled, onUpload }) {
       (0, import_react55.createElement)("input", { ref: input, type: "file", multiple: true, accept: "image/png,image/jpeg,application/pdf,application/zip,text/plain,text/markdown,application/json", hidden: true, disabled, onChange: choose })
     ),
     (0, import_react55.createElement)("p", { className: "bt-card-note" }, t("PNG/JPEG, PDF, ZIP, text, Markdown and JSON are supported.")),
-    changed ? (0, import_react55.createElement)("p", { className: "bt-card-warning", role: "alert" }, t("Task changed. Remove selected attachments and choose them again.")) : null,
     queue.length ? (0, import_react55.createElement)("div", { className: "bt-attachment-queue" }, queue.map((image) => (0, import_react55.createElement)(
       "figure",
       { key: image.uploadId, className: "bt-attachment" + (image.file.type.startsWith("image/") ? "" : " bt-attachment-file") },
@@ -41290,7 +41297,7 @@ function ImageUploader({ task, disabled, onUpload }) {
       (0, import_react55.createElement)("figcaption", null, (0, import_react55.createElement)("span", { className: "bt-attachment-name" }, image.file.name), (0, import_react55.createElement)("button", { type: "button", className: "bt-card-icon-danger", "aria-label": t("Remove attachment"), onClick: () => remove(image) }, (0, import_react55.createElement)(TrashIcon)))
     ))) : null,
     error ? (0, import_react55.createElement)("p", { className: "bt-form-error", role: "alert" }, error) : null,
-    queue.length ? (0, import_react55.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary", disabled: disabled || saving || changed, onClick: () => void upload() }, t("Upload files")) : null
+    queue.length ? (0, import_react55.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary", disabled: disabled || saving, onClick: () => void upload(queue) }, t("Retry upload")) : null
   );
 }
 function AttachmentsEditor({ scope, task, request, canUpload, canRemove, canCover, disabled, onUpload, onRemove, onCover, onOpenImage }) {
