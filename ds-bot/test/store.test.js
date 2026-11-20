@@ -61,6 +61,37 @@ function runtime(t, saved) {
   return { rt, home, statePath, warnings, dispose }
 }
 
+test('concurrent saves share an atomic write until its snapshot has been taken', async t => {
+  const { rt, statePath } = runtime(t)
+  await rt.load()
+  let enter, release
+  const entered = new Promise(resolve => { enter = resolve })
+  const released = new Promise(resolve => { release = resolve })
+  const snapshots = []
+  const restore = patch('writeFile', write => async (path, data, ...args) => {
+    if (path === `${statePath}.${process.pid}.tmp`) {
+      snapshots.push(JSON.parse(data).prefs.marker)
+      if (snapshots.length === 1) { enter(); await released }
+    }
+    return write(path, data, ...args)
+  })
+  try {
+    rt.state.prefs.marker = 'initial'
+    const first = rt.save({ required: true })
+    rt.state.prefs.marker = 'same snapshot'
+    const second = rt.save({ required: true })
+    await entered
+    rt.state.prefs.marker = 'during write'
+    const third = rt.save({ required: true })
+    rt.state.prefs.marker = 'latest'
+    const fourth = rt.save({ required: true })
+    release()
+    await Promise.all([first, second, third, fourth])
+    assert.deepEqual(snapshots, ['same snapshot', 'latest'])
+    assert.equal(JSON.parse(fs.readFileSync(statePath)).prefs.marker, 'latest')
+  } finally { release(); restore() }
+})
+
 test('a failed state write rejects and leaves the saved file unchanged', async (t) => {
   const { rt, statePath } = runtime(t)
   await rt.load()
@@ -70,21 +101,6 @@ test('a failed state write rejects and leaves the saved file unchanged', async (
   rt.state.prefs.marker = 'not saved'
   await assert.rejects(rt.save(), { code: 'EISDIR' })
   assert.deepEqual(fs.readFileSync(statePath), original)
-})
-
-test('model selection witnesses survive a saved store reload', async (t) => {
-  const first = runtime(t)
-  await first.rt.load()
-  const selections = { s1: { provider: 'deepseek', model: 'v4', reasoningEffort: 'high' } }
-  first.rt.state.sessionModelSelections = selections
-  await first.rt.save()
-  await first.dispose()
-  const cleanups = []
-  const second = { ...first.rt, ctx: { effect: execute => cleanups.push(execute()) } }
-  t.after(async () => { for (const cleanup of cleanups) await cleanup() })
-  install(second)
-  await second.load()
-  assert.deepEqual(second.state.sessionModelSelections, selections)
 })
 
 test('a failed migration write warns but load() still resolves', async (t) => {

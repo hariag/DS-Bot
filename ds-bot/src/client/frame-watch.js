@@ -5,12 +5,8 @@ import { installStyles } from './styles.js'
 import { nextCollapsedWidth, trackRoom } from './frame-layout.js'
 
 export const sidebarTrackWidth = () => {
-  const column = typeof document === 'undefined' ? null : document.querySelector('[class*="_sidebarCol"]')
-  if (!column) return null
-  const position = typeof getComputedStyle === 'function' ? getComputedStyle(column).position : ''
-  // A drawer overlays the grid; its visible strip does not reserve a track.
-  if (position === 'absolute' || position === 'fixed') return 0
-  return trackRoom(column.getBoundingClientRect())
+  const box = typeof document === 'undefined' ? undefined : document.querySelector('[class*="_sidebarCol"]')?.getBoundingClientRect()
+  return box === undefined ? null : trackRoom(box)
 }
 
 // The shell frame marks itself [data-sidebar-collapsed]; null when no frame is found.
@@ -47,11 +43,6 @@ const roomRule = () => {
 const margin = (side, width, style) => {
   if (width === null) style.removeProperty(`margin-${side}`)
   else style.setProperty(`margin-${side}`, `${width}px`, 'important')
-  // A host skin can give the grid item width:100%. That width plus our margins
-  // exceeds its track. Own the width until both margin overrides are released,
-  // including an explicit zero used while our column is hidden.
-  if (style.marginLeft || style.marginRight) style.setProperty('width', 'auto', 'important')
-  else style.removeProperty('width')
 }
 let roomHold = 0
 export const chatRoom = {
@@ -80,42 +71,47 @@ export const chatRoom = {
 export function installFrameWatch(frame) {
   let collapsedWidth = collapsedTrackWidth()
   let raf = 0
-  const watched = new WeakSet()
+  const selector = '[class*="_sidebarCol"],[class*="_centerCol"]'
+  let sidebar = null
+  let columns = []
+  let rescan = true
   const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(() => schedule()) : null
-  const read = () => {
-    // While the shell slides its sidebar (data-animating on the frame) the
-    // track reports in-between widths: keep the last settled ones. The viewport
-    // and the collapsed flag still update; the observer refires when the flag
-    // clears, so the settled width lands then.
-    const column = document.querySelector('[class*="_sidebarCol"]')
-    const animating = column?.closest('[data-animating]') != null
-    const width = animating ? null : sidebarTrackWidth()
-    const collapsed = dshCollapsed()
-    collapsedWidth = nextCollapsedWidth({ measured: width, collapsed, animating, last: collapsedWidth })
-    frame.set((state) => {
-      const next = { ...state, viewport: window.innerWidth, collapsedWidth, collapsed: collapsed === true }
-      return state.viewport === next.viewport && state.collapsedWidth === next.collapsedWidth && state.collapsed === next.collapsed ? state : next
-    })
-  }
   const measure = () => {
-    for (const selector of ['[class*="_sidebarCol"]', '[class*="_centerCol"]']) {
-      for (const column of document.querySelectorAll(selector)) {
-        if (!watched.has(column)) { watched.add(column); observer?.observe(column) }
-      }
+    if (rescan) {
+      rescan = false
+      const next = [...document.querySelectorAll(selector)]
+      for (const column of columns) if (!next.includes(column)) observer?.unobserve(column)
+      for (const column of next) if (!columns.includes(column)) observer?.observe(column)
+      columns = next
+      sidebar = columns.find(column => column.matches('[class*="_sidebarCol"]')) ?? null
     }
-    read()
+    const animating = sidebar?.closest('[data-animating]') != null
+    const width = !sidebar || animating ? null : trackRoom(sidebar.getBoundingClientRect())
+    const collapsed = sidebar?.closest('[data-sidebar-collapsed]') != null
+    collapsedWidth = nextCollapsedWidth({ measured: width, collapsed: sidebar ? collapsed : null, animating, last: collapsedWidth })
+    frame.set(state => {
+      const viewport = window.innerWidth
+      if (state.viewport === viewport && state.collapsedWidth === collapsedWidth && state.collapsed === collapsed) return state
+      return { ...state, viewport, collapsedWidth, collapsed }
+    })
   }
   const schedule = () => {
     if (raf === 0) raf = requestAnimationFrame(() => { raf = 0; measure() })
   }
-  const relevant = (records) => records.some((record) => {
-    if (record.type === 'attributes') return true
-    const target = record.target
-    if (target instanceof Element && target.closest('[data-chat-flow],[data-composer-card]')) return false
-    return true
-  })
   measure()
-  const mutations = new MutationObserver((records) => { if (relevant(records)) schedule() })
+  const mutations = new MutationObserver(records => {
+    for (const record of records) {
+      if (record.type === 'attributes') {
+        if (sidebar && record.target.contains(sidebar)) schedule()
+        continue
+      }
+      // Streaming text inside the conversation cannot replace its shell column.
+      if (columns.some(column => !column.isConnected)) rescan = true
+      else if (columns.some(column => column.contains(record.target))) continue
+      else if ([...record.addedNodes].some(node => node.nodeType === 1 && (node.matches(selector) || node.querySelector(selector)))) rescan = true
+      if (rescan) { schedule(); break }
+    }
+  })
   mutations.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-sidebar-collapsed', 'data-animating'] })
   window.addEventListener('resize', schedule)
   return () => {

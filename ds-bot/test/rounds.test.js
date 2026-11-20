@@ -1664,3 +1664,36 @@ test('a stopped notice during a round closing drain still logs into the draining
   assert.equal(stoppedRows.length, 1, 'stopped notice logs into the draining round without waiting for another message')
   assert.equal(sent.filter(entry => entry.sessionId === room.id && entry.message.source.role === 'post').length, 0)
 })
+
+test('roster room cursor follows same-seq anchors and speaking changes before the next save', async t => {
+  const { rt, call, sent, stop } = start()
+  t.after(stop)
+  const room = await team(call, sent)
+  const book = 'group-' + room.id
+  const state = async () => (await call('state', {})).value
+  const cursor = async () => (await state()).groupRowKeys[room.id]
+  const opening = await cursor()
+  rt.ledger.append(book, { event: 'anchor', id: 'old', from: 7 })
+  assert.notEqual(await cursor(), opening)
+  assert.equal((await call('group-rows', { roomId: room.id, from: 7, anchor: 'old' })).value.open, true)
+  const before = await state()
+  rt.ledger.append(book, { event: 'anchor', id: 'new', from: 7 })
+  const delta = (await call('state', { since: before.revision, models: before.modelsKey, live: before.liveKey })).value
+  assert.notEqual(delta.groupRowKeys[room.id], before.groupRowKeys[room.id])
+  assert.equal((await call('group-rows', { roomId: room.id, from: 7, anchor: 'old' })).value.open, false)
+  rt.roomProgress.set('run', { roomId: room.id, from: 7, slots: [] })
+  try {
+    const active = await cursor()
+    assert.notEqual(active, delta.groupRowKeys[room.id])
+    rt.roomProgress.get('run').slots.push({ id: room.members[0], status: 'speaking' })
+    assert.notEqual(await cursor(), active)
+    assert.deepEqual((await call('group-rows', { roomId: room.id, from: 7, anchor: 'new' })).value.speaking, [room.members[0]])
+    const ranges = [{ from: 7, anchor: 'old' }, { from: 7, anchor: 'new' }]
+    const batch = await call('group-rows', { roomId: room.id, ranges })
+    assert.deepEqual(batch.value, await Promise.all(ranges.map(async range => (await call('group-rows', { roomId: room.id, ...range })).value)))
+    const oversized = Array(before.groupRowsBatchSize + 1).fill(ranges[0])
+    assert.equal((await call('group-rows', { roomId: room.id, ranges: oversized })).error.code, 'bot/invalid')
+
+  } finally { rt.roomProgress.delete('run') }
+  await rt.ledger.flush(book)
+})

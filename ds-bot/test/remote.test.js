@@ -87,6 +87,25 @@ function ownerPeer(signal = new AbortController().signal) {
   }
 }
 
+test('real Gateway does not grant a remote carrier the board owner identity', async (t) => {
+  const { rt, stop } = startHost()
+  t.after(stop)
+  const root = new Context()
+  await startGatewayHost(root)
+  t.after(async () => { await root.fiber.dispose() })
+  await root.plugin(sub => { installRemote({ ...rt, ctx: sub }) })
+  await tick()
+  for (const endpoint of ['board-list', 'board-command', 'board-image', 'legacy-review-list', 'legacy-review-create']) {
+    const result = await root.typertGateway.dispatchRpc(`${RPC_NAMESPACE}/call`, { args: { endpoint, payload: {} } }, new AbortController().signal, ownerPeer())
+    assert.equal(result.ok, true)
+    assert.equal(result.value.ok, false)
+    assert.equal(result.value.error.code, 'bot/refused')
+  }
+  const normal = await root.typertGateway.dispatchRpc(`${RPC_NAMESPACE}/call`, { args: { endpoint: 'state', payload: {} } }, new AbortController().signal, ownerPeer())
+  assert.equal(normal.ok, true)
+  assert.equal(normal.value.ok, true)
+})
+
 test('hello omits rpc capability and endpoints without a Typert Gateway', async (t) => {
   const { call, stop } = startHost()
   t.after(stop)

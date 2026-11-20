@@ -171,28 +171,15 @@ const OVER = Symbol('over budget')
 // The bytes under `path` into `tally`, links counted as themselves and what cannot be read as
 // nothing; `tally.regen` takes the bytes inside the folders that REGENERABLE names.
 async function measure(path, clock, tally, regen = false) {
-  const pending = [{ path, regen }]
-  while (pending.length) {
-    const batch = pending.splice(-16)
-    // Settle the whole batch before propagating expiry; siblings may still be using the disk.
-    const results = await Promise.allSettled(batch.map(async ({ path, regen }) => {
-      if (clock.now() > clock.until) throw OVER
-      const entry = await lstat(path).catch(() => undefined)
-      if (entry === undefined) return
-      if (!entry.isDirectory()) {
-        tally.bytes += entry.size
-        if (regen) tally.regen += entry.size
-        return
-      }
-      if (clock.now() > clock.until) throw OVER
-      for (const name of await readdir(path).catch(() => [])) {
-        pending.push({ path: join(path, name), regen: regen || REGENERABLE.has(name) })
-      }
-    }))
-    const failed = results.find(result => result.status === 'rejected')
-    if (failed) throw failed.reason
-    if (clock.now() > clock.until) throw OVER
+  if (clock.now() > clock.until) throw OVER
+  const entry = await lstat(path).catch(() => undefined)
+  if (entry === undefined) return
+  if (!entry.isDirectory()) {
+    tally.bytes += entry.size
+    if (regen) tally.regen += entry.size
+    return
   }
+  for (const name of await readdir(path).catch(() => [])) await measure(join(path, name), clock, tally, regen || REGENERABLE.has(name))
 }
 
 /**
@@ -204,9 +191,8 @@ async function measure(path, clock, tally, regen = false) {
  * @returns {Promise<{ sessions: number, chats?: number, work?: number, regen?: number }>}
  */
 export async function teamSizes(from, team, { budget = 2000, now = Date.now } = {}) {
-  const clock = { until: now() + budget, now }
   const { found } = sessionDirs(from, sessionIdsOf(team))
-  if (clock.now() > clock.until) return { sessions: found.length }
+  const clock = { until: now() + budget, now }
   const chats = { bytes: 0, regen: 0 }
   const work = { bytes: 0, regen: 0 }
   try {
@@ -227,6 +213,12 @@ export async function teamSizes(from, team, { budget = 2000, now = Date.now } = 
 const logVersion = name => parseSessionFormatLogFilename(name.replace(/\.(zstd|zst|gz|br)$/u, ''))
 const isNewer = (from, { id, group }) => readdirSync(join(from, 'sessions', group, id))
   .some(name => (logVersion(name) ?? 0) > sessionFormatCatalog.currentVersion)
+
+/** The Sessions whose log is in a newer format than the pinned DSH reads. */
+export function newerSessions(from, team) {
+  const { found } = sessionDirs(from, sessionIdsOf(team))
+  return found.filter(session => isNewer(from, session)).map(({ id }) => id)
+}
 
 /**
  * Copy into the data location `to` the Sessions its team names that are not there, from the DSH

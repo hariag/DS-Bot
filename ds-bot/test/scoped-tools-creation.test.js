@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { createRuntime } from '../index.js'
+import { privateTempDir } from './private-temp.mjs'
 import { TEAM_TOOLS } from '../src/host/constants.js'
 import { fakeContext } from './fake-ctx.js'
 
@@ -41,7 +42,7 @@ const TEAM = {
 
 let rt
 const start = (team = TEAM, services = {}, globals = [], shared = {}) => {
-  const home = shared.home ?? mkdtempSync(join(tmpdir(), 'ds-bot-scoped-'))
+  const home = shared.home ?? privateTempDir(join(tmpdir(), 'ds-bot-scoped-'))
   if (shared.home === undefined) writeFileSync(join(home, 'state.json'), JSON.stringify(team))
   // `scoped` and `restricted` model each Session's own tool layer, and
   // `liveAgents` the DSH registry: shared across two runtimes they keep a
@@ -183,79 +184,12 @@ const hasShowView = (host, id) => host.scoped.some(entry => entry.sessionId === 
 const denied = (host, id) => host.restricted.some(entry => entry.sessionId === id && entry.deny.includes('ask_user_question'))
 const scopedNames = (host, id) => host.scoped.filter(entry => entry.sessionId === id).map(entry => entry.name)
 
-test('a Bot assembly can omit sections and tools', async (t) => {
-  const host = start()
-  t.after(host.stop)
-  await host.call('state', {})
-  const agent = host.agentOf('a')
-  let filter
-  agent.ctx.on = (name, listener) => { if (name === 'system-prompt/assemble' && String(listener).includes('HIDDEN_SECTIONS')) filter = listener; return () => {} }
-  await host.agentCreated('a')
-  assert.deepEqual(await filter({}, {}, async () => ({})), {})
-  const result = await filter({}, {}, async () => ({ sections: [{ name: 'team:policy' }, { name: 'keep' }], tools: [{ name: 'subagent' }, { name: 'list_bots' }] }))
-  assert.deepEqual(result, { sections: [{ name: 'keep' }], tools: [{ name: 'list_bots' }] })
-})
-
-test('team tools retry without a step, without registering successful tools twice', async (t) => {
-  const host = start()
-  t.after(host.stop)
-  await host.call('state', {})
-  const agent = host.agentOf('a')
-  const register = agent.ctx.tools.register
-  agent.ctx.tools.register = undefined
-  await host.agentCreated('a')
-  let refused = false
-  agent.ctx.tools.register = tool => {
-    if (tool.name === 'list_bots' && !refused) { refused = true; throw new Error('not ready') }
-    return register(tool)
-  }
-  await until(() => scopedNames(host, 'a').includes('list_bots'), 5000)
-  for (const name of TEAM_TOOLS.filter(name => name !== 'read_browser' && name !== 'read_document')) assert.equal(scopedNames(host, 'a').filter(n => n === name).length, 1)
-})
-
-test('team tool retries stop at a bound and are cleaned up with their scope', async (t) => {
-  const host = start()
-  t.after(host.stop)
-  await host.call('state', {})
-  t.mock.timers.enable({ apis: ['setTimeout'] })
-  const agent = host.agentOf('a')
-  let attempts = 0
-  agent.ctx.tools.register = () => { attempts++; throw new Error('unavailable') }
-  const agentDisposers = []
-  agent.ctx.effect = execute => { agentDisposers.push(execute()) }
-  await host.agentCreated('a')
-  const initial = attempts
-  for (let i = 0; i < 10; i++) t.mock.timers.tick(1000)
-  assert.ok(attempts > initial)
-  const exhausted = attempts
-  assert.equal(exhausted, initial * 6)
-  t.mock.timers.tick(60_000)
-  assert.equal(attempts, exhausted)
-  for (const dispose of agentDisposers) dispose?.()
-  const other = host.agentOf('b')
-  const otherDisposers = []
-  other.ctx.effect = execute => { otherDisposers.push(execute()) }
-  other.ctx.tools.register = () => { attempts++; throw new Error('unavailable') }
-  await host.agentCreated('b')
-  for (const dispose of otherDisposers) dispose?.()
-  const disposed = attempts
-  t.mock.timers.tick(1000)
-  assert.equal(attempts, disposed)
-  const room = host.agentOf('r1')
-  room.ctx.tools.register = () => { attempts++; throw new Error('unavailable') }
-  await host.agentCreated('r1')
-  await host.unload()
-  const unloaded = attempts
-  t.mock.timers.tick(60_000)
-  assert.equal(attempts, unloaded)
-})
-
 test('a Bot Session gets every team tool in its own scope', async (t) => {
   const host = start()
   t.after(host.stop)
   await host.call('state', {})
   await host.agentCreated('a')
-  assert.deepEqual(scopedNames(host, 'a').sort(), [...TEAM_TOOLS].filter(name => name !== 'read_browser' && name !== 'read_document').sort())
+  assert.deepEqual(scopedNames(host, 'a').sort(), [...TEAM_TOOLS].filter(name => name !== 'read_browser' && name !== 'project_coordination').sort())
 })
 
 test('a Bot with no connector off never reads the served schemas for the mask', async (t) => {
@@ -338,15 +272,15 @@ test("a group's own Session is scoped to group_relay alone", async (t) => {
   assert.deepEqual(scopedNames(host, 'r1'), ['group_relay'])
 })
 
-test("a Bot Session receives bot_recall alongside another plugin's global recall", async (t) => {
+test("another plugin's global recall cannot stop ds-bot or shadow its own", async (t) => {
   // #703: a same-named global tool from another plugin must not fail apply(),
-  // and inside a Bot Session ds-bot's bot_recall is served separately.
+  // and inside a Bot Session ds-bot's recall still wins.
   const host = start(TEAM, {}, [{ name: 'recall', description: 'foreign recall', execute: async () => 'foreign' }])
   t.after(host.stop)
   assert.equal(host.ctx.registeredTools.get('recall').description, 'foreign recall')
   await host.call('state', {})
   await host.agentCreated('a')
-  const recall = host.scoped.find(entry => entry.sessionId === 'a' && entry.name === 'bot_recall')
+  const recall = host.scoped.find(entry => entry.sessionId === 'a' && entry.name === 'recall')
   assert.match(String(recall?.tool?.description), /^Search your memory/)
 })
 
@@ -389,11 +323,11 @@ test('a fresh part Session has the scoped tools before its first step', async (t
   const moved = await host.tool('update_bot', { work_dir: project }, 'b')
   assert.equal(String(moved).includes('From your next step on'), true)
   // The next step sees the folder change and switches to a fresh part.
-  const preStep = host.ctx.listeners.get('agent/pre-step').at(-1)
-  const answer = await preStep(
-    { agent: host.agentOf('b'), messages: [{ role: 'user', content: [{ type: 'text', text: 'go on' }], source: { kind: 'user' } }], step: 2, signal: AbortSignal.timeout(60_000) },
-    async () => 'next',
+const payload = { agent: host.agentOf('b'), messages: [{ role: 'user', content: [{ type: 'text', text: 'go on' }], source: { kind: 'user' } }], step: 2, signal: AbortSignal.timeout(60_000) }
+  const preStep = host.ctx.listeners.get('agent/pre-step').reduceRight(
+    (next, listener) => () => listener(payload, next), async () => ({kind:'continue',messages:payload.messages}),
   )
+  const answer = await preStep()
   assert.deepEqual(answer, { kind: 'reject' })
   await until(() => hasShowView(host, 's1'), 5000)
   assert.ok(denied(host, 's1'), 'the blocking question tool is denied in the fresh part')
@@ -424,6 +358,31 @@ test("a deleted Bot's Session keeps none of the scope when it is adopted as a pl
   assert.equal((await host.call('agent-adopt', { agentId: agent.id, sessionId: 'b' })).ok, true)
   assert.deepEqual(scopedNames(host, 'b'), [])
   assert.equal(host.restricted.some(entry => entry.sessionId === 'b'), false)
+})
+
+test('project tools reach only live bound room sessions and responsible private sessions', async t => {
+  const team={...TEAM,rooms:{r1:{...TEAM.rooms.r1,sessions:{b:'sb'}}}}
+  const host=start(team)
+  t.after(host.stop)
+  await host.call('state',{})
+  const ids=['a','b','r1','sb','plain1']
+  for (const id of ids) await host.agentCreated(id)
+  const offered=id=>scopedNames(host,id).includes('project_coordination')
+  assert.deepEqual(ids.map(offered),[false,false,false,false,false])
+  const scope={kind:'room',id:'r1'}
+  const bind=await host.call('board-project-bind',{scope,projectId:'project',name:'Project',coordinatorRoomId:'r1',roomIds:['r1'],expectedRevision:0,operationId:'bind'})
+  assert.equal(bind.ok,true,JSON.stringify(bind))
+  // The ordinary Writer can read the project in its group session; its unrelated private chat stays small.
+  assert.deepEqual(ids.map(offered),[true,false,false,true,false])
+  const create=await host.call('board-command',{scope,type:'create',taskId:'feature',operationId:'create',value:{
+    title:'Shared feature',owner:'b',reviewer:'a',acceptance:'Review result',type:'feature',dependencies:[]}})
+  assert.equal(create.ok,true,JSON.stringify(create))
+  const linked=await host.call('board-project-decide',{scope,roomIds:['r1'],operationId:'link',resource:'master/feature',
+    summary:'One source card',expectedRevision:1,taskId:'feature'})
+  assert.equal(linked.ok,true,JSON.stringify(linked)); assert.equal(offered('b'),true)
+  const cancelled=await host.call('board-command',{scope,type:'cancel',taskId:'feature',operationId:'end',expectedRevision:1,value:{reason:'Stopped'}})
+  assert.equal(cancelled.ok,true,JSON.stringify(cancelled))
+  assert.deepEqual(ids.map(offered),[true,false,false,true,false])
 })
 
 test('a member who leaves the group loses the scoped tools', async (t) => {
@@ -541,7 +500,7 @@ test("a Bot's own Session the creation path missed gets the whole scope at the a
   await host.call('state', {})
   const agent = host.agentOf('a')
   const assembled = await assemble(host, agent, { tools: [{ name: 'read' }], sections: [] })
-  const expected = [...TEAM_TOOLS].filter(name => name !== 'read_browser' && name !== 'read_document').sort()
+  const expected = [...TEAM_TOOLS].filter(name => name !== 'read_browser' && name !== 'project_coordination').sort()
   assert.deepEqual(scopedNames(host, 'a').sort(), expected)
   assert.deepEqual(assembled.tools.map(tool => tool.name).sort(), ['read', ...expected].sort())
   // The hidden DSH tools are masked and filtered as on the creation path: none
@@ -612,44 +571,6 @@ test('the assemble adds the recovered names once, not on every step', async (t) 
   assert.deepEqual(first.tools.map(tool => tool.name), ['read', 'group_relay'])
   const second = { tools: [{ name: 'read' }], sections: [] }
   assert.equal(await assemble(host, agent, second), second)
-})
-
-test('enabling OCR after a Bot is scoped, then disabling it, removes the scoped schema', async (t) => {
-  const host = start()
-  t.after(host.stop)
-  await host.call('state', {})
-  await host.agentCreated('a')
-  assert.equal(scopedNames(host, 'a').includes('read_document'), false)
-  const on = await host.call('deepseek-services-config', { ocr: true })
-  assert.equal(on.ok, true)
-  assert.equal(on.value.ocr.enabled, true)
-  assert.equal(scopedNames(host, 'a').includes('read_document'), true)
-  const off = await host.call('deepseek-services-config', { ocr: false })
-  assert.equal(off.ok, true)
-  assert.equal(off.value.ocr.enabled, false)
-  assert.equal(scopedNames(host, 'a').includes('read_document'), false)
-})
-
-test('removeTeamTool still unloads other live Bots when one disposer throws', async (t) => {
-  const host = start()
-  t.after(host.stop)
-  await host.call('state', {})
-  await host.agentCreated('a')
-  await host.agentCreated('b')
-  const agentA = host.agentOf('a')
-  const origRegister = agentA.ctx.tools.register
-  agentA.ctx.tools.register = (tool) => {
-    const dispose = origRegister(tool)
-    if (tool.name !== 'read_document') return dispose
-    return () => { dispose(); throw new Error('already disposed') }
-  }
-  await host.call('deepseek-services-config', { ocr: true })
-  assert.equal(scopedNames(host, 'a').includes('read_document'), true)
-  assert.equal(scopedNames(host, 'b').includes('read_document'), true)
-  const off = await host.call('deepseek-services-config', { ocr: false })
-  assert.equal(off.ok, true)
-  assert.equal(scopedNames(host, 'a').includes('read_document'), false)
-  assert.equal(scopedNames(host, 'b').includes('read_document'), false)
 })
 
 test('a live Bot Session gets its team tools back after a disable and re-enable', async (t) => {

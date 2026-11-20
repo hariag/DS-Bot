@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppState } from 'react-native'
 import type { RpcClient } from '../../../link/src/index.ts'
 import { callBot, callBotState, openLink, type TeamState } from '../connection.ts'
-import { ensureUnlock } from './gate'
+import { ensureUnlock } from './gate.ts'
 import { createNoticeCursor, type NoticeCursorAnswer } from './notices.ts'
 import { OPTIMISTIC, optimistic, withWrites, type Write } from './optimistic.ts'
 import { t } from '../ui/i18n.ts'
@@ -14,7 +14,6 @@ const RETRY_MS = 2_000
 // Writes that settle pending items without always bumping state.revision.
 const PENDING_MUTATING = new Set([
   'approval-answer',
-  'learning-answer',
   'browser-give-back',
   'browser-takeover',
   'browser-stop',

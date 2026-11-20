@@ -98,16 +98,16 @@ const models = [
 // the failed one; `account` is the shell account snapshot's view, which a test may change
 // between renders; `asked` marks the failed turn, or the turns listed, as ones another
 // Bot asked for.
-function cell({ code, message = '', turn = 3, blocked, model = models[0].ref, later = false, signIn = true, account, sessionId = 'chief-part', bot: botPatch = {}, catalog = models, defaultModel = null, asked = false } = {}) {
+function cell({ code, message = '', turn = 3, blocked, model = models[0].ref, later = false, signIn = true, account, sessionId = 'chief-part', bot: botPatch = {}, catalog = models, defaultModel = null, asked = false, rooms = [] } = {}) {
   slots.clear()
   effects.length = 0
   const calls = []
-  const bot = { id: 'chief', name: 'Chief', model, sessionId: 'chief-part', blocked, ...botPatch }
+  const bot = { id: 'chief', name: 'Chief', model, sessionId: 'chief-part', blocked: blocked && { sessionId, turn, ...blocked }, ...botPatch }
   const byId = Object.fromEntries([...(bot.parts ?? []), 'chief-part', 'chief'].map(id => [id, bot]))
-  const roster = { ready: true, byId, roomsById: {}, models: catalog, defaultModel, exchangeTurns: asked ? { [sessionId]: asked === true ? [turn] : asked } : {} }
+  const roster = { ready: true, byId, rooms, roomsById: {}, models: catalog, defaultModel, exchangeTurns: asked ? { [sessionId]: asked === true ? [turn] : asked } : {} }
   const ops = account ? { hooks: { account: { subscribe: () => () => {}, getSnapshot: () => ({ view: account }) } } } : {}
   const actions = {
-    resume: async (id) => { calls.push(['resume', id]); if (actions.failResume) throw new Error(actions.failResume) },
+    resume: async (...args) => { calls.push(['resume', ...args]); if (actions.failResume) throw new Error(actions.failResume) },
     updateBot: async (id, patch) => { calls.push(['updateBot', id, { ...patch }]); if (actions.failUpdate) throw new Error(actions.failUpdate) },
     signIn: () => calls.push(['signIn']),
     canSignIn: () => signIn,
@@ -180,6 +180,15 @@ test('without the host key endpoint, Enter API key goes to the shell key editor 
   assert.deepEqual(side.calls, [['onboarding', 'deepseek-official']])
 })
 
+test('a current group member retries the failed turn in that group', async () => {
+  const side = cell({code:'SERVER',sessionId:'group-member',rooms:[{id:'group',memberSessions:{chief:'group-member'}}]})
+  const retry = side.buttons(side.render()).find(button => button.label === 'Retry')
+  assert.ok(retry)
+  retry.node.props.onClick()
+  await tick()
+  assert.deepEqual(side.calls,[['resume','chief','group-member',3]])
+})
+
 test('once the host no longer holds the failure, Retry leads and asks the Bot to go on once', async () => {
   const side = cell({ code: 'MISSING_CREDENTIAL' })
   const list = side.buttons(side.render())
@@ -190,7 +199,7 @@ test('once the host no longer holds the failure, Retry leads and asks the Bot to
   const [again] = side.buttons(side.render())
   assert.equal(again.label, 'Retrying…')
   assert.equal(again.node.props.disabled, true)
-  assert.deepEqual(side.calls, [['resume', 'chief']])
+  assert.deepEqual(side.calls, [['resume', 'chief', 'chief-part', 3]])
 })
 
 test('a failed retry says why and can be tried again', async () => {
@@ -206,7 +215,7 @@ test('a failed retry says why and can be tried again', async () => {
 test('AUTH names the provider and status from the host, and never shows the raw message', () => {
   const side = cell({ code: 'AUTH', message: 'Authentication Fails (sk-... is invalid)', blocked: { code: 'AUTH', status: 401, requestId: 'req-1', provider: 'deepseek-official', at: 1 } })
   const tree = side.render()
-  assert.equal(textOf(walk(tree, node => node.props?.className === 'bt-fail-text')[0]), 'DeepSeek did not accept the current API key (401).')
+  assert.equal(textOf(walk(tree, node => node.props?.className === 'bt-fail-text')[0]), 'DeepSeek rejected the credentials used for this request (401).')
   assert.deepEqual(labels(side.buttons(tree)), ['Enter the key again', 'Use a DeepSeek account instead', 'Pick another model'])
   assert.deepEqual(side.tech(tree), ['AUTH', '401', 'req-1'])
   assert.equal(JSON.stringify(tree).includes('Authentication Fails'), false)
@@ -215,8 +224,8 @@ test('AUTH names the provider and status from the host, and never shows the raw 
 test('QUOTA takes its provider and status from the failure, and tops up only the official route', () => {
   const router = cell({ code: 'QUOTA', model: models[1].ref, blocked: { code: 'QUOTA', provider: 'router', at: 1 } })
   let tree = router.render()
-  assert.equal(textOf(walk(tree, node => node.props?.className === 'bt-fail-text')[0]), 'Router is out of balance or quota.')
-  assert.deepEqual(labels(router.buttons(tree)), ['Retry'])
+  assert.match(textOf(walk(tree, node => node.props?.className === 'bt-fail-text')[0]), /Router is out of balance or quota\. Check your balance and limits with this provider/)
+  assert.deepEqual(labels(router.buttons(tree)), ['Pick another model', 'Retry'])
   const official = cell({ code: 'QUOTA', blocked: { code: 'QUOTA', status: 402, provider: 'deepseek-official', at: 1 } })
   tree = official.render()
   assert.equal(textOf(walk(tree, node => node.props?.className === 'bt-fail-text')[0]), 'DeepSeek is out of balance or quota (402).')
@@ -260,7 +269,7 @@ const withAccount = [
 test('a sign-in started from the card moves the Bot onto the account route once the account is signed in', () => {
   for (const [code, label] of [['MISSING_CREDENTIAL', 'Sign in with a DeepSeek account'], ['AUTH', 'Use a DeepSeek account instead']]) {
     const view = { status: 'signed-out', links: null }
-    const side = cell({ code, blocked: { code, provider: 'deepseek-official', at: 1 }, account: view, catalog: withAccount })
+    const side = cell({ code, blocked: { code, status: 401, provider: 'deepseek-official', at: 1 }, account: view, catalog: withAccount })
     side.buttons(side.render()).find(entry => entry.label === label).node.props.onClick()
     assert.deepEqual(side.calls, [['signIn']], code)
     // Nothing moves while the sign-in is under way, or after one that did not finish.
@@ -301,7 +310,7 @@ test('already signed in, the card moves the Bot onto the account at once', () =>
 
 test('the account models listed a moment after the sign-in still move the Bot; none for a while, the user picks', () => {
   const view = { status: 'signed-out' }
-  const side = cell({ code: 'AUTH', blocked: { code: 'AUTH', provider: 'deepseek-official', at: 1 }, account: view })
+  const side = cell({ code: 'AUTH', blocked: { code: 'AUTH', status: 401, provider: 'deepseek-official', at: 1 }, account: view })
   side.actions.refreshModels = () => side.calls.push(['refreshModels'])
   side.buttons(side.render()).find(entry => entry.label === 'Use a DeepSeek account instead').node.props.onClick()
   view.status = 'credential-stored'
@@ -311,7 +320,7 @@ test('the account models listed a moment after the sign-in still move the Bot; n
   side.render()
   assert.deepEqual(side.calls.at(-1), ['updateBot', 'chief', { model: 'deepseek-account/deepseek-v4-flash' }])
 
-  const slow = cell({ code: 'AUTH', blocked: { code: 'AUTH', provider: 'deepseek-official', at: 1 }, account: view })
+  const slow = cell({ code: 'AUTH', blocked: { code: 'AUTH', status: 401, provider: 'deepseek-official', at: 1 }, account: view })
   view.status = 'signed-out'
   slow.buttons(slow.render()).find(entry => entry.label === 'Use a DeepSeek account instead').node.props.onClick()
   view.status = 'credential-stored'
@@ -399,8 +408,51 @@ test('a failure a later turn or part moved past keeps its line and details, with
 test('the host facts of another failure are not this one', () => {
   const side = cell({ code: 'QUOTA', blocked: { code: 'AUTH', status: 401, requestId: 'req-2', provider: 'router', at: 1 } })
   const tree = side.render()
-  assert.equal(textOf(walk(tree, node => node.props?.className === 'bt-fail-text')[0]), 'DeepSeek is out of balance or quota.')
+  assert.equal(textOf(walk(tree, node => node.props?.className === 'bt-fail-text')[0]), 'The model service is out of balance or quota.')
+  assert.equal(walk(tree, node => node.type === 'a').length, 0)
   assert.deepEqual(side.tech(tree), ['QUOTA'])
+})
+
+test('a corrected quota failure uses only the failed route and never offers another provider’s top-up or a key', () => {
+  const side = cell({
+    code: 'AUTH',
+    blocked: { code: 'QUOTA', sessionId: 'other-group', provider: 'deepseek-official', status: 402, requestId: 'other' },
+    bot: { failures: { 'chief-part': { turn: 3, code: 'QUOTA', provider: 'fanttec', status: 403, requestId: 'quota-1' } } },
+  })
+  const tree = side.render()
+  assert.match(textOf(walk(tree, node => node.props?.className === 'bt-fail-text')[0]), /^fanttec is out of balance or quota \(403\). Check your balance/)
+  assert.deepEqual(side.tech(tree), ['QUOTA', '403', 'quota-1'])
+  assert.deepEqual(labels(side.buttons(tree)), ['Pick another model', 'Retry'])
+  assert.equal(walk(tree, node => node.type === 'a').length, 0)
+})
+
+test('an old AUTH row never borrows a newer request, provider, or status, even before the turn clock catches up', () => {
+  for (const latest of [undefined, { turn: 4, provider: 'wrong-host', code: 'AUTH', requestId: 'newer' }]) {
+    const side = cell({
+      code: 'AUTH', turn: 3, later: latest === undefined,
+      bot: { blocked: { code: 'AUTH', provider: 'wrong-block', status: 401, requestId: 'newer' },
+        failures: { 'chief-part': latest } },
+    })
+    const tree = side.render()
+    assert.equal(textOf(walk(tree, node => node.props?.className === 'bt-fail-text')[0]), 'The model service denied access for this request.')
+    assert.deepEqual(side.tech(tree), ['AUTH'])
+    assert.deepEqual(labels(side.buttons(tree)), [])
+  }
+})
+
+test('a legacy block corroborates the matching request on the exact turn only', () => {
+  const side = cell({
+    code: 'AUTH', later: true,
+    bot: { failures: { 'chief-part': { turn: 3, requestId: 'same', code: 'AUTH', provider: 'fanttec' } },
+      blocked: { code: 'AUTH', provider: 'fanttec', status: 401, requestId: 'same' } },
+  })
+  let tree = side.render()
+  assert.match(textOf(tree), /fanttec rejected the credentials used for this request/)
+  assert.deepEqual(side.tech(tree), ['AUTH', '401', 'same'])
+  side.bot.blocked.requestId = 'elsewhere'
+  tree = side.render()
+  assert.match(textOf(tree), /fanttec denied access for this request/)
+  assert.deepEqual(side.tech(tree), ['AUTH', 'same'])
 })
 
 test('Copy puts the technical details on the clipboard in English', async () => {
@@ -428,7 +480,7 @@ test('the copy and fix tables go by code alone', () => {
   assert.equal(failureText('INVALID_CREDENTIAL', {}), 'This API key is not in the right format.')
   assert.deepEqual(Array.from(fixesFor('MISSING_CREDENTIAL', { canSignIn: false })), ['key', 'model'])
   assert.deepEqual(Array.from(fixesFor('INVALID_CREDENTIAL', {})), ['rekey', 'model'])
-  assert.deepEqual(Array.from(fixesFor('QUOTA', { official: false })), [])
+  assert.deepEqual(Array.from(fixesFor('QUOTA', { official: false })), ['model'])
   assert.deepEqual(Array.from(fixesFor('AUTH', { canSignIn: true, onAccount: true })), [])
   assert.deepEqual(Array.from(fixesFor('ACCOUNT_SIGNED_OUT', { canSignIn: true, onAccount: true })), ['sign-in-again'])
   assert.equal(retryShown('AUTH', { code: 'AUTH' }), false)

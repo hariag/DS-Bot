@@ -51,8 +51,6 @@ Anyone on the team can do any kind of work: triage, bug fixes, features, the int
 | Priority | `P0` crash, data loss or cannot use · `P1` hurts daily use · `P2` ordinary bug or feature · `P3` suggestion or narrow case |
 | Area | `area/host` server side (`index.js`, `src/host/`) · `area/client` interface (`src/client/`) · `area/group` group chats, mentions, Bot-to-Bot messages · `area/memory` memory, conversation parts, context · `area/browser` Bot browser, page reading, web search · `area/build` CI, release, scripts, test bench · `area/docs` |
 | Flow | `maintainer` waits for the maintainer · `needs-info` waits for the reporter · `upstream` the cause is in DSH or another plugin · `duplicate` · `auto-found` found by automated testing |
-| PR Agent | `agent/antigravity` · `agent/claude-code` · `agent/codex` · `agent/devin` · `agent/dsbot` · `agent/other` (which AI agent opened the PR) |
-| PR Review | `review/approved` · `review/changes-requested` · `review/needs-decision` · `review/re-review` (mutually exclusive) · `reviewed-by/<agent>` (which AI agent reviewed the PR) |
 
 An issue that spans several areas, or none, gets no area label.
 
@@ -83,23 +81,20 @@ You need:
 
 - Node.js `22.19` or later (or `24` and later).
 - Git.
-- For the test bench only: pnpm `11` and a checkout of DeepSeek Harness at the DSH version that the plugin is tested with.
+- For the Linux dev benches, the screenshots and the desktop bench only: pnpm `11` and a checkout of the official DeepSeek Harness at the DSH version that the plugin is tested with.
 
 ```sh
 git clone https://github.com/Fei2411/DS-Bot.git ds-bot-repo
 cd ds-bot-repo/ds-bot
 
-# The plugin's packages and its build tool (esbuild).
+# The plugin's own build tool (esbuild only).
 npm ci
-
-# The phone link's packages: the build bundles them into link.js, and a unit test builds it.
-npm ci --prefix ../link
 
 # The DSH packages that the unit tests and the linter load, from npm, into dev/harness/.
 npm run harness
 ```
 
-For the test bench, add the DeepSeek Harness checkout next to the plugin folder (this folder is ignored by Git):
+For the Linux dev benches, the screenshots and the desktop bench, add the official DeepSeek Harness checkout next to the plugin folder (this folder is ignored by Git). The unit tests, the linter and the board/lifecycle benches use the official packages `npm run harness` installs in `dev/harness/`, so they need no checkout:
 
 ```sh
 cd ..
@@ -109,6 +104,8 @@ git -C deepseek-harness checkout dsh-v0.2.2-rc.1
 ```
 
 If your DeepSeek Harness checkout is somewhere else, set `DSH_HARNESS` to its path. `DSH_HARNESS` also takes the place of `dev/harness/` for the unit tests and the linter.
+
+Only the official `deepseek-ai/deepseek-harness` repository is supported. A personal fork may carry patches the published release does not; the plugin has to run on the official packages.
 
 The `@deepseek-ai/*` packages are peer dependencies: in a real install, the DSH profile supplies them. `ds-bot/.npmrc` keeps npm from installing them into the plugin folder.
 
@@ -135,7 +132,7 @@ node scripts/build-client.mjs --check  # client.js matches src/client
 npm run lint                           # oxlint
 ```
 
-CI runs `npm test` (including the generated-bundle checks) on Linux and Windows, and `npm run lint` on Linux, for pull requests that touch `ds-bot/`, `link/`, or `start.ps1` (and always on `dev`/`main`). It also scans the tracked files for keys, tokens, personal paths and e-mail addresses, and for material that must stay local. To run the scan yourself, from the repository root:
+CI runs the same three checks on every pull request, on Linux and Windows. It also scans the tracked files for keys, tokens, personal paths and e-mail addresses, and for material that must stay local. To run the scan yourself, from the repository root:
 
 ```sh
 mkdir -p /tmp/ds-bot-tree && git archive HEAD | tar -x -C /tmp/ds-bot-tree && node scripts/scan.mjs /tmp/ds-bot-tree
@@ -148,13 +145,6 @@ For a change to the server side (`index.js`, `src/host/`), also run the smoke te
 ```sh
 CONTEXT_WINDOW=100000 CHECK_RATIO=0.45 dev/bench.sh smoke 3096 8796 reset && node dev/smoke.mjs smoke 3096
 dev/bench.sh smoke 3096 8796 stop
-```
-
-For a change to the Bot browser (`src/host/browser/`), also run its tests. They drive a real Chromium and check what a Bot may not do on a page without the user (pay, delete, post, upload) and that Bots do not share cookies. CI runs them on Linux. Install Chromium once, then run them:
-
-```sh
-npx playwright-core install --only-shell chromium
-npm run test:browser
 ```
 
 To try the plugin by hand, start a bench and open the address that it prints:

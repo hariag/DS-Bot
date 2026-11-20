@@ -1,18 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { agentEditRows, answerKeepsCard, editLines, lineDiff, proposalPlacement, withoutEntry } from '../src/client/learning-card-model.js'
-
-test('agent edits share row mapping for adds, removals and replacements', () => {
-  assert.deepEqual(agentEditRows({ op: 'add', text: 'one\r\ntwo\n' }), [
-    { kind: 'added', line: 'one' }, { kind: 'added', line: 'two' }, { kind: 'added', line: '' },
-  ])
-  assert.deepEqual(agentEditRows({ op: 'remove', old: 'one' }), [{ kind: 'removed', line: 'one' }])
-  assert.deepEqual(agentEditRows({ op: 'replace', old: 'one', text: 'two' }), [
-    { kind: 'removed', line: 'one' }, { kind: 'added', line: 'two' },
-  ])
-  assert.deepEqual(agentEditRows({ op: 'add' }), [])
-  assert.deepEqual(agentEditRows({ op: 'replace', old: null, text: 42 }), [])
-})
+import { answerKeepsCard, editLines, lineDiff, proposalPlacement, withoutEntry } from '../src/client/learning-card-model.js'
 
 const turns = new Map([
   [1, { turn: 1, end: { time: 100 }, status: 'closed' }],

@@ -28,32 +28,11 @@ runInNewContext(bundle.outputFiles[0].text, {
   },
   queueMicrotask,
 })
-const { Bubbles, ChatRows, ThinkingRow, syncGroupChains, claimLines, GroupMessage, TriggerCell } = module.exports
+const { ChatRows, ThinkingRow, syncGroupChains, claimLines, GroupMessage, TriggerCell } = module.exports
 
 const roster = { byId: { b: { id: 'b', name: 'Writer' } }, roomsById: {} }
 const MINUTE = 60_000
 const shape = rows => [...rows].map(row => (row.props.className === 'bt-time-sep' ? 'clock' : row.type.name === 'Bubbles' ? `bot:${row.props.texts.join('+')}` : row.type.name))
-
-test('stored duplicate bubbles stay visible, with reactions on indexes 1 and 3', () => {
-  const tree = Bubbles({
-    texts: ['...', '...', 'other', '...', '...'], roster, selfId: 'b', actions: {}, msgKey: 'room:1',
-    useUi: select => select({ reactions: { 'room:1': { 1: ['👍'], 3: ['😂'] } } }),
-    streaming: true, lead: 'avatar',
-  })
-  const bubbles = tree.children.filter(child => child?.type?.name === 'Bubble')
-  assert.deepEqual(bubbles.map(bubble => [bubble.props.text, bubble.props.index, bubble.props.picked[0] ?? null]), [
-    ['...', 0, null], ['...', 1, '👍'], ['other', 2, null], ['...', 3, '😂'], ['...', 4, null],
-  ])
-  assert.deepEqual(bubbles.map(bubble => bubble.props.live), [false, false, false, false, true])
-  assert.deepEqual(bubbles.map(bubble => bubble.props.lead), [null, null, null, null, 'avatar'])
-})
-
-test('whitespace variants stay separate bubbles', () => {
-  const tree = Bubbles({ texts: ['...', '... ', '...\n'], roster, selfId: 'b', actions: {} })
-  const bubbles = tree.children.filter(child => child?.type?.name === 'Bubble')
-  assert.deepEqual(bubbles.map(bubble => bubble.props.text), ['...', '... ', '...\n'])
-  assert.deepEqual(bubbles.map(bubble => bubble.props.index), [0, 1, 2])
-})
 
 test('a Bot\'s messages in a row are one block', () => {
   const items = [
@@ -155,16 +134,26 @@ test('consecutive group messages from the same Bot chain together, and cards or 
 
 test('a final reply with a missing file and no work running draws both markers', () => {
   const claims = { inProgress: true, missingFiles: ['./out/report.pptx'] }
-  assert.deepEqual([...claimLines(claims)].map(line => String(line.text)), ['No background work detected', 'File not found: ./out/report.pptx'])
+  assert.deepEqual([...claimLines(claims)].map(line => String(line.text)), ['No execution recorded for this reply', 'File not found: ./out/report.pptx'])
   assert.equal(claimLines(undefined).length, 0)
   const tree = GroupMessage({
     bot: { id: 'b', name: 'Writer' }, text: '正在导出，稍后汇报。', room: { id: 'r1' }, roster: { prefs: {} }, actions: { openSession() {} }, claims,
   })
   const markers = tree.children.filter(child => String(child?.props?.className ?? '').startsWith('bt-claim'))
   assert.deepEqual([...markers].map(child => [String(child.props.className), [...child.children].join('')]), [
-    ['bt-claim bt-claim-inProgress', 'No background work detected'],
+    ['bt-claim bt-claim-inProgress', 'No execution recorded for this reply'],
     ['bt-claim bt-claim-file', 'File not found: ./out/report.pptx'],
   ])
+})
+
+test('historical warnings apply to the final text only and leave independent file markers visible', () => {
+  const claims = { inProgress: true, missingFiles: ['./missing.md'] }
+  const props = { bot: { id: 'b', name: 'Writer' }, room: { id: 'g' }, roster: { prefs: {} }, actions: {}, claims }
+  const texts = ['正在整理证据。', '客户的 Playwright 进程仍在运行。本轮不启动测试。']
+  const kinds = tree => tree.children.filter(el => el?.props?.role === 'status').map(el => el.props.className).join(' ')
+  assert.equal(kinds(GroupMessage({ ...props, texts })), 'bt-claim bt-claim-file')
+  assert.match(kinds(GroupMessage({ ...props, texts: texts.toReversed() })), /bt-claim-inProgress/)
+  assert.match(kinds(GroupMessage({ ...props, text: '见附件', whole: { length: 50000 } })), /bt-claim-inProgress/)
 })
 
 test('a group post carries claims both live and in earlier chat rows', () => {

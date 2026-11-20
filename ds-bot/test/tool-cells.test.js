@@ -9,7 +9,7 @@ import { build } from 'esbuild'
 const { outputFiles } = await build({
   stdin: {
     contents: [
-      "export { ToolCell, TriggerCell, callTree, CellEmpty, Bubbles } from './src/client/cells.js'",
+      "export { ToolCell, TriggerCell, ChatRows, callTree, CellEmpty, Bubbles } from './src/client/cells.js'",
       "export { stackReplies } from './src/shared/group-replies.js'",
       "export { QuestionDock, SettledQuestion } from './src/client/questions.js'",
       "export { SecretDock } from './src/client/secret-card.js'",
@@ -70,7 +70,7 @@ runInNewContext(outputFiles[0].text, {
     throw new Error(`Unexpected platform module ${name}`)
   },
 })
-const { ToolCell, TriggerCell, callTree, stackReplies, CellEmpty, Bubbles, QuestionDock, SettledQuestion, SecretDock, countCards, ViewMenuList, WidgetView, WidgetDock, SettledView, AnsweredView, ClosedView } = module.exports
+const { ToolCell, TriggerCell, ChatRows, callTree, stackReplies, CellEmpty, Bubbles, QuestionDock, SettledQuestion, SecretDock, countCards, ViewMenuList, WidgetView, WidgetDock, SettledView, AnsweredView, ClosedView } = module.exports
 
 // Runs the effects collected since the last render; returns the cleanups.
 const mount = () => {
@@ -252,13 +252,11 @@ const BRANCHES = [
   ['read_group_chat', { args: { group: 'Ops' } }, /Read.*Ops/],
   ['remember', { args: { scope: 'Chief' }, content: 'Saved to Chief memory.' }, /Memory updated/],
   ['forget', { args: { scope: 'Chief' }, content: 'Removed from Chief memory.' }, /Memory updated/],
-  ['bot_remember', { args: { scope: 'Chief' }, content: 'Saved to Chief memory.' }, /Memory updated/],
-  ['bot_forget', { args: { scope: 'Chief' }, content: 'Removed from Chief memory.' }, /Memory updated/],
 ]
 const rosterFor = callId => team({ questions: { chief: question(callId) }, secretRequests: { chief: [request(callId)] } })
 
 test('every call ToolCell draws shows the same nested in a PTC program as on its own', () => {
-  assert.equal(BRANCHES.length, 17)
+  assert.equal(BRANCHES.length, 15)
   for (const [name, options, expected] of BRANCHES) {
     const native = shown(call(name, 'direct', options), { roster: rosterFor('direct') })
     assert.match(native, expected, `${name} on its own`)
@@ -459,13 +457,11 @@ test('a memory write that failed says so, and opens the memory it meant to chang
 })
 
 test('a removal that failed says it could not remove the entry, and why', () => {
-  for (const name of ['bot_forget', 'forget']) {
-    const line = memoryLine(failedWrite(name, {}, 'memory/no-match', 'No entry in your memory matches "tea".'), {})
-    assert.match(text(line), /Couldn't remove from memory/)
-    assert.match(text(line), /No saved entry matched/)
-    // The entry the call named is not repeated in the notice.
-    assert.doesNotMatch(text(line), /tea/)
-  }
+  const line = memoryLine(failedWrite('forget', {}, 'memory/no-match', 'No entry in your memory matches "tea".'), {})
+  assert.match(text(line), /Couldn't remove from memory/)
+  assert.match(text(line), /No saved entry matched/)
+  // The entry the call named is not repeated in the notice.
+  assert.doesNotMatch(text(line), /tea/)
 })
 
 test('the reason follows the kind of failure, not the words of the host', () => {
@@ -1296,4 +1292,77 @@ test('settled and answered views summarize every outcome cleanly and derive fall
   assert.equal(text(find(formulaDismissed, node => node.props?.className === 'bt-q-title')), 'Budget: 25%')
   const fallbackPrompt = expandCard(SettledView, { title: '', view: { type: 'stack', children: [] }, closed: 'dismissed' })
   assert.equal(text(find(fallbackPrompt, node => node.props?.className === 'bt-q-title')), 'View')
+})
+
+test('room cursors refresh an active range without a timer and discard a switched-away answer', async () => {
+  const waiting = Promise.withResolvers()
+  const asked = []
+  const actions = {
+    groupRows: async (id, from) => {
+      asked.push([id, from])
+      return id === 'room' ? waiting.promise : { rows: [{ kind: 'user', text: 'new room' }], open: true, active: true }
+    },
+  }
+  const mountRange = (sessionId, roomId, version) => {
+    const roster = team({ roomsById: { [sessionId]: { id: roomId } }, groupRowKeys: { [roomId]: version } })
+    const relay = find(ToolCell(props(call('group_relay', 'same-call', { content: { from: 1, anchor: 'same' } }), { sessionId, actions, roster })), node => node.type?.name === 'GroupReplies')
+    effects = []
+    relay.type(relay.props)
+    return mount()
+  }
+  timers.clear()
+  sets.length = 0
+  const left = mountRange('part-a', 'room', 'epoch|a')
+  await Promise.resolve()
+  left()
+  const right = mountRange('part-b', 'second', 'epoch|b')
+  const duplicate = mountRange('other-part', 'second', 'epoch|b')
+  await new Promise(resolve => setImmediate(resolve))
+  waiting.resolve({ rows: [{ kind: 'user', text: 'stale' }], open: true, active: true })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(asked, [['room', 1], ['second', 1]])
+  assert.deepEqual(sets.map(value => value.view?.rows[0]?.text), ['new room', 'new room'])
+  assert.equal(timers.size, 0)
+  right(); duplicate()
+})
+
+test('goal changes in a completed group call appear in the transcript', () => {
+  const output = shown(call('group_relay', 'goal', { content: { replies: [{ kind: 'goal', event: 'pause' }] } }), { sessionId: 'room' })
+  assert.match(output, /Goal paused/)
+})
+
+test('live message attribution uses a stable sender, keeps lookup evidence, and excludes system context', () => {
+  const click = []
+  const roster = team({ byId: { chief, writer, 'writer-old': writer } })
+  const trigger = source => expand(TriggerCell({
+    node: { key: 'trigger', data: { seq: 17, source: { kind: 'bot', ...source }, content: text$('[Message from Chief]') }, location: { turn: { turn: 1 } } },
+    sessionId: 'chief', actions: { openExchange: (...ids) => click.push(ids), noteTurnPeer() {} },
+    useRoster: select => select(roster), useSessions: select => select({ byId: {} }),
+    useTurnClock: select => select({}), useUi: select => select({ visits: {} }),
+  }))
+  const attributed = trigger({ role: 'reply', sender: { sessionId: 'writer-old', name: 'Old name' } })
+  assert.match(text(attributed), /Reply fromWriter/)
+  find(attributed, n => n.props?.className === 'bt-event-whole').props.onClick()
+  assert.deepEqual(click, [['chief', 'writer']])
+  const deleted = trigger({ role: 'request', senderId: 'removed-bot', senderName: 'Former writer' })
+  assert.match(text(deleted), /Former writer/)
+  assert.match(find(deleted, n => n.props?.className === 'bt-event-whole').props.title, /removed-bot/)
+  assert.equal(find(deleted, n => n.type === 'button'), undefined)
+  assert.match(text(trigger({ role: 'request', senderSessionId: 'missing-id', senderName: 'You' })), /Unrecorded sender \(missing-id\)/)
+  assert.match(text(trigger({ role: 'request', exchangeId: 'ex-9', askedBy: 'chief' })), /Unrecorded sender \(ex-9\)/)
+  assert.match(text(trigger({ role: 'request', senderName: 'You', taskAction: { id: 'a' } })), /Task board/)
+  for (const source of [{ form: 'snapshot', sections: [] }, { role: 'kickoff', roomId: 'room' }, { role: 'goal' }, { role: 'room', askedBy: 'chief' }]) {
+    assert.equal(text(trigger(source)), '')
+  }
+  effects = []
+})
+
+test('saved schedule entries, board requests and unknown peers have distinct history rows', () => {
+  const body = items => text(expand(ChatRows({ items, sessionId: 'chief', roster: team(), actions: {} })))
+  assert.match(body([{ kind: 'event', role: 'schedule', text: '巡检' }]), /Scheduled task: 巡检/)
+  assert.match(body([{ kind: 'event', role: 'schedule' }]), /Routine started/)
+  assert.match(body([{ kind: 'event', role: 'request', boardTask: true }]), /Task board/)
+  assert.match(body([{ kind: 'event', role: 'request', name: '', seq: 19 }]), /Unrecorded sender \(#19\)/)
+  assert.match(body([{ kind: 'event', role: 'request', botId: 'writer', name: 'stale' }]), /Message fromWriter/)
+  assert.equal(body([{ kind: 'event', role: 'kickoff', roomId: 'room' }]), '')
 })

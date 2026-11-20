@@ -16,6 +16,7 @@
 // it started, or that is called while still at earlier work, lets the round go on. Its
 // turn keeps running in its group Session, and what it ends with is posted to the group,
 // where the member that asked for it answers.
+import { missedRoomTerminal, readRoomReplyCut, relayRecorded, sameReceipt } from './missed-room-reply.mjs'
 import { randomUUID } from 'node:crypto'
 import { claimsFor } from './claims.js'
 import { readFileSync } from 'node:fs'
@@ -24,16 +25,15 @@ import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { GROUP_LINE_READ, HISTORY_PAGE, HISTORY_TIMEOUT_MS, LATE_ANSWER, ROOM_IDLE_RELAY_LIMIT, ROOM_REPLY_TIMEOUT_MS, ROOM_STEP_GAP_MS, ROOM_WORK_GRACE_MS, SOURCE_KIND, TEAM_TOOLS, TEXT_KEPT } from './constants.js'
-import { escapeRegExp, headOf, reminderPrompts, splitRef, textOf } from './text.js'
+import { GROUP_LINE_READ, LATE_ANSWER, ROOM_IDLE_RELAY_LIMIT, ROOM_REPLY_TIMEOUT_MS, ROOM_STEP_GAP_MS, ROOM_WORK_GRACE_MS, SOURCE_KIND, TEAM_TOOLS, TEXT_KEPT } from './constants.js'
+import { escapeRegExp, headOf, splitRef, textOf } from './text.js'
 import { viaOf } from '../shared/im-platforms.js'
-import { REPLY_ELISION, parseReplies, relayRange } from '../shared/group-replies.js'
 import { mentionSpans, speakerOf } from '../shared/mentions.js'
 import { GROUP_REF, output } from './tools.js'
 import { searchGroupBook } from './group-search.js'
-import { threadCurrentOfPart } from './threads.js'
 import { failureLine } from './turns.js'
 import { parseBook } from './ledger.js'
+import { scheduleChangeId } from './room-schedule-delivery.js'
 
 const ROOM_LOG_MAX = 60
 const ROOM_FIRST_LOOK = 12
@@ -168,7 +168,9 @@ export const referenceNote = references => (references?.length
   : '')
 
 const ROOM_REPLY = 'Reply with your message for the group, no name prefix: in a discussion, one or two short messages. When you are asked to do something, call your first tool in the same step as your opening note — if you stop without a tool call, your turn ends and no work runs. The group does not wait for you and sees what you write while you work: say what you will do, write again only when something matters, and end with the result, never a promise to do it later. Reply [PASS] to stay silent when you have nothing new to add or the message is for someone else.'
-const ROOM_CALLS = 'Writing "@Name" calls that member at once, to answer or to do what you ask, as soon as your message is posted: call members before you start on your own part. Members called in one message start together and do not see each other\'s replies until they post, so when one needs another\'s result, call the first and ask it to call the next. When a member finishes work you gave it, you answer its result. To only mention a member, write its name without "@".'
+const ROOM_INSPECTION_REPLY = 'This scheduled goal inspection requires action even if there are no new group messages. First call group_goal show for this group. If show fails, report the failure. Only after successfully reading the current goal may you reply [PASS] when nothing changed; follow the scoped inspection duties above.'
+const ROOM_CALLS = 'Writing "@Name" calls that member at once, to answer or do what you ask, as soon as your message is posted. When several independent goal tasks are ready, call every distinct owner in the same message, with one separate line starting with the exact plain-text @Name and listing that owner\'s task ID, action and deadline. Keep dependent tasks in order: call the prerequisite owner first and wait for its result before calling the next owner. Active @Name callouts must be outside backticks, code blocks and Markdown links; mentions there are literal text, not highlighted or dispatched. Members called in one message start together and do not see each other\'s replies until they post. When a member finishes work you gave it, you answer its result. To only mention a member, write its name without "@".'
+const RECEIPT_FOLLOWUP_DUTY = followup => `Required continuation for task ${followup?.taskId ?? '(task id unavailable)'}: this turn was opened because its owner replied to a status question. Do not reply [PASS], only acknowledge the reply, or leave the task at “waiting”. First read the current group goal and the original board item. Compare the self-report with existing, verifiable evidence and the task acceptance. Then take one concrete next step now: if evidence is sufficient, record the finding within your authority and ask the named independent reviewer to verify it; if evidence is missing, write one separate plain-text @Name line to the specific owner (the original owner is ${followup?.ownerName ?? 'shown on the card'}) or next responsible person naming the exact missing evidence/action and a deadline; if blocked, name the specific person who can clear the blocker or make the decision, with the exact request and deadline. Keep @Name outside backticks, code blocks and Markdown links. Do not mark reported work done from a self-report alone. Continue any independent eligible task while waiting, and leave a concrete next check.`
 
 const slotLabel = (slot, self) => {
   if (slot.status === 'speaking') return slot === self ? `${slot.name} (you, now)` : `${slot.name} (answering now)`
@@ -186,7 +188,7 @@ const adminNote = room => [
   'You are this group\'s admin.',
   room.mode === 'admin' ? 'Plain messages come to you first: answer them, or call the members who should answer with @Name.' : '',
   '"@all" calls every member. When the user asks, change the group with update_group.',
-  'When the user wants this group to reach a goal, set it with group_goal: align with the user first (goal-grill skill), then start it.',
+  'When the user wants a group goal, inspect any active or paused goal first. Track an independent new objective separately rather than overwrite it. Start a group goal when none is active and the request is clear; ask only for decisions genuinely needed.',
 ].filter(Boolean).join(' ')
 
 // The opening turn of a group the user just made without a first message.
@@ -198,211 +200,41 @@ const ROOM_READ_MAX = 30
 // reports a corrupt log only in the message of a generic failure.
 const lostSession = error => error?.code === 'session/not-found' || /\bis corrupt\b|\bcorrupt session log\b/i.test(String(error?.message ?? ''))
 const fileLine = file => `[File "${file.name}" (${file.bytes} bytes) attached]`
-const POST_HEADER = /^\[Group post from (?:[^\r\n]*\]\r?\n|[^\]\r\n]*\])/
-const BACKFILL_WINDOW = 5
 
-function legacyNoticeRecord(reply, time) {
-  const botId = reply.botId
-  if (reply.kind === 'goal') {
-    const { who: _who, kind: _kind, seq: _seq, time: _time, about: _about, botId: _botId, name: _name, color: _color, ...fields } = reply
-    return { who: 'DS Bot', kind: 'notice', reason: 'goal', ...fields, ...time }
-  }
-  if (reply.kind === 'paused') {
-    return {
-      who: 'DS Bot', kind: 'notice', reason: 'paused',
-      ...(reply.idle !== undefined ? { idle: reply.idle } : {}),
-      ...(reply.name ? { from: reply.name } : {}),
-      ...(botId ? { about: botId } : {}),
-      ...(reply.count !== undefined ? { count: reply.count } : {}),
-      ...(reply.limit !== undefined ? { limit: reply.limit } : {}),
-      ...(Array.isArray(reply.names) ? { names: reply.names } : {}),
-      ...time,
-    }
-  }
-  if (reply.kind === 'failed') {
-    return {
-      who: 'DS Bot', kind: 'notice', reason: 'failed',
-      ...(reply.name ? { names: [reply.name] } : {}),
-      ...(botId ? { about: botId } : {}),
-      ...(reply.code !== undefined ? { code: reply.code } : {}),
-      ...(reply.status !== undefined ? { status: reply.status } : {}),
-      ...(reply.text !== undefined ? { message: reply.text, detail: reply.text } : {}),
-      ...time,
-    }
-  }
-  if (reply.kind === 'helper-failed') {
-    return {
-      who: 'DS Bot', kind: 'notice', reason: 'helper-failed',
-      ...(reply.name ? { names: [reply.name] } : {}),
-      ...(botId ? { about: botId } : {}),
-      ...(reply.stopReason ? { stopReason: reply.stopReason } : {}),
-      ...(reply.helper ? { helper: reply.helper } : {}),
-      ...(reply.text !== undefined ? { detail: reply.text } : {}),
-      ...time,
-    }
-  }
-  if (reply.kind === 'missed' || reply.kind === 'admin-passed') {
-    return {
-      who: 'DS Bot', kind: 'notice', reason: reply.kind,
-      ...(reply.name ? { names: [reply.name] } : {}),
-      ...(botId ? { about: botId } : {}),
-      ...(reply.kind === 'missed' ? { minutes: reply.minutes ?? Math.round(ROOM_REPLY_TIMEOUT_MS / 60000) } : {}),
-      ...time,
-    }
-  }
-  if (reply.kind === 'folder') {
-    return {
-      who: 'DS Bot', kind: 'notice', reason: 'folder',
-      ...(reply.path ? { path: reply.path } : {}),
-      ...(reply.text !== undefined ? { text: reply.text } : {}),
-      ...time,
-    }
-  }
-  return {
-    who: 'DS Bot', kind: 'notice', reason: reply.kind,
-    ...(reply.name ? { names: [reply.name] } : {}),
-    ...(botId ? { about: botId } : {}),
-    ...(reply.text !== undefined ? { text: reply.text } : {}),
-    ...time,
-  }
-}
-
-// Extracts group log lines in chronological order from the group's own Session events.
-// Rounds from before the ledger carry their replies inline on the group_relay tool result;
-// rounds after the ledger carry only { from, anchor } and are already in the ledger.
-// A pruned tool result marks a `{ gap: true }` boundary around itself so lines before an
-// unknown drop are never given shifted sequence numbers.
-export function extractGroupSessionLines(events, botNameOf = () => undefined) {
-  const lines = []
-  const relayCalls = new Set()
-  for (const event of events) {
-    if (event?.type === 'user/message') {
-      const source = event.data?.source
-      const content = Array.isArray(event.data?.content) ? event.data.content : []
-      const files = content.filter(block => block?.type === 'file' && block.attachment !== undefined).map(block => block.attachment)
-      const time = Number.isFinite(event.time) ? { time: event.time } : {}
-      if (source?.kind === 'user') {
-        const text = [textOf(content), ...files.map(fileLine)].filter(Boolean).join('\n')
-        lines.push({ who: 'User', text, ...(files.length > 0 ? { files } : {}), ...time })
-      } else if (source?.kind === 'schedule') {
-        const prompts = reminderPrompts(textOf(content))
-        const text = prompts.length > 0 ? prompts.join('\n') : textOf(content)
-        lines.push({ who: 'User', text, ...time })
-      } else if (source?.kind === SOURCE_KIND && source.role === 'post') {
-        if (source.logged !== undefined || source.failed !== undefined || source.resumed === true || source.stopped === true || source.done === true) continue
-        const raw = textOf(content).replace(POST_HEADER, '')
-        const text = [raw, ...files.map(fileLine)].filter(Boolean).join('\n')
-        const botId = source.senderSessionId
-        const who = source.senderName ?? botNameOf(botId) ?? 'Bot'
-        lines.push({ who, ...(botId ? { botId } : {}), text, ...(files.length > 0 ? { files } : {}), ...time })
-      }
-      continue
-    }
-    if (event?.type === 'tool/call') {
-      const name = event.data?.name
-      if (name === 'group_relay' || (name === 'run_code' && String(event.data?.arguments ?? '').includes('group_relay'))) {
-        if (event.data?.callId !== undefined) relayCalls.add(event.data.callId)
-      }
-      continue
-    }
-    if (event?.type !== 'tool/result') continue
-    const callId = event.data?.message?.toolCallId
-    if (!relayCalls.has(callId)) continue
-    relayCalls.delete(callId)
-    const raw = textOf(event.data?.message?.content)
-    if (relayRange(raw) !== undefined) continue
-    const parsed = parseReplies(raw)
-    if (parsed.broken) lines.push({ gap: true })
-    for (const reply of parsed.replies) {
-      if (!reply || typeof reply !== 'object' || reply.kind === 'working' || reply.kind === 'approval') continue
-      const time = Number.isFinite(reply.time) ? { time: reply.time } : {}
-      if (reply.kind === 'user') {
-        lines.push({ who: 'User', text: reply.text ?? '', ...(reply.via ? { via: reply.via } : {}), ...time })
-      } else if (reply.kind === undefined) {
-        const botId = reply.botId
-        const who = reply.name ?? botNameOf(botId) ?? 'Bot'
-        lines.push({ who, ...(botId ? { botId } : {}), text: reply.text ?? '', ...time })
-      } else if (reply.kind === 'lookup' || reply.kind === 'done' || reply.kind === 'stopped' || reply.kind === 'cut' || reply.kind === 'resumed') {
-        const botId = reply.botId
-        const who = reply.name ?? botNameOf(botId) ?? 'Bot'
-        lines.push({ who, ...(botId ? { botId } : {}), kind: reply.kind, text: reply.text ?? '', ...time })
-      } else {
-        lines.push(legacyNoticeRecord(reply, time))
-      }
-    }
-    if (parsed.broken) lines.push({ gap: true })
-  }
-  return lines
-}
-
-function sameSessionLine(a, b) {
-  if (a?.gap === true || b?.gap === true) return false
-  if ((a.kind ?? undefined) !== (b.kind ?? undefined)) return false
-  if (a.kind !== undefined) {
-    if (a.kind === 'notice' && a.reason !== b.reason) return false
-    return a.botId === undefined || b.botId === undefined || a.botId === b.botId
-  }
-  const userA = a.botId === undefined && a.who === 'User'
-  const userB = b.botId === undefined && b.who === 'User'
-  if (userA !== userB) return false
-  if (!userA && a.botId !== undefined && b.botId !== undefined && a.botId !== b.botId) return false
-  if (!userA && (a.botId === undefined || b.botId === undefined) && a.who !== b.who) return false
-  const textA = String(a.text ?? '')
-  const textB = String(b.text ?? '')
-  if (textA === textB) return true
-  if (textA !== '' && textB !== '') return textA.startsWith(textB) || textB.startsWith(textA)
-  return userA && textA === '' && b.images !== undefined
-}
-
-// Aligns extracted Session lines against the oldest kept records in the group's ledger,
-// returning the contiguous lines immediately before `kept[0].seq` without crossing any
-// discontinuity (`{ gap: true }`).
-export function alignGroupSessionLines(sessionLines, kept) {
-  if (sessionLines.length === 0) return []
-  const sorted = [...kept].filter(record => Number.isInteger(record?.seq)).sort((a, b) => a.seq - b.seq)
-  if (sorted.length === 0) {
-    const end = sessionLines.findIndex(line => line.gap === true)
-    const prefix = end === -1 ? sessionLines : sessionLines.slice(0, end)
-    return prefix.map((line, index) => ({ ...line, seq: index + 1 }))
-  }
-  const oldestSeq = sorted[0].seq
-  const anchors = [0]
-  const firstMessage = sorted.findIndex(line => line.kind === undefined)
-  if (firstMessage > 0) anchors.push(firstMessage)
-  for (const anchor of anchors) {
-    const win = Math.min(BACKFILL_WINDOW, sorted.length - anchor)
-    if (win <= 0) continue
-    const candidates = []
-    for (let idx = 0; idx <= sessionLines.length - win; idx += 1) {
-      let ok = true
-      for (let offset = 0; offset < win; offset += 1) {
-        if (!sameSessionLine(sessionLines[idx + offset], sorted[anchor + offset])) { ok = false; break }
-      }
-      if (ok) candidates.push(idx)
-    }
-    if (candidates.length === 0) continue
-    const target = sorted[anchor]
-    const best = candidates.reduce((pick, idx) => {
-      const dist = Math.abs(idx - (target.seq - 1))
-      const pickDist = Math.abs(pick - (target.seq - 1))
-      if (dist !== pickDist) return dist < pickDist ? idx : pick
-      const gap = Math.abs((sessionLines[idx].time ?? 0) - (target.time ?? 0))
-      const pickGap = Math.abs((sessionLines[pick].time ?? 0) - (target.time ?? 0))
-      return gap < pickGap ? idx : pick
-    })
-    const recovered = []
-    for (let i = best - 1; i >= 0; i -= 1) {
-      if (sessionLines[i]?.gap === true) break
-      const seq = target.seq - (best - i)
-      if (seq >= 1 && seq < oldestSeq) recovered.push({ ...sessionLines[i], seq })
-    }
-    return recovered.reverse()
-  }
-  return undefined
+// Inspect only the current group sessions. A goal may stay active between rounds,
+// and the same Bot can work independently in a private chat or in another group.
+export function roomBusyForPatrol(rt, room, ignoreMessageId, openingSessionId) {
+  if (rt.roomActive(room.id) || rt.roomInbox.get(room.id)?.length || rt.roomLaterCount(room.id)) return true
+  // An unanswered batch survives a restart, sometimes for hours. A live waiter
+  // protects an in-flight handoff; the historical batch alone cannot prove one.
+  for (const waiter of rt.roomWaiters.values()) if (waiter.roomId === room.id) return true
+  const agents = rt.ctx.get?.('agents')
+  const queued = message => (ignoreMessageId === undefined || message.id !== ignoreMessageId) && !scheduleChangeId(message)
+  const sessions = [rt.sessionOfRoom(room), ...room.members.map(id => room.sessions?.[id])]
+  return sessions.some(id => {
+    if (!id) return false
+    const agent = agents?.get?.(id)
+    if (id !== openingSessionId && (rt.live.get(id)?.turn !== undefined || agent?.status === 'running')) return true
+    return rt.hasSubagents(id) || rt.waitsForApproval(id)
+      || agent?.inbox?.nextStep?.some(queued) || agent?.inbox?.nextTurn?.some(queued)
+  })
 }
 
 export function install(rt) {
   const { ctx } = rt
+
+  // Kickoff is a host-generated greeting, not a user request. This guard covers
+  // every tool (including shell, code execution and delegated agents), rather
+  // than guessing which tools can have side effects.
+  const kickoffRestricted = (sessionId, info = rt.live.get(sessionId)?.info) => {
+    const owner=rt.groupOwners.get(sessionId)
+    if(!owner)return false
+    if(info?.groupKickoff===true && info.roomId===owner.roomId)return true
+    return [...rt.roomProgress.values()].some(round=>round.roomId===owner.roomId && round.kickoff===true
+      && round.started?.some(turn=>turn.sessionId===sessionId || (info?.exchangeId && turn.exchangeId===info.exchangeId)))
+  }
+  ctx.tools.guard(exec => kickoffRestricted(exec.agent?.id)
+    ? 'This is a group greeting, not a user task. No tools or dispatch are permitted until the user asks for work in this group.' : undefined)
 
   // Everything said in a group is in the group's book of the ledger (ledger.js), whole,
   // before anything reads it. The room's own log in state.json keeps the latest lines,
@@ -417,20 +249,18 @@ export function install(rt) {
   rt.ledger.importer('group-', (book) => {
     const roomId = book.slice('group-'.length)
     const lines = new Map()
-    const keep = (line, text = line.text) => lines.set(line.seq, typeof text === 'string'
-      ? { ...line, text, length: line.length ?? text.length }
-      : line)
     for (const line of rt.roomOf(roomId)?.log ?? []) {
       if (!Number.isInteger(line?.seq)) continue
-      let text = line.text
-      if (line.length !== undefined) {
+      const { length, ...rest } = line
+      let text = rest.text
+      if (length !== undefined) {
         try { text = readFileSync(join(rt.home, 'group-lines', roomId, `${line.seq}.txt`), 'utf8') } catch { /* only its start was kept */ }
       }
-      keep(line, text)
+      lines.set(line.seq, { ...rest, ...(text === undefined ? {} : { text }) })
     }
     try {
       for (const line of parseBook(readFileSync(join(rt.home, 'group-logs', `${oldLogName(roomId)}.jsonl`), 'utf8'))) {
-        if (Number.isInteger(line.seq)) keep(line)
+        if (Number.isInteger(line.seq)) lines.set(line.seq, line)
       }
     } catch { /* no log of its own yet */ }
     return [...lines.values()].sort((a, b) => a.seq - b.seq)
@@ -477,95 +307,10 @@ export function install(rt) {
   }
 
   function dropGroupLines(roomId) {
-    backfilled.delete(roomId)
     rt.ledger.drop(bookOf(roomId))
     if (!writes()) return
     void rm(join(rt.home, 'group-lines', roomId), { recursive: true, force: true }).catch(() => {})
     void rm(join(rt.home, 'group-logs', `${oldLogName(roomId)}.jsonl`), { force: true }).catch(() => {})
-  }
-
-  const backfilled = new Set()
-  const backfilling = new Map()
-  async function sessionEvents(sessionId, signal) {
-    const agent = await rt.resolveAgent(sessionId).catch(() => undefined)
-    const throughSeq = agent?.session?.seq !== undefined ? Number(agent.session.seq) - 1 : undefined
-    if (throughSeq !== undefined && throughSeq < 0) return []
-    const pages = []
-    let beforeSeq
-    for (;;) {
-      const page = await ctx.sessionController.page({
-        address: { kind: 'session', sessionId },
-        ...(throughSeq === undefined ? {} : { throughSeq }),
-        ...(beforeSeq === undefined ? {} : { beforeSeq }),
-        maxMessages: HISTORY_PAGE,
-      }, signal)
-      const events = (page.records ?? []).map(record => record.event).filter(Boolean)
-      if (events.length > 0) pages.push(events)
-      if (!page.hasMore || events.length === 0) break
-      beforeSeq = events[0].seq
-    }
-    return pages.reverse().flat()
-  }
-
-  // Fills missing pre-ledger lines from the group's own Session when a cursor or lookup
-  // asks for lines older than the group's kept log.
-  async function backfillGroupLog(roomId, since) {
-    if (since === undefined || backfilled.has(roomId)) return
-    const pending = backfilling.get(roomId)
-    if (pending !== undefined) return pending
-    const run = (async () => {
-      const room = rt.roomOf(roomId)
-      if (room === undefined) return
-      ensureRoomLog(room)
-      const book = bookOf(roomId)
-      const records = rt.ledger.records(book)
-      let oldestSeq
-      for (const record of records) {
-        if (Number.isInteger(record.seq) && (oldestSeq === undefined || record.seq < oldestSeq)) oldestSeq = record.seq
-      }
-      if (oldestSeq !== undefined && oldestSeq <= since + 1) return
-      if (oldestSeq === undefined && room.seq <= since) return
-      if (typeof ctx.sessionController?.page !== 'function') return
-      const partIds = [...(room.parts ?? []).map(segment => segment.sessionId), rt.sessionOfRoom(room)].filter(Boolean)
-      const signal = AbortSignal.timeout(HISTORY_TIMEOUT_MS)
-      const botNameOf = botId => rt.botOf(botId)?.name
-      const partLines = []
-      let lostError
-      for (let i = partIds.length - 1; i >= 0; i -= 1) {
-        try {
-          partLines.unshift(extractGroupSessionLines(await sessionEvents(partIds[i], signal), botNameOf))
-        } catch (error) {
-          if (lostSession(error)) {
-            lostError ??= error
-            partLines.unshift([{ gap: true }])
-            continue
-          }
-          rt.warn('ds-bot: the Session of group "%s" could not be read: %s', room.name, error?.message ?? error)
-          return
-        }
-      }
-      const sessionLines = partLines.flat()
-      const kept = records.filter(record => Number.isInteger(record.seq))
-      const recovered = alignGroupSessionLines(sessionLines, kept)
-      if (recovered !== undefined && recovered.length > 0) rt.ledger.prepend(book, recovered)
-      let earliestSeq = oldestSeq
-      for (const record of rt.ledger.records(book)) {
-        if (Number.isInteger(record.seq) && (earliestSeq === undefined || record.seq < earliestSeq)) earliestSeq = record.seq
-      }
-      const missing = (earliestSeq ?? (room.seq + 1)) - since - 1
-      if (missing > 0) {
-        if (lostError !== undefined) {
-          rt.warn('ds-bot: %d lines of group "%s" left its log before they were reviewed and could not be recovered from its Session: %s', missing, room.name, lostError.message ?? lostError)
-        } else {
-          rt.warn('ds-bot: %d lines of group "%s" left its log before they were reviewed and were not in its Session', missing, room.name)
-        }
-      }
-      backfilled.add(roomId)
-    })().finally(() => {
-      if (backfilling.get(roomId) === run) backfilling.delete(roomId)
-    })
-    backfilling.set(roomId, run)
-    return run
   }
 
   const roomLineListeners = new Set()
@@ -577,9 +322,11 @@ export function install(rt) {
     const record = { ...line, seq: room.seq, time: line.time ?? Date.now() }
     rt.ledger.append(bookOf(room.id), record)
     // The phone link hears every line the chat will draw (mobile.js).
-    rt.roomLineAdded?.(room, record)
+    if (!record.completedRoomReply) rt.roomLineAdded?.(room, record)
     if (!memberLine(record)) return record
     room.log = [...room.log, cutLine(record)].slice(-ROOM_LOG_MAX)
+    // A recovered row is visible in group reads. Do not resend it to external bridges.
+    if (record.completedRoomReply) return record
     for (const listener of roomLineListeners) {
       try { listener(room, record) } catch (error) { rt.warn('ds-bot: room line listener failed: %s', error) }
     }
@@ -623,139 +370,91 @@ export function install(rt) {
     if (room !== undefined) ensureRoomLog(room)
     let end = to
     if (end === undefined) {
-      const records = rt.ledger.records(bookOf(roomId))
-      const at = anchor === undefined ? -1 : records.findIndex(record => record.event === 'anchor' && record.id === anchor)
-      const next = at === -1
-        ? records.filter(record => record.event === 'anchor' && record.from > from).map(record => record.from)
-        : [records.slice(at + 1).find(record => record.event === 'anchor')?.from].filter(seq => seq !== undefined)
-      if (next.length > 0) end = Math.min(...next) - 1
+      const next = rt.ledger.nextAnchor(bookOf(roomId), from, anchor)
+      if (next !== undefined) end = next - 1
     }
     // Not the messages the group's own Session shows itself.
-    const rows = rt.ledger.range(bookOf(roomId), from, end).filter(record => record.session !== true).map(rowOf).filter(Boolean)
+    let visibleEnd = end
+    if (Number.isSafeInteger(to)) {
+      const book = bookOf(roomId)
+      while (true) {
+        const receipt = rt.ledger.record(book, visibleEnd + 1)?.completedRoomReply
+        if (!receipt || receipt.after !== to || receipt.from !== from || (anchor && receipt.anchor !== anchor)) break
+        visibleEnd += 1
+      }
+    }
+    const rows = rt.ledger.range(bookOf(roomId), from, visibleEnd).filter(record => record.session !== true).map(rowOf).filter(Boolean)
     return { rows, open: end === undefined }
   }
-  const groupRows = (roomId, from, to, anchor) => rowsView(roomId, from, to, anchor).rows
-  const jsonText = text => JSON.stringify(text).slice(1, -1)
-  const isLegacyReply = record => record.kind === undefined && record.session !== true
-    && typeof record.botId === 'string' && typeof record.text === 'string'
-  function hasCompleteText(record) {
-    const length = record.text.length
-    if (record.length !== undefined) return length === record.length
-    // Old imports dropped the original length. Either cap can land one unit early at a surrogate pair.
-    return length !== TEXT_KEPT && length !== TEXT_KEPT - 1
-      && length !== GROUP_LINE_READ && length !== GROUP_LINE_READ - 1
-  }
-  const isKeptReply = record => isLegacyReply(record) && hasCompleteText(record)
-  const matchesOpening = (record, opening, partial) => (partial ? record.text.startsWith(opening) : record.text === opening)
-    || (!hasCompleteText(record) && opening.startsWith(record.text))
-
-  function restoreTrimmedReplies(replies, records) {
-    const restored = []
-    for (const reply of replies) {
-      if (!reply || typeof reply !== 'object' || reply.__omitted__) return null
-      const marker = typeof reply.text === 'string' ? REPLY_ELISION.exec(reply.text) : null
-      if (marker === null) { restored.push(reply); continue }
-      const head = reply.text.slice(0, marker.index)
-      const tail = reply.text.slice(marker.index + marker[0].length)
-      const omitted = Number(marker[1])
-      // save-token's JSON codec keeps 220 and 80 UTF-16 units of an individual string longer than 400.
-      if (reply.kind !== undefined || head.length !== 220 || tail.length !== 80 || omitted <= 100 || REPLY_ELISION.test(tail)) return null
-      const length = head.length + omitted + tail.length
-      const matches = records.filter(record => {
-        if (!isLegacyReply(record) || record.botId !== reply.botId || !matchesOpening(record, head, true)) return false
-        if (!hasCompleteText(record)) return record.length === undefined || record.length === length
-        return record.text.length === length && record.text.endsWith(tail)
-      })
-      if (matches.length !== 1 || !hasCompleteText(matches[0])) return null
-      restored.push({ ...reply, text: matches[0].text })
+  // Publish an already-completed member answer as a row of its original
+  // closed relay. Posting a new native prompt here would open another round.
+  rt.restoreMissedRoomReply = async (sessionId, record, isCurrent) => {
+    const room = rt.roomOf(record.roomId), bot = rt.botOf(record.botId)
+    if (!room || !bot) return false
+    const book = bookOf(room.id), lease = rt.homeLockVersion()
+    const current = () => {
+      const owner = rt.groupOwners.get(sessionId)
+      return isCurrent() && lease !== undefined && rt.homeLockVersion() === lease
+        && rt.roomOf(room.id) === room && rt.botOf(bot.id) === bot && owner?.botId === bot.id && owner.roomId === room.id
+        && room.members.includes(bot.id) && room.sessions?.[bot.id] === sessionId && !roomBusyForPatrol(rt, room)
+        && !batchesOf(room.id, bot.id).length
     }
-    return restored
-  }
-
-  function restoreRelayWindow(preview, records, marker) {
-    const suffix = preview.slice(marker.index + marker[0].length)
-    if (REPLY_ELISION.test(suffix)) return null
-    const head = preview.slice(0, marker.index)
-    const before = parseReplies(head).replies
-    const tailFragment = /^((?:[^"\\]|\\.)*)"/.exec(suffix)
-    if (tailFragment === null) return null
-    let after
-    try { after = JSON.parse(`{"replies":[{"text":"${suffix}`).replies } catch { return null }
-    if (!Array.isArray(after) || after.some(reply => !reply || typeof reply !== 'object' || reply.__omitted__)) return null
-    const tail = after[0]?.text
-    if (typeof tail !== 'string' || tail.length < 16 || after[0].kind !== undefined) return null
-
-    // A line window can start its cut inside a reply's text or after a complete reply.
-    let partial
-    const headFragment = /"text"\s*:\s*"((?:[^"\\]|\\.)*)$/.exec(head)
-    if (headFragment !== null) {
-      try { partial = JSON.parse(`${head}"}]}`).replies.at(-1) } catch { return null }
-    }
-    const first = partial ?? before.findLast(reply => reply?.kind === undefined && typeof reply?.botId === 'string' && typeof reply.text === 'string')
-    if (typeof first?.text !== 'string' || first.text.length < 16 || first.kind !== undefined) return null
-    // A surviving suffix does not prove which prompt owns a cut if an earlier matching start lost its ending.
-    const starts = records.filter(record => isLegacyReply(record) && record.botId === first.botId
-      && matchesOpening(record, first.text, partial !== undefined))
-    // A cut can start in an escape, so decoding the suffix can give it a different meaning.
-    const ends = records.filter(record => isKeptReply(record) && jsonText(record.text).endsWith(tailFragment[1])
-      && (after[0].botId === undefined || record.botId === after[0].botId))
-    if (starts.length !== 1 || ends.length !== 1 || ends[0].seq < starts[0].seq) return null
-    // Don't guess across a missing ledger row, a new prompt, or any other boundary.
-    const span = records.slice(records.indexOf(starts[0]), records.indexOf(ends[0]) + 1)
-    if (!span.every((record, i) => isKeptReply(record) && record.seq === starts[0].seq + i)) return null
-    // Count the saved JSON units: re-encoding half a surrogate pair would add an escape.
-    const hiddenText = span.reduce((length, record) => length + jsonText(record.text).length, 0)
-      - (headFragment?.[1].length ?? jsonText(first.text).length) - tailFragment[1].length
-    const omitted = Number(marker[1])
-    if (span.length === 1) {
-      // A cut inside one string hides no JSON structure, so the encoded length must match exactly.
-      if (partial === undefined || first.text.length + tail.length >= span[0].text.length || hiddenText !== omitted) return null
-    } else if (hiddenText >= omitted) return null
-    const missing = partial === undefined ? span.slice(1) : span
-    return [...before, ...missing.map(rowOf), ...after.slice(1)]
-  }
-
-  // Use only DS Bot's own pre-ledger records, never a file locator embedded in a result.
-  function groupRelayReplies(sessionId, preview) {
-    if (typeof sessionId !== 'string' || typeof preview !== 'string' || preview.length > 65_536) return null
-    const marker = REPLY_ELISION.exec(preview)
-    if (marker === null) return null
-    const room = rt.roomOf(sessionId) ?? rt.roomOf(rt.pastOwners.get(sessionId)?.roomId)
-    if (room === undefined) return null
-    // A room from before logs were versioned has no `seq` yet: open its book through the
-    // migration first, or the importer would cache an empty book for this process.
+    if (!current()) return false
+    const memberCut = await readRoomReplyCut(rt.ctx, sessionId)
+    const result = memberCut && missedRoomTerminal(memberCut.events, record)
+    if (!result || !current()) return false
+    const text = stripOwnName(bot.name, result.text)
+    const mentions = mentionsIn(text, room.members.map(rt.botOf).filter(Boolean))
+    if (isPass(text) || mentions.all || mentions.found.some(peer => peer.id !== bot.id)) return false
+    const roomCut = await readRoomReplyCut(rt.ctx, rt.sessionOfRoom(room))
+    if (!roomCut) return false
+    await rt.ledger.flushRequired(book)
+    if (!current() || !memberCut.current() || !roomCut.current()) return false
+    rt.requireHomeLock()
     ensureRoomLog(room)
-    const book = rt.ledger.records(bookOf(room.id))
-    const anchor = book.findIndex(record => record.event === 'anchor')
-    const records = anchor === -1 ? book : book.slice(0, anchor)
-    // A unique match proves nothing when the original could have aged out of the legacy log.
-    if (records.some((record, i) => record.seq !== i + 1)
-      || (anchor === -1 ? records.length !== room.seq : book[anchor].from > records.length + 1)) return null
-    // The line codec keeps 260 and 100 raw units, even if the splice still parses as JSON.
-    if (marker.index === 260 && preview.length - marker.index - marker[0].length === 100) {
-      return restoreRelayWindow(preview, records, marker)
+    const entry = rt.ledger.open(book)
+    if (!entry.complete || entry.torn) return false
+    const records = entry.records
+    const proof = { ...result, memberSessionId:sessionId }
+    const existing = records.filter(row => row.completedRoomReply?.exchangeId === result.exchangeId)
+    if (existing.length) {
+      if (existing.length !== 1 || existing[0].botId !== bot.id || existing[0].text !== text
+        || !sameReceipt(existing[0].completedRoomReply, proof)) return false
+      await rt.save({ required:true })
+      return true
     }
-    let replies
-    try { replies = JSON.parse(preview)?.replies } catch { /* a cut can break JSON syntax */ }
-    if (Array.isArray(replies) && replies.some(reply => typeof reply?.text === 'string' && REPLY_ELISION.test(reply.text))) {
-      const restored = restoreTrimmedReplies(replies, records)
-      if (restored !== null) return restored
-    }
-    return restoreRelayWindow(preview, records, marker)
+    const lastAnchor = records.findLast(row => row.event === 'anchor')
+    const closed = records.findLast(row => row.event === 'round')
+    if (!lastAnchor || !closed || closed.stopped || closed.from !== lastAnchor.from || closed.to !== room.seq
+      || records.at(-1) !== closed || !Array.isArray(closed.failed) || closed.failed.length || !Array.isArray(closed.passed)
+      || closed.passed.includes(bot.name) || !relayRecorded(roomCut.events, lastAnchor, proof)) return false
+    const round = rt.ledger.range(book, closed.from, closed.to)
+    // Only the original user's opener and one unambiguous 'working' record.
+    // An old unkeyed text/progress row cannot prove this answer was missing.
+    if (round.length !== 2 || round[0].seq !== closed.from || round[1].seq !== closed.to
+      || closed.to !== closed.from + 1 || round[0].via || round[0].session !== true || round[0].botId || round[0].kind || round[1].kind !== 'working' || round[1].botId !== bot.id
+      || !(lastAnchor.time <= result.admittedAt && result.admittedAt <= round[1].time)) return false
+    const { text: _text, ...identity } = proof
+    const saved = say(room, { who:bot.name, botId:bot.id, text,
+      completedRoomReply:{ ...identity, from:closed.from, after:closed.to, anchor:lastAnchor.id } })
+    await rt.ledger.flushRequired(book)
+    if (!current() || rt.ledger.record(book, saved.seq) !== saved) return false
+    await rt.save({ required:true })
+    return true
   }
+  const groupRows = (roomId, from, to, anchor) => rowsView(roomId, from, to, anchor).rows
   // A sequence of words over everything said in the group, newest first, with each
   // hit's neighbours. `page` (`before` or `offset`) reads the next older page.
   const groupSearch = (roomId, query, page) => searchGroupBook(rt.ledger.records(bookOf(roomId)), query, page)
 
   Object.assign(rt, {
-    keepGroupLine, dropGroupLines, groupRows, groupRowsView: rowsView, groupRelayReplies, groupSearch,
+    keepGroupLine, dropGroupLines, groupRows, groupRowsView: rowsView, groupSearch,
     logRoom: (room, line) => say(room, line),
     onRoomLine: (listener) => {
       roomLineListeners.add(listener)
       return () => roomLineListeners.delete(listener)
     },
     // The group's own log, for the memory review and read_group_chat: every line, whole.
-    backfillGroupLog,
     groupLinesAfter: async (roomId, since) => rt.ledger.after(bookOf(roomId), since).filter(memberLine),
     groupLine: async (roomId, seq) => {
       const record = rt.ledger.record(bookOf(roomId), seq)
@@ -812,9 +511,8 @@ export function install(rt) {
   }
   rt.roomFolderNotice = roomFolderNotice
 
-  // A member's group Session, created on its first turn there. A new one starts with
-  // a fresh look at the log and a brief of the member's own chat; the brief is the
-  // first message, so it stays fixed and the prefix stays cacheable.
+  // A member's group Session starts from that group's own context. Its private
+  // chat is a separate conversation and is not an authorization for this room.
   async function groupSessionFor(room, member) {
     room.sessions ??= {}
     const known = room.sessions[member.id]
@@ -834,6 +532,7 @@ export function install(rt) {
     }
     room.sessions[member.id] = id
     rt.groupOwners.set(id, { botId: member.id, roomId: room.id })
+    room.seen ??= {}
     delete room.seen[member.id]
     const ref = await rt.desiredModel(member)
     if (ref !== undefined) {
@@ -848,7 +547,14 @@ export function install(rt) {
     await rt.resolveAgent(id)
       .catch(error => rt.warn('ds-bot: scoped tools for %s in %s not applied: %s', member.name, room.name, error))
     await rt.ensureCapabilities(id)
-    return { id, brief: await rt.ownChatBrief(member) }
+    return { id }
+  }
+  rt.ensureGroupTaskSession = async (roomId, botId) => {
+    const room = rt.roomOf(roomId), member = rt.botOf(botId)
+    if (!room || !member || !room.members?.includes(botId) || member.private === true) throw new Error('Task recipient is not in this group')
+    const session = await groupSessionFor(room, member)
+    if (!session?.id || rt.roomOf(roomId) !== room || !room.members.includes(botId) || room.sessions?.[botId] !== session.id) throw new Error('Group task Session is unavailable')
+    return session.id
   }
 
   // Lines from before the round's opening message are kept apart from this round, so
@@ -869,16 +575,20 @@ export function install(rt) {
     const spokeThisRound = (room.seen[member.id] ?? 0) >= round.startSeq
     const members = `Members: the user${peers.length ? `, ${peers.join(', ')}` : ''} and you${leads ? ' (admin)' : ''}. ${ROOM_CALLS}`
     const notice = room.notice ? `Group notice (shared instructions for every member):\n${room.notice}` : ''
-    if (round.kickoff) return { text: [members, notice, leads ? adminNote(room) : '', roomKickoff(rt.uiLanguage?.())].filter(Boolean).join('\n\n'), images: [], files: [] }
-    const goal = rt.goalBlock?.(room, member, { nudge: round.goalNudge === true, resume: round.goalResume === true }) ?? ''
+    const boundary = `Current group: ${JSON.stringify(room.name)} (room ID ${JSON.stringify(room.id)}). Work must follow the user's actual request for this group. A goal records task state but a goal created by a Bot does not prove user authorization. Private chats, other groups and handoff notes do not authorize a new task in this group.`
+    if (round.kickoff) return { text: [boundary, members, notice, leads ? adminNote(room) : '', roomKickoff(rt.uiLanguage?.()), 'This is a greeting, not a user task. Do not dispatch work or use tools; wait for a request in this group.'].filter(Boolean).join('\n\n'), images: [], files: [] }
+    const goal = rt.goalBlock?.(room, member, { nudge: round.goalNudge === true, resume: round.goalResume === true, inspectOnly: round.reviewInspect === true, reviewId: round.goalReviewId }) ?? ''
     // Members answering in this round are named with the round below.
     const answering = new Set(round.slots.filter(other => other.status === 'speaking').map(other => other.id))
     const working = workingIn(room).filter(item => item.bot.id !== member.id && !answering.has(item.bot.id))
       .map(item => ({ ...item, unread: unreadCount(room, item.bot.id) }))
     const text = [
+      boundary,
       members,
       notice,
+      rt.projectCoordinationPrompt?.(room, member),
       goal,
+      ...(round.reviewInspect ? ['Earlier delivery outcomes are unknown for specific owners. First inspect the original handoff and task. Do not reassign, restart or repeat work for an uncertain recipient, and do not guess an ambiguous owner. For every distinct, eligible current task with an unresolved original handoff, call group_goal review-follow-up once with its exact task ID and fingerprint from show; this review permits follow-ups for multiple different tasks. Do not stop after the first owner. Each generated group callout uses the exact plain-text @Name outside backticks, code blocks and Markdown links, plus task ID, status/evidence requested and deadline. Ask whether the original handoff was received and what its current status/next evidence is; explicitly say not to repeat the work. For known reported tasks, ask only for exact missing evidence. Respect dependencies and never use @all. You may advance independent, ready tasks owned by other unblocked members only through the scoped actions listed in the group goal. Do not change task state or pass a stage.'] : []),
       leads ? adminNote(room) : '',
       earlier.length ? `Earlier in the group, before this round (context only):\n${transcript(earlier, memberText(room))}` : '',
       owed.length ? `Results of the work you asked for that the lines here leave out (oldest first):\n${owed.map(result => (result.line
@@ -887,11 +597,12 @@ export function install(rt) {
       quiet.length ? `Finished without a closing message: ${quiet.join(' and ')}. What they said while they worked is their result; read_group_chat reads it.` : '',
       current.length
         ? `This round so far${spokeThisRound ? ', since your last message' : ', starting with the new message'} (oldest first):\n${transcript(current, memberText(room))}`
-        : 'Nothing new in this round since your last message.',
+        : round.reviewInspect && leads ? 'There are no new group messages; the scheduled goal inspection still requires group_goal show.' : 'Nothing new in this round since your last message.',
       round.shown?.includes(member.id) ? '' : referenceNote(round.references),
       working.length > 0 ? `Still at work on what they were asked; each posts here when done: ${working.map(item => `${item.bot.name} (${minutesSince(item.since)} min${item.unread > 0 ? `, with ${item.unread} group message(s) it has not read yet` : ''})`).join(', ')}.` : '',
       ...placeLines(round, slot),
-      ROOM_REPLY,
+      round.reviewInspect && leads ? ROOM_INSPECTION_REPLY : ROOM_REPLY,
+      round.goalReceiptFollowup && leads ? RECEIPT_FOLLOWUP_DUTY(round.goalReceiptFollowup) : '',
     ].filter(Boolean).join('\n\n')
     const shown = [...earlier, ...owed.flatMap(result => result.line ?? []), ...current]
     return { text, images: shown.flatMap(line => line.images ?? []), files: shown.flatMap(line => line.files ?? []) }
@@ -930,16 +641,16 @@ export function install(rt) {
     return lines
   }
 
-  // Members whose turn, DSH subagent, or background task in this group is running, and since when.
+  // Members whose turn or DSH subagent in this group is running, and since when.
   const workingIn = room => room.members.flatMap((id) => {
     const sessionId = room.sessions?.[id]
     const entry = rt.live.get(sessionId)
     const bot = rt.botOf(id)
     if (bot === undefined) return []
     if (entry?.turn !== undefined) return [{ bot, since: entry.since ?? Date.now() }]
-    if ((sessionId !== undefined && rt.hasSubagents?.(sessionId)) || rt.hasRoomTasks?.(room.id, id) === true) {
-      const workSince = rt.roomWorkView?.()?.[room.id]?.find(item => item.botId === id)?.since
-      return [{ bot, since: workSince ?? Date.now() }]
+    if (sessionId !== undefined && rt.hasSubagents?.(sessionId)) {
+      const subSince = rt.roomWorkView?.()?.[room.id]?.find(item => item.botId === id)?.since
+      return [{ bot, since: subSince ?? Date.now() }]
     }
     return []
   })
@@ -969,12 +680,12 @@ export function install(rt) {
   const batchesOf = (roomId, botId) => Object.values(batches()).filter(batch => batch.roomId === roomId && batch.pending.includes(botId))
   const unpend = (batch, botId) => { batch.pending = batch.pending.filter(id => id !== botId) }
 
-  // At work in the group: a turn, subagent, or group background task running, a call waiting
-  // in a round, or a message on its way to the member's group Session that no turn took up yet.
+  // At work in the group: a turn or subagent running, a call waiting in a round, or a
+  // message on its way to the member's group Session that no turn took up yet (a restart
+  // queues the pick-up before the turn starts).
   const activeInRoom = (room, botId) => {
     const sessionId = room.sessions?.[botId]
     if (sessionId !== undefined && (rt.live.get(sessionId)?.turn !== undefined || rt.hasSubagents?.(sessionId) === true)) return true
-    if (rt.hasRoomTasks?.(room.id, botId) === true) return true
     if (sessionId !== undefined && (rt.unreadOf?.(sessionId)?.length ?? 0) > 0) return true
     return [...rt.roomProgress.values()].some(round => round.roomId === room.id
       && round.slots.some(slot => slot.id === botId && (slot.status === 'waiting' || slot.status === 'speaking')))
@@ -1043,10 +754,7 @@ export function install(rt) {
   const leaveBatch = (room, batch, botId, { keep = false } = {}) => {
     unpend(batch, botId)
     pruneBatchPending(room, batch)
-    if (batch.pending.length === 0) {
-      if (!keep) delete batches()[batch.key]
-      void rt.goalSettled?.(room).catch(error => rt.warn('ds-bot: goal settle in %s failed: %s', room.name, error))
-    }
+    if (batch.pending.length === 0 && !keep) delete batches()[batch.key]
     saveSoon()
   }
   const closeBatch = (key) => {
@@ -1128,20 +836,14 @@ export function install(rt) {
   // checked: a step line says what is under way, not what came of it.
   // A Session's own folder is where it really writes, and it is only known from the
   // Session object (its header), never from its id.
-  const claimsOf = (session, text, worked, calledPeer = false) => {
-    if (session === undefined) return undefined
-    const owner = rt.groupOwners.get(session.id)
-    const hasBg = rt.hasSubagents?.(session.id) === true
-      || (owner !== undefined && rt.hasRoomTasks?.(owner.roomId, owner.botId) === true)
-    return claimsFor({
-      text,
-      base: rt.sessionFolder?.(session),
-      worked,
-      subagents: hasBg,
-      runningJobs: rt.runningJobs?.(session.id)?.length ?? null,
-      calledPeer,
-    })
-  }
+  const claimsOf = (session, text, worked, calledPeer = false) => session === undefined ? undefined : claimsFor({
+    text,
+    base: rt.sessionFolder?.(session),
+    worked,
+    subagents: rt.hasSubagents?.(session.id) === true,
+    runningJobs: rt.runningJobs?.(session.id)?.length ?? null,
+    calledPeer,
+  })
 
   // One member turn inside the room; resolves to its final text, `{ failure }` when its
   // model call failed, `{ missed }` when it went quiet for too long, `{ approval }` when
@@ -1151,7 +853,7 @@ export function install(rt) {
   // called it, which answers what the turn posts after the round moved on. What the
   // member writes before its last step is posted at once and collected in `said`, and
   // `heard` takes each such line once it is posted.
-  async function roomTurn(room, member, sessionId, { text, images = [], files = [] }, note, signal, round, by, said = [], heard = () => {}, onWork = () => {}) {
+  async function roomTurn(room, member, sessionId, { text, images = [], files = [] }, note, signal, round, by, said = [], heard = () => {}, onWork = () => {}, automatic = false, originReviewId) {
     if (signal.aborted) return null
     const startedAt = Date.now()
     const exchangeId = randomUUID()
@@ -1181,8 +883,9 @@ export function install(rt) {
         grace ??= setTimeout(() => finish({ working: true }), ROOM_WORK_GRACE_MS)
       }
       const say = (raw) => {
-        const step = stripOwnName(member.name, raw)
+        let step = stripOwnName(member.name, raw)
         if (isPass(step)) return
+        if(round.kickoff)step = safeKickoffText(room,step)
         said.push(step)
         postInRound(room, member, step, Date.now() - startedAt)
         heard(step)
@@ -1191,8 +894,17 @@ export function install(rt) {
       rt.roomWaiters.set(exchangeId, { sessionId, botId: member.id, roomId: room.id, resolve: finish, fail: failure => finish({ failure }), touch, work, say, approval: () => finish({ approval: true }) })
       signal.addEventListener('abort', () => finish(null), { once: true })
     })
+    let notAdmitted = false
     try {
-      await rt.deliver({ fromId: undefined, toId: member.id, sessionId, role: 'room', roomId: room.id, exchangeId, note, text, images, files, steer: busy, ...(by ? { askedBy: by } : {}) })
+      await rt.deliver({ fromId: undefined, toId: member.id, sessionId, role: 'room', roomId: room.id, exchangeId, note, text, images, files, steer: busy, ...(round.kickoff ? { groupKickoff: true } : {}), ...((round.goalReviewId ?? originReviewId) ? { reviewId: round.goalReviewId ?? originReviewId } : {}), ...(round.reviewInspect ? { reviewInspect: true } : {}), ...(by ? { askedBy: by } : {}) }, (round.goalReviewId || originReviewId || automatic) ? { beforeAdmission: target => {
+        if (automatic && rt.goalRecoveryBlocked?.(room, member.id)) throw new Error('Group work was stopped before delivery')
+        if (originReviewId && !rt.goalReviewAllowed?.(room, originReviewId)) throw new Error('The originating goal review changed before delivery')
+        if (round.goalReviewId && !rt.goalReviewAllowed?.(room, round.goalReviewId)) throw new Error('Goal review was cancelled before delivery')
+        if (round.goalReviewId && (!Array.isArray(target.inbox?.nextStep) || !Array.isArray(target.inbox?.nextTurn)
+          || target.inbox.nextStep.some(message => !scheduleChangeId(message)) || target.inbox.nextTurn.some(message => !scheduleChangeId(message))
+          || target.status === 'running'
+          || rt.live.get(sessionId)?.turn !== undefined || rt.hasSubagents?.(sessionId) === true || rt.waitsForApproval?.(sessionId) === true)) throw new Error('Goal review deferred while the target is busy')
+      }, onNotAdmitted: () => { notAdmitted = true } } : undefined)
       // The prompt reached the member: its read position moves on.
       room.seen[member.id] = seenAt
       // Still held by an earlier request: this turn cannot start until the user answers.
@@ -1200,6 +912,10 @@ export function install(rt) {
       // Still at earlier work: the call steers it at its next step; the round goes on.
       else if (busy) rt.roomWaiters.get(exchangeId)?.resolve({ working: true })
     } catch (error) {
+      if (notAdmitted) rt.forgetDelivery?.(exchangeId, sessionId)
+      if (notAdmitted && round.goalReviewId && rt.isAdminOf(room, member.id)) {
+        await rt.goalReviewNotOpened?.(room, round.goalReviewId)
+      }
       rt.warn('ds-bot: group delivery to %s failed: %s', member.name, error)
       // A delivery that failed is not a pass: the round shows it. Nothing here can
       // repair a lost Session, so the member's next turn in the group starts a new one.
@@ -1211,8 +927,8 @@ export function install(rt) {
       rt.roomWaiters.get(exchangeId)?.fail({ code: lost ? 'SESSION_RESET' : 'SESSION', message: String(error?.message ?? error).slice(0, 300) })
     }
     const reply = await done
-    // A turn that ended leaves nothing for a stop to cancel unless subagents or group tasks keep running.
-    if ((typeof reply === 'string' || reply?.failure !== undefined) && !rt.hasSubagents?.(sessionId) && !rt.hasRoomTasks?.(room.id, member.id)) started.splice(started.indexOf(turn), 1)
+    // A turn that ended leaves nothing for a stop to cancel.
+    if ((typeof reply === 'string' || reply?.failure !== undefined) && !rt.hasSubagents?.(sessionId)) started.splice(started.indexOf(turn), 1)
     if (reply === null || typeof reply === 'object') return reply
     return stripOwnName(member.name, String(reply ?? '').trim())
   }
@@ -1231,8 +947,9 @@ export function install(rt) {
     return waiters.length > 0
   }
   rt.yieldRoomTurn = (sessionId) => { for (const waiter of waitersOf(sessionId)) waiter.approval() }
-  // The team's own tools are quick; any other tool is the start of work.
-  const QUICK_TOOLS = new Set(TEAM_TOOLS)
+  // The team's own tools are quick; remote Git sync can block and may update a
+  // checkout, so a group round must treat it as work.
+  const QUICK_TOOLS = new Set(TEAM_TOOLS.filter(tool => tool !== 'sync_shared_repository'))
   rt.workRoomTurn = (sessionId, tool) => {
     if (QUICK_TOOLS.has(tool)) return
     const waiters = waitersOf(sessionId)
@@ -1259,15 +976,23 @@ export function install(rt) {
   // it up the order, any other call lets it start at once. A call of another Bot stays
   // a call of its own, so that Bot is woken for its own work. `by` is the calling
   // member, if a member called.
-  function callIn(round, callees, note, by, { ordered = false } = {}) {
+  function callIn(round, callees, note, by, { ordered = false, automatic = false, originReviewId } = {}) {
     if (callees.length === 0) return
     round.batches = (round.batches ?? 0) + 1
     const batchKey = registerBatch(round.roomId, by, callees)
     let last
     for (const peer of callees) {
-      const waiting = round.slots.findIndex(slot => slot.id === peer.id && slot.status === 'waiting' && (by === undefined || slot.by === undefined || slot.by === by))
+      // Keep explicit user and automatic/review calls separate. Reusing a
+      // waiting slot would erase or contaminate one call's provenance.
+      const incomingAutomatic = automatic || by !== undefined
+      const waiting = round.slots.findIndex(slot => slot.id === peer.id && slot.status === 'waiting'
+        && (slot.automatic === true || slot.fromBot === true || slot.by !== undefined) === incomingAutomatic
+        && (slot.originReviewId ?? undefined) === originReviewId
+        && (by === undefined || slot.by === undefined || slot.by === by))
       const moves = waiting === -1 || (ordered && round.slots[waiting].ordered === true)
       const slot = waiting === -1 ? { id: peer.id, name: peer.name, status: 'waiting' } : round.slots[waiting]
+      if (automatic) slot.automatic = true
+      if (originReviewId) slot.originReviewId = originReviewId
       if (moves && waiting !== -1) round.slots.splice(waiting, 1)
       slot.note = note
       slot.batch = round.batches
@@ -1302,7 +1027,7 @@ export function install(rt) {
   // the round's speakers, and one already waiting in the round is not called twice.
   const releaseParked = (room, round) => {
     const parked = room.paused ?? []
-    const due = parked.filter(entry => entry.idle !== true || round.userMessage === true)
+    const due = parked.filter(entry => entry.idle !== true || round.userMessage === true || round.scheduledMessage === true)
     if (due.length === 0) return
     const left = parked.filter(entry => !due.includes(entry))
     if (left.length > 0) room.paused = left
@@ -1415,13 +1140,21 @@ export function install(rt) {
   // Every 0-tool status step counts toward the room's idle rounds, also one that names
   // nobody: that step is what a group answering itself runs on. Once the room is paused
   // (or this step reaches the limit) the calls it would make wait for the user.
-  function callFrom(room, round, member, text, called, { worked = false, byBot = false } = {}) {
+  function callFrom(room, round, member, text, called, { worked = false, byBot = false, originReviewId } = {}) {
+    if (round.kickoff) return
+    if (round.reviewInspect === true) return
+    if (round.goalReviewId && !rt.goalReviewAllowed?.(room, round.goalReviewId)) return
     const everyone = room.members.map(rt.botOf).filter(Boolean)
     const others = everyone.filter(other => other.id !== member.id)
     const { all, found: named } = mentionsIn(text, everyone)
     const found = named.filter(other => other.id !== member.id)
-    const callees = (rt.isAdminOf(room, member.id) && all ? [...found, ...others.filter(other => !found.includes(other))] : found)
-      .filter(peer => !called.has(peer.id))
+    const requested = (rt.isAdminOf(room, member.id) && all ? [...found, ...others.filter(other => !found.includes(other))] : found).filter(peer => !called.has(peer.id))
+    const blocked = requested.filter(peer => rt.goalDispatchBlocked?.(room, peer.id))
+    for (const peer of blocked) if (!(round.stopNotice ??= new Set()).has(peer.id)) {
+      round.stopNotice.add(peer.id)
+      rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GROUP_WORK_HELD', text: `No group work was sent to ${peer.name}: the goal is stopped, paused, or its stop state is unknown. Inspect the original task before continuing.` })
+    }
+    const callees = requested.filter(peer => !rt.goalDispatchBlocked?.(room, peer.id))
     // Counted before the callers below, because a status post calls nobody at all.
     let idleStep = false
     if (worked) {
@@ -1440,7 +1173,7 @@ export function install(rt) {
     for (const peer of callees) called.add(peer.id)
     if (byBot && idleStep && holdIdleCalls(room, round, member, callees, { named, all })) return
     if (callees.length === 0) return
-    callIn(round, callees, `${member.name} mentioned you`, member.id)
+    callIn(round, callees, `${member.name} mentioned you`, member.id, { automatic: true, originReviewId })
     // An @Name from the admin hands the member its goal task.
     if (rt.isAdminOf(room, member.id)) for (const peer of callees) rt.goalTaskWorking?.(room.id, peer.id)
   }
@@ -1513,9 +1246,13 @@ export function install(rt) {
       dropMemberFromBatch(room, member.id)
       return
     }
+    if (round.goalReviewId && rt.isAdminOf(room, member.id) && !await rt.goalReviewBind?.(room, round.goalReviewId, session.id)) {
+      slot.status = 'failed'
+      return
+    }
     const prompt = roomPrompt(room, member, round, slot, await finishedLines(room, slot))
     round.shown?.push(member.id)
-    const text = session.brief === undefined ? prompt.text : `${session.brief}\n\n${prompt.text}`
+    const text = prompt.text
     const said = []
     // The log lines this turn posted: its result for the Bot that called it.
     const posted = []
@@ -1535,14 +1272,15 @@ export function install(rt) {
       room, member, session.id, { text, images: prompt.images, files: prompt.files }, slot.note ?? 'your turn', signal, round, slot.by, said,
       (line) => {
         posted.push(room.seq)
-        callFrom(room, round, member, line, called, { worked, byBot: answeredBot })
+        callFrom(room, round, member, line, called, { worked, byBot: answeredBot, originReviewId: slot.originReviewId })
       },
-      onWork,
+      onWork, answeredBot || slot.automatic === true, slot.originReviewId,
     )
-    const final = typeof reply === 'string' && !isPass(reply) ? reply : undefined
+let final = typeof reply === 'string' && !isPass(reply) ? reply : undefined
+    if(final && round.kickoff)final = safeKickoffText(room,final)
     // Tool-only turns can finish without assistant text; their changes still belong here.
     const changes = await rt.turnChanges?.(session.id)
-    const bgRunning = rt.hasSubagents?.(session.id) === true || rt.hasRoomTasks?.(room.id, member.id) === true
+    const subRunning = rt.hasSubagents?.(session.id) === true
     if (reply?.failure !== undefined) {
       // Not a pass: the user sees why the member is silent, and the round goes on.
       slot.status = 'failed'
@@ -1556,7 +1294,7 @@ export function install(rt) {
       slot.status = 'working'
       markSlotWorked(room.id, slot)
       say(room, { who: member.name, botId: member.id, kind: 'working' })
-    } else if (bgRunning) {
+    } else if (subRunning) {
       if (final !== undefined) {
         postInRound(room, member, final, Date.now() - startedAt, claimsOf(session, final, true), changes)
         callFrom(room, round, member, final, called, { worked: true, byBot: answeredBot })
@@ -1625,6 +1363,7 @@ export function install(rt) {
   // One round runs in a group at a time; what comes in meanwhile joins it (joinRound) or
   // waits for the next one (laterPosts).
   const laterPosts = new Map()
+  rt.roomLaterCount = roomId => laterPosts.get(roomId)?.length ?? 0
   // Groups whose round has ended but still finishes (goal check, save, reports): the group
   // stays taken until it hands what waits on to the next round, so no second round starts.
   const finalizing = new Set()
@@ -1634,6 +1373,17 @@ export function install(rt) {
   const roundRuns = new Map()
   rt.roomRounds = roomId => [...(roundRuns.get(roomId) ?? [])]
   const runningRound = roomId => [...rt.roomProgress.values()].find(round => round.roomId === roomId)
+  const periodicReviewPost = post => post.goal === 'nudge' && Boolean(post.reviewId)
+  rt.roomBusyForPatrol = (room, ignoreMessageId, openingSessionId) => roomBusyForPatrol(rt, room, ignoreMessageId, openingSessionId)
+  const rowRun = randomUUID()
+  rt.groupRowKey = roomId => {
+    const book = rt.ledger.cursor(bookOf(roomId))
+    const rounds = [...rt.roomProgress].filter(([, round]) => round.roomId === roomId)
+      .map(([id, round]) => [id, round.from, round.slots.filter(slot => slot.status === 'speaking').map(slot => slot.id)])
+    // The first part invalidates even a closed range after rollback, drop,
+    // an external file replacement, or host restart.
+    return `${rowRun}:${book.epoch}|${JSON.stringify([book.version, rt.roomOf(roomId)?.seq, finalizing.has(roomId), rounds])}`
+  }
   // Stops the round running in a group, with the member turns it started.
   // A round still finishing is stopped too: what waits on it then waits for the group's
   // next message instead of starting.
@@ -1664,6 +1414,10 @@ export function install(rt) {
     const members = room.members.map(rt.botOf).filter(Boolean)
     for (const post of posts) {
       if (post.logged !== undefined) continue
+      if (round.reviewInspect === true) {
+        laterPosts.set(room.id, [...(laterPosts.get(room.id) ?? []), post])
+        continue
+      }
       const own = round.kickoff || post.kickoff || post.goal !== undefined || post.images !== undefined || (post.references?.length ?? 0) > 0
       if (own) {
         laterPosts.set(room.id, [...(laterPosts.get(room.id) ?? []), post])
@@ -1687,8 +1441,11 @@ export function install(rt) {
       const text = [post.text, ...(post.files ?? []).map(fileLine)].filter(Boolean).join('\n')
       say(room, { who: 'User', text, ...(post.files === undefined ? {} : { files: post.files }), ...(post.via === undefined ? {} : { via: post.via }), session: true })
       unpauseRoomIdle(room)
-      round.userMessage = true
-      rt.goalUserMessage?.(room.id)
+      if (rt.isScheduledRoomPost(post)) round.scheduledMessage = true
+      else {
+        round.userMessage = true
+        rt.goalUserMessage?.(room.id)
+      }
       const { all, found } = mentionsIn(post.text ?? '', members)
       const { speakers, ordered } = openingCall(room, { text: post.text ?? '' })
       callIn(round, speakers, all || found.length > 0 ? 'the user mentioned you' : 'new message from the user', undefined, { ordered })
@@ -1702,9 +1459,12 @@ export function install(rt) {
   ctx.effect(() => () => {
     disposed = true
     for (const round of rt.roomProgress.values()) round.abort?.abort()
+    return Promise.allSettled([...roundRuns.values()].flatMap(runs => [...runs]))
+      .then(() => rt.ledger?.flush?.())
   }, 'ds-bot: group rounds')
 
   function startRound(room, queued, agent, key = randomUUID()) {
+    if (disposed) return undefined
     const controller = new AbortController()
     // Taken at once, so a call that comes in while this one sets up joins it.
     const holder = { roomId: room.id, slots: [], starting: true, abort: controller }
@@ -1732,7 +1492,7 @@ export function install(rt) {
     // a goal that was written or stopped keeps only its user line.
     for (const post of [...posts]) {
       if (post.goal === 'nudge' || post.goal === 'resume') {
-        if (room.goal?.id !== post.goalId || room.goal.status !== 'active' || (post.goal === 'nudge' && room.goal.idle === true)) posts.splice(posts.indexOf(post), 1)
+        if (room.goal?.id !== post.goalId || room.goal.status !== 'active' || (post.goal === 'nudge' && (post.reviewId ? !rt.goalReviewAllowed?.(room, post.reviewId) : room.goal.idle === true))) posts.splice(posts.indexOf(post), 1)
       } else if (post.goal === 'draft' && (room.goal?.id !== post.goalId || room.goal.status !== 'drafting')) {
         delete post.goal
         delete post.goalId
@@ -1744,10 +1504,10 @@ export function install(rt) {
     // late failure, its work picked up after a restart, its work the user stopped, or
     // the end of work whose result it already posted is an event of the round.
     const event = item => item.failed || item.resumed || item.stopped || item.done || item.goal === 'nudge' || item.goal === 'resume'
-    // A user post has no botId and is no round event or kickoff; a goal draft counts
-    // as the user's own line too.
-    const userPost = post => post.botId === undefined && post.kickoff !== true && !event(post)
-    const stoppedOnly = posts.length > 0 && posts.every(item => event(item) && item.stopped === true && item.askedBy === undefined)
+    // A user post has no botId and is no round event, kickoff or scheduled
+    // reminder; a goal draft counts as the user's own line too.
+    const userPost = post => post.botId === undefined && post.kickoff !== true && !event(post) && !rt.isScheduledRoomPost(post)
+    const stoppedOnly = posts.length > 0 && posts.every(item => event(item) && item.stopped === true)
     for (const post of posts.filter(item => !item.kickoff && !event(item) && item.logged === undefined)) {
       // Image readings go into the log only; `@` names are picked from what the user typed.
       // Images and files stay with their line and reach each member the line is shown to.
@@ -1776,6 +1536,7 @@ export function install(rt) {
     const callsNobody = post => post.member === true && openingSpeakers(room, post).length === 0
     const open = posts.filter(post => post.called !== true)
     const opener = open.findLast(post => !event(post) && !callsNobody(post)) ?? open.findLast(post => !event(post)) ?? open.at(-1) ?? { text: '', quiet: true }
+    for (const post of posts) if (post.reviewId && post !== opener) await rt.goalReviewNotOpened?.(room, post.reviewId)
     const references = posts.flatMap(post => post.references ?? [])
     // A member a Bot's post calls by name works for that Bot. The saved list is the
     // whole message; the text may be only its opening.
@@ -1786,7 +1547,7 @@ export function install(rt) {
     // streak. Only the user's message lifts a pause already in place.
     const poster = opener.botId === undefined ? undefined : rt.botOf(opener.botId)
     const idlePost = poster !== undefined && !event(opener) && opener.quiet !== true && isIdleRelayText(opener.text ?? '', everyone, [])
-    if (posts.some(userPost)) unpauseRoomIdle(room)
+    if (posts.some(post => userPost(post) || rt.isScheduledRoomPost(post))) unpauseRoomIdle(room)
     // The pause holds a status post back: it is not answered, and the members it named
     // wait for the user. A post with work in it goes ahead.
     const holdsPost = idlePost && room.idlePaused !== undefined
@@ -1814,8 +1575,12 @@ export function install(rt) {
       startSeq,
       goalRevision: room.goal?.revision,
       ...(posts.some(userPost) ? { userMessage: true } : {}),
+      ...(posts.some(post => rt.isScheduledRoomPost(post)) ? { scheduledMessage: true } : {}),
       ...(opener.kickoff ? { kickoff: true } : {}),
       ...(opener.goal === 'nudge' ? { goalNudge: true } : {}),
+      ...(opener.reviewId ? { goalReviewId: opener.reviewId } : {}),
+      ...(opener.reviewInspect ? { reviewInspect: true } : {}),
+      ...(opener.goalReceiptFollowup ? { goalReceiptFollowup: opener.goalReceiptFollowup } : {}),
       ...(opener.goal === 'resume' ? { goalResume: true } : {}),
       ...(stoppedOnly ? { stoppedOnly: true } : {}),
       ...(references.length > 0 ? { references, shown: [] } : {}),
@@ -1825,6 +1590,7 @@ export function install(rt) {
         // A round a Bot's post opened: what its members answer is Bot-to-Bot, counted
         // by the idle guard even though no one is named (#853).
         ...(opener.botId !== undefined ? { fromBot: true } : {}),
+        ...(opener.originReviewId ? { originReviewId: opener.originReviewId } : {}),
         ...(opener.kickoff ? { note: 'the group was just created' } : {}),
         ...(opener.goal === 'draft' || (draftPost !== undefined && admin !== undefined && member.id === admin.id) ? { note: 'the user wants to set a goal for this group' } : {}),
         ...(opener.goal === 'nudge' ? { note: 'goal check' } : {}),
@@ -1878,7 +1644,7 @@ export function install(rt) {
             ?.catch(error => rt.warn('ds-bot: stopping a turn of the round in %s failed: %s', room.name, error))
         }
       } else if (rt.goalDrive !== undefined) {
-        // A round that ends with an active goal and nothing running may wake the admin.
+        // Record the outcome if this round answered an admitted goal review.
         try {
           await rt.goalDrive(room, round)
         } catch (error) {
@@ -1935,15 +1701,28 @@ export function install(rt) {
       const anchor = randomUUID()
       rt.ledger.append(bookOf(room.id), { event: 'anchor', id: anchor, from, time: Date.now() })
       const running = runningRound(room.id)
-      if (running !== undefined) await joinRound(room, running, queued, exec.agent)
-      else if (finalizing.has(room.id)) laterPosts.set(room.id, [...(laterPosts.get(room.id) ?? []), ...queued])
-      else {
+      // A periodic check may have reached the root just before business arrived.
+      // Do not let it join that work or wait behind it as the next round's opener.
+      const checks = queued.filter(periodicReviewPost)
+      const skip = checks.length > 0 && (checks.length < queued.length || rt.roomBusyForPatrol(room, undefined, exec.agent.id))
+      const posts = skip ? queued.filter(post => !periodicReviewPost(post)) : queued
+      const retired = skip ? checks.map(post => {
+        const attempt = room.goal?.reviewAttempt
+        if (attempt?.id !== post.reviewId || attempt.state !== 'admitting' || attempt.adminCompleted || running?.goalReviewId === post.reviewId) return
+        return rt.goalReviewNotOpened(room, post.reviewId).catch(error => rt.warn('ds-bot: retiring a busy group review in %s failed: %s', room.name, error))
+      }) : []
+      if (running !== undefined) {
+        if (posts.length || !skip) await joinRound(room, running, posts, exec.agent)
+      } else if (finalizing.has(room.id)) {
+        if (posts.length) laterPosts.set(room.id, [...(laterPosts.get(room.id) ?? []), ...posts])
+      } else {
         // What a stopped round left waiting goes first.
         const left = laterPosts.get(room.id) ?? []
         laterPosts.delete(room.id)
-        startRound(room, [...left, ...queued], exec.agent, exec.callId)
+        if (left.length || posts.length || !skip) startRound(room, [...left, ...posts], exec.agent, exec.callId)
       }
       exec.concludeTurn?.()
+      if (retired.length) await Promise.all(retired)
       return JSON.stringify({ from, anchor })
     },
   }))
@@ -1962,15 +1741,13 @@ export function install(rt) {
       await rt.load()
       const id = exec.agent?.id
       const owner = rt.groupOwners.get(id)
-      const taskOwner = rt.taskOwners?.get(id)
-      const botId = owner?.botId ?? taskOwner?.botId ?? rt.chatOwners.get(id)
+      const botId = owner?.botId ?? rt.chatOwners.get(id)
       if (botId === undefined) return 'Only Bots on the team can use read_own_chat.'
       const member = rt.botOf(botId)
-      const room = rt.roomOf(owner?.roomId ?? taskOwner?.roomId)
+      const room = rt.roomOf(owner?.roomId)
       const query = String(args.query ?? '').trim().slice(0, 80)
       const around = String(args.around ?? '').trim().slice(0, 40)
-      const lookupSession = taskOwner?.roomId !== undefined ? rt.chatOf(botId) : id
-      const parts = rt.partsOfThread(botId, lookupSession)
+      const parts = rt.partsOfThread(botId, id)
       const number = Number.isInteger(args.part) ? args.part : undefined
       if (room !== undefined && member !== undefined) {
         const text = query !== '' ? query : around !== '' ? `around ${around}` : number !== undefined ? `part ${number}` : ''
@@ -1979,7 +1756,7 @@ export function install(rt) {
       }
       const partsNote = parts.length > 1 ? `\n\nYour own chat has ${parts.length} parts: ${rt.partIndex(parts)}. Call read_own_chat with part N for the note that closed an earlier part, or with words to search all parts.` : ''
       if (query === '' && around !== '') {
-        const found = await rt.aroundOwnChat(botId, around, lookupSession)
+        const found = await rt.aroundOwnChat(botId, around, id)
         if (found.error) return `${found.error}${partsNote}`
         if (found.lines.length === 0) return `Nothing was said around ${around}.${partsNote}`
         const heading = found.exact ? `around ${around}` : `with no message at ${around}; the nearest ones`
@@ -1992,10 +1769,10 @@ export function install(rt) {
         return `Part ${number} of your own chat (${rt.clock(part.startedAt)} – ${rt.clock(part.endedAt)}). The handoff note that closed it:\n${rt.noteText(part) ?? '(none: the part ended on a context overflow)'}${partsNote}`
       }
       if (query === '') {
-        const lines = await rt.latestOwnChat(botId, { askingId: lookupSession })
+        const lines = await rt.latestOwnChat(botId, { askingId: id })
         return lines.length === 0 ? `Your own chat is empty.${partsNote}` : `Your own chat (oldest first):\n${lines.join('\n')}${partsNote}`
       }
-      const { lines, every } = await rt.searchOwnChat(botId, query, { askingId: lookupSession })
+      const { lines, every } = await rt.searchOwnChat(botId, query, { askingId: id })
       if (lines.length === 0) return `Nothing in your own chat mentions "${query}".${partsNote}`
       const heading = every ? `messages mentioning "${query}"` : `no message has all of "${query}"; messages with the most of these words`
       return `Your own chat, ${heading} (oldest first):\n${lines.join('\n')}${partsNote}`
@@ -2012,21 +1789,25 @@ export function install(rt) {
     },
     output,
     async execute(args, exec) {
+      // Snapshot primitives: the live info object may change while loading.
+      const openedAs = rt.live.get(exec.agent?.id)?.info
+      const openedAsInspection = openedAs?.reviewInspect === true && !!openedAs.reviewId
+      const openedRoomId = openedAs?.roomId
       await rt.load()
       const self = rt.selfOf(exec.agent?.id)
       if (rt.botOf(self) === undefined) return 'Only Bots on the team can read group chats.'
       const { room, error } = rt.pickRoom(args.group, self)
       if (error) return error
+      // The room mapping can change after a tool guard ran and before load().
+      // Recheck the resolved object after loading, before reading its ledger.
+      const info = rt.live.get(exec.agent?.id)?.info
+      if ((openedAsInspection && room.id !== openedRoomId)
+        || (info?.reviewInspect === true && info.reviewId && room.id !== info.roomId)) return 'This inspection may read only its own group.'
       ensureRoomLog(room)
       if (args.seq !== undefined) {
-        const seq = Number(args.seq)
-        const line = room.log.find(entry => entry.seq === seq)
+        const line = room.log.find(entry => entry.seq === Number(args.seq))
         if (line !== undefined) return lineText(line, memberText(room)(line))
-        let kept = await rt.groupLine(room.id, seq).catch(() => undefined)
-        if (kept === undefined && Number.isInteger(seq) && seq >= 1 && seq <= room.seq) {
-          await backfillGroupLog(room.id, seq - 1).catch(() => {})
-          kept = await rt.groupLine(room.id, seq).catch(() => undefined)
-        }
+        const kept = await rt.groupLine(room.id, Number(args.seq)).catch(() => undefined)
         return kept === undefined ? `"${room.name}" has no message ${args.seq}.` : lineText(kept, headOf(kept.text ?? '', GROUP_LINE_READ))
       }
       if (typeof args.query === 'string' && args.query.trim() !== '') {
@@ -2054,7 +1835,9 @@ export function install(rt) {
     const everyone = room.members.map(rt.botOf).filter(Boolean)
     const members = everyone.filter(bot => bot.id !== opener.botId)
     const admin = members.find(bot => rt.isAdminOf(room, bot.id))
-    const at = speakers => ({ speakers, ordered: false })
+    const allowed = speakers => opener.botId === undefined ? speakers : speakers.filter(bot => !rt.goalRecoveryBlocked?.(room, bot.id)
+      && (!opener.originReviewId || rt.goalReviewAllowed?.(room, opener.originReviewId)))
+    const at = speakers => ({ speakers: allowed(speakers), ordered: false })
     if (opener.kickoff) return at(admin ? [admin] : [])
     if (opener.quiet) return at([])
     if (opener.done) return at(members.filter(bot => bot.id === opener.askedBy))
@@ -2068,7 +1851,7 @@ export function install(rt) {
     if (found.length > 0 && !all) return at(found)
     if (!all && room.mode === 'admin' && admin) return at([admin])
     const speakers = admin ? [admin, ...members.filter(bot => bot !== admin)] : members
-    return { speakers, ordered: !all && speakers.length > 1 }
+    return { speakers: allowed(speakers), ordered: !all && speakers.length > 1 }
   }
   const openingSpeakers = (room, opener) => openingCall(room, opener).speakers
 
@@ -2078,7 +1861,8 @@ export function install(rt) {
   // round ends.
   function callPost(room, round, sender, text, extra) {
     if (extra.failed !== undefined && !extra.askedBy) return false
-    if (extra.resumed || (extra.stopped && !extra.askedBy)) return false
+    if (extra.resumed || extra.stopped) return false
+    if (extra.goalReceiptFollowup) round.goalReceiptFollowup = extra.goalReceiptFollowup
     const post = { ...extra, botId: sender.id, name: sender.name, text }
     const everyone = room.members.map(rt.botOf).filter(Boolean)
     const named = (mentionsOf(post, everyone) ?? mentionsIn(text, everyone)).found
@@ -2095,12 +1879,12 @@ export function install(rt) {
     const rest = speakers.filter(peer => !named.includes(peer))
     const wake = extra.batch === undefined ? undefined : wakeOf(extra.batch)
     const note = extra.done ? `${sender.name} finished the work you asked for` : undefined
-    callIn(round, by, note ?? `${sender.name} mentioned you`, sender.id, { ordered })
-    callIn(round, rest, wake === undefined ? note : finishedNote(wake.names), undefined, { ordered })
+    callIn(round, by, note ?? `${sender.name} mentioned you`, sender.id, { ordered, automatic: true, originReviewId: post.originReviewId })
+    callIn(round, rest, wake === undefined ? note : finishedNote(wake.names), undefined, { ordered, automatic: true, originReviewId: post.originReviewId })
     if (wake !== undefined) giveResults(round, extra.askedBy, wake)
     if (rt.isAdminOf(room, sender.id)) for (const peer of speakers) rt.goalTaskWorking?.(room.id, peer.id)
     if (extra.reportBack) {
-      (round.reports ??= []).push({ post: { botId: sender.id, name: sender.name, reportBack: true, ...(extra.sub ? { sub: extra.sub } : {}), ...(extra.fromRoomId ? { fromRoomId: extra.fromRoomId } : {}), ...(extra.fromPart ? { fromPart: extra.fromPart } : {}) }, ids: speakers.map(peer => peer.id), from: room.seq + 1 })
+      (round.reports ??= []).push({ post: { botId: sender.id, name: sender.name, reportBack: true, ...(extra.sub ? { sub: extra.sub } : {}), ...(extra.fromRoomId ? { fromRoomId: extra.fromRoomId } : {}) }, ids: speakers.map(peer => peer.id), from: room.seq + 1 })
     }
     return true
   }
@@ -2110,7 +1894,7 @@ export function install(rt) {
   // once, and the members it calls start in that round, so it is not held back until
   // the round ends and never sits in the group Session's QueueDock (#663).
   async function postToRoom(room, sender, text, extra = {}, files = []) {
-    const noticeOnly = extra.resumed === true || (extra.stopped === true && !extra.askedBy) || (extra.failed !== undefined && !extra.askedBy)
+    const noticeOnly = extra.resumed === true || extra.stopped === true || (extra.failed !== undefined && !extra.askedBy)
     const running = [...rt.roomProgress.values()].find(round => round.roomId === room.id
       && (noticeOnly ? !round.starting : round.nudge !== undefined && !round.closed && !round.abort?.signal.aborted))
     if (running !== undefined) {
@@ -2150,14 +1934,37 @@ export function install(rt) {
     const member = rt.botOf(owner?.botId)
     if (room === undefined || member === undefined || !room.members.includes(member.id)) return
     const text = stripOwnName(member.name, reply)
-    // While a DSH subagent or group background task of this member is still running, the
-    // member's work is not finished yet: post any non-empty text as a progress line and
-    // keep its batch open until the background work reports back.
-    if (rt.hasSubagents?.(sessionId) === true || rt.hasRoomTasks?.(room.id, member.id) === true) {
+    if(kickoffRestricted(sessionId,info)) {
+      if(!isPass(text))await postToRoom(room,member,safeKickoffText(room,text),{late:true,quiet:true})
+      return
+    }
+    if (info.reviewReceipt === true) {
+      const answered = !isPass(text)
+      const result = await rt.goalReceiptResult(room, sessionId, info, answered)
+      if (answered && result?.taskId) {
+        const admin = room.members.includes(result.adminId) ? rt.botOf(result.adminId) : undefined
+        const handoff = admin === undefined ? ''
+          : `\n@${admin.name} Review this self-report against existing evidence and take the next authorized step. It is not acceptance; do not restart the original work.`
+        await postToRoom(room, member, `Status reply for ${result.taskId}: ${text}\nSelf-report only; not acceptance.${handoff}`, {
+          late:true, ...(admin === undefined ? { quiet:true } : {
+            askedBy:admin.id,
+            goalReceiptFollowup:{ taskId:result.taskId, ownerName:member.name },
+          }),
+        })
+      }
+      return
+    }
+    if (info.reviewInspect === true) {
+      if (!isPass(text)) await postToRoom(room, member, text, { late: true, quiet: true })
+      return
+    }
+    // While a DSH subagent of this member is still running, the member's work is not
+    // finished yet: post any non-empty text as a progress line and keep its batch open.
+    if (rt.hasSubagents?.(sessionId) === true) {
       if (!isPass(text)) {
         const calls = callsIn(room, member, text)
         await postToRoom(room, member, text, { progress: true, ...(!calls ? { quiet: true } : {}) })
-          .catch(error => rt.warn('ds-bot: background progress from %s failed: %s', member.name, error))
+          .catch(error => rt.warn('ds-bot: subagent progress from %s failed: %s', member.name, error))
       }
       return
     }
@@ -2184,11 +1991,11 @@ export function install(rt) {
     const inBatch = batch === undefined ? {} : { batch: batch.key, ...(waitingPeers ? {} : { batchEnd: true }) }
     const session = await rt.resolveAgent(sessionId).then(agent => agent?.session, () => undefined)
     const claims = isPass(text) ? undefined : claimsOf(session, text, toolCount > 0, named.length > 0)
-    // What this turn changed in the member's folder, so the group can open the review from
+// What this turn changed in the member's folder, so the group can open the review from
     // the same row. Read before posting: the review needs the turn that just ended.
     const changes = await rt.turnChanges?.(sessionId)
     const moved = extra => (changes === undefined ? extra : { ...extra, changes })
-    const post = (body, extra) => postToRoom(room, member, body, { late: true, ...moved(extra), ...inBatch, ...(claims === undefined ? {} : { claims }) })
+    const post = (body, extra) => postToRoom(room, member, body, { late: true, ...(info.reviewId ? { originReviewId: info.reviewId } : {}), ...moved(extra), ...inBatch, ...(claims === undefined ? {} : { claims }) })
       .catch((error) => {
         if (batch !== undefined) closeBatch(batch.key)
         rt.warn('ds-bot: late group reply from %s failed: %s', member.name, error)
@@ -2223,6 +2030,15 @@ export function install(rt) {
     return room !== undefined && member !== undefined && room.members.includes(member.id) ? { room, member } : undefined
   }
   const callsIn = (room, member, text) => mentionsIn(text, room.members.map(rt.botOf).filter(Boolean)).found.some(bot => bot.id !== member.id)
+  const safeKickoffText = (room, text) => {
+    // Never send live mentions to a downstream relay, even a supposedly quiet
+    // late/progress post. Keep the text readable without creating an @ call.
+    const spans=mentionSpans(text,room.members.map(rt.botOf).filter(Boolean))
+    if(!spans.length)return text
+    let safe=text
+    for(const span of spans.reverse())safe=`${safe.slice(0,span.start)}＠${safe.slice(span.start+1)}`
+    return `${safe}\n\n[No work was sent: this is a greeting. Waiting for a user request in this group.]`
+  }
   rt.callsRoomMember = (sessionId, info, raw) => {
     const { room, member } = memberIn(sessionId, info) ?? {}
     return room !== undefined && member !== undefined && callsIn(room, member, stripOwnName(member.name, raw ?? ''))
@@ -2237,6 +2053,15 @@ export function install(rt) {
     if (waiter !== undefined) return waiter.say(text)
     const { room, member } = memberIn(sessionId, info) ?? {}
     if (room === undefined) return
+    if(kickoffRestricted(sessionId,info)) {
+      await postToRoom(room,member,safeKickoffText(room,text),{progress:true,quiet:true})
+      return
+    }
+    if (info?.reviewReceipt === true) return
+    if (info?.reviewInspect === true) {
+      await postToRoom(room, member, text, { progress: true, quiet: true })
+      return
+    }
     ensureRoomLog(room)
     const calls = callsIn(room, member, text)
     const running = [...rt.roomProgress.values()].find(round => round.roomId === room.id)
@@ -2246,27 +2071,22 @@ export function install(rt) {
     }
     const quiet = !calls
     await rt.save()
-    await postToRoom(room, member, text, { progress: true, ...(quiet ? { quiet: true } : {}) })
+    await postToRoom(room, member, text, { progress: true, ...(info?.reviewId ? { originReviewId: info.reviewId } : {}), ...(quiet ? { quiet: true } : {}) })
   }
 
   // Lines a member writes close together reach the group as one message, so a burst of
   // steps does not come out as a string of messages. Its first line on work it was asked
   // for and a line that calls a member go at once; lines still held when the turn ends
-  // open its result. The same status line twice in one turn is stored once. A line that
-  // names a member is kept: that call is why it was written, and the turn calls each
-  // member once. Per group Session.
+  // open its result. Per group Session.
   const held = new Map()
   ctx.effect(() => () => { for (const entry of held.values()) clearTimeout(entry.timer) }, 'ds-bot: group step lines')
-  const stepKey = (sessionId, info) => `${info?.exchangeId ?? ''}:${rt.live?.get(sessionId)?.turn ?? ''}`
   const flushSteps = (sessionId) => {
     const entry = held.get(sessionId)
     clearTimeout(entry.timer)
     entry.timer = undefined
     if (entry.lines.length === 0) return undefined
     entry.last = Date.now()
-    const text = entry.lines.splice(0).join('\n\n')
-    entry.posted = text
-    return postStep(sessionId, entry.info, text)
+    return postStep(sessionId, entry.info, entry.lines.splice(0).join('\n\n'))
   }
   rt.roomStepText = async (sessionId, info, raw, first) => {
     const { room, member } = memberIn(sessionId, info) ?? {}
@@ -2275,16 +2095,7 @@ export function install(rt) {
     if (isPass(text)) return
     const entry = held.get(sessionId) ?? { last: 0, lines: [] }
     held.set(sessionId, entry)
-    const key = stepKey(sessionId, info)
-    if (entry.key !== key) {
-      entry.key = key
-      entry.lastLine = undefined
-      entry.posted = undefined
-    }
     entry.info = info
-    const line = text.trim()
-    if (line === entry.lastLine && !callsIn(room, member, text)) return
-    entry.lastLine = line
     entry.lines.push(text)
     if ((first && info?.role === 'room') || callsIn(room, member, text) || Date.now() - entry.last >= ROOM_STEP_GAP_MS) return flushSteps(sessionId)
     entry.timer ??= setTimeout(() => void flushSteps(sessionId)?.catch(error => rt.warn('ds-bot: step lines from %s not posted: %s', member.name, error)), entry.last + ROOM_STEP_GAP_MS - Date.now())
@@ -2297,33 +2108,11 @@ export function install(rt) {
     entry.last = Date.now()
     return entry.lines.splice(0).join('\n\n')
   }
-  // The closing reply repeats a line already in the group when it matches the line
-  // still held, or the text just posted when nothing newer is held. A final that
-  // matches an older flush while a newer line is still held is a different line.
-  rt.withRoomSteps = (sessionId, lines, reply) => {
-    const entry = held.get(sessionId)
-    const text = typeof reply === 'string' ? reply : ''
-    const repeated = text !== '' && (text === entry?.lastLine || (lines === '' && text === entry?.posted))
-    if (entry !== undefined) {
-      entry.lastLine = undefined
-      entry.posted = undefined
-    }
-    if (lines === '') return repeated ? '' : reply
-    if (isPass(reply) || repeated) return lines
-    return `${lines}\n\n${reply}`
-  }
-  // withRoomSteps is what forgets the line just shown. A turn that fails or stops
-  // never calls it; the next turn then has only its final, and that final is dropped
-  // when it repeats the line.
-  rt.dropRoomStepEcho = (sessionId) => {
-    const entry = held.get(sessionId)
-    if (entry === undefined) return
-    entry.lastLine = undefined
-    entry.posted = undefined
-  }
+  rt.withRoomSteps = (lines, reply) => (lines === '' ? reply : isPass(reply) ? lines : `${lines}\n\n${reply}`)
 
   // The user stops a member's work in this group from the group's details, including
-  // any running DSH subagents (#701) or group background tasks (#783) it spawned.
+  // any running DSH subagents it spawned (#701). Messages still waiting for that
+  // member here go with it.
   async function stopMemberWork(roomId, botId) {
     await rt.load()
     const room = rt.roomOf(roomId)
@@ -2331,17 +2120,14 @@ export function install(rt) {
     const sessionId = rt.own(room?.sessions, botId)
     const turnRunning = sessionId !== undefined && rt.live.get(sessionId)?.turn !== undefined
     const subRunning = sessionId !== undefined && rt.hasSubagents?.(sessionId) === true
-    const taskRunning = rt.hasRoomTasks?.(roomId, botId) === true
-    if (room === undefined || member === undefined || (!turnRunning && !subRunning && !taskRunning)) return false
-    if (sessionId !== undefined) await rt.stopSubagents?.(sessionId)
-    if (taskRunning) await rt.stopMemberRoomTasks?.(roomId, botId, 'stopped in group')
-    if (turnRunning && sessionId !== undefined) {
+    if (room === undefined || member === undefined || sessionId === undefined || (!turnRunning && !subRunning)) return false
+    dropMemberFromBatch(room, botId)
+    await rt.stopSubagents?.(sessionId)
+    if (turnRunning) {
       const agent = await rt.resolveAgent(sessionId)
       agent.cancel({ kind: 'user' })
     }
-    dropMemberFromBatch(room, botId)
     rt.goalTaskReset?.(roomId, botId, 'Stopped by the user')
-    rt.blockTasks?.(roomId, botId, { cause: 'stopped' })
     await postToRoom(room, member, '', { quiet: true, stopped: true })
     return true
   }
@@ -2377,26 +2163,6 @@ export function install(rt) {
   Object.assign(rt, {
     workingInRoom: workingIn,
     roomBatchPending: roomId => Object.values(batches()).some(batch => batch.roomId === roomId && batch.pending.length > 0),
-    reconcileStoppedRoomTask: async (roomId, botId) => {
-      const room = rt.roomOf(roomId)
-      const member = rt.botOf(botId)
-      if (room === undefined || member === undefined || activeInRoom(room, botId)) return
-      const owed = batchesOf(room.id, botId)
-      if (owed.length === 0) {
-        void rt.goalSettled?.(room).catch(error => rt.warn('ds-bot: goal settle in %s failed: %s', room.name, error))
-        return
-      }
-      for (const batch of owed) leaveBatch(room, batch, botId, { keep: true })
-      const woken = owed.find(batch => batch.pending.length === 0 && batch.done.length > 0 && !batch.answered && room.members.includes(batch.by))
-      for (const batch of owed) if (batch !== woken) closeBatch(batch.key)
-      if (woken !== undefined) {
-        await postToRoom(room, member, '', { late: true, stopped: true, askedBy: woken.by, batch: woken.key, batchEnd: true })
-          .catch((error) => {
-            closeBatch(woken.key)
-            rt.warn('ds-bot: waking group batch after stopped task failed: %s', error)
-          })
-      }
-    },
   })
 
   // The round said such a member posts when done; a failed model call is how it ended.
@@ -2407,6 +2173,10 @@ export function install(rt) {
     const room = rt.roomOf(owner?.roomId ?? info.roomId)
     const member = rt.botOf(owner?.botId)
     if (room === undefined || member === undefined || !room.members.includes(member.id)) return
+    if (info.reviewReceipt === true) {
+      await rt.goalReceiptResult(room, sessionId, info, false)
+      return
+    }
     // The failed turn answers one call; without that call, every batch of the member ends.
     const owed = info.askedBy !== undefined ? [batchOf(room.id, member.id, info.askedBy)].filter(Boolean) : batchesOf(room.id, member.id)
     for (const batch of owed) leaveBatch(room, batch, member.id, { keep: true })
@@ -2458,12 +2228,9 @@ export function install(rt) {
     const late = work === undefined && post.sub !== undefined ? rt.abandonedWork?.(post.sub) : undefined
     const body = late === undefined ? text : LATE_ANSWER + text
     // The report goes back to the conversation the post was written from: its
-    // Session in that group when the post came from one, or the current part of
-    // that own-chat thread, else the own chat.
+    // Session in that group when the post came from one, else the own chat.
     const back = rt.roomOf(post.fromRoomId)?.sessions?.[post.botId]
-    const part = back === undefined && post.fromPart !== undefined ? threadCurrentOfPart(rt.botOf(post.botId), post.fromPart) : undefined
-    const target = back ?? part
-    await rt.deliver({ toId: post.botId, ...(target ? { sessionId: target } : {}), role: 'report', roomId: room.id, text: body, ...(work ? { work, replyTo: post.sub } : {}) })
+    await rt.deliver({ toId: post.botId, ...(back ? { sessionId: back } : {}), role: 'report', roomId: room.id, text: body, ...(work ? { work, replyTo: post.sub } : {}) })
       .catch(error => rt.warn('ds-bot: group report to %s failed: %s', post.name, error))
   }
 

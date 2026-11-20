@@ -4,7 +4,10 @@
 import { join } from 'node:path'
 import * as diagnostics from './src/host/diagnostics.js'
 import * as store from './src/host/store.js'
+import * as boardService from './src/host/board-service.js'
+import * as legacyReview from './src/host/legacy-review-service.js'
 import * as models from './src/host/models.js'
+import * as fanttecQuotaRetry from './src/host/fanttec-quota-retry.js'
 import * as providers from './src/host/providers.js'
 import * as permissions from './src/host/permissions.js'
 import * as turns from './src/host/turns.js'
@@ -16,6 +19,7 @@ import * as roster from './src/host/roster.js'
 import * as folders from './src/host/folders.js'
 import * as privacy from './src/host/privacy.js'
 import * as agents from './src/host/agents.js'
+import * as userRedoSession from './src/host/user-redo-session.mjs'
 import * as prompt from './src/host/prompt.js'
 import * as timeContext from './src/host/time-context.js'
 import * as tools from './src/host/tools.js'
@@ -27,9 +31,9 @@ import * as agentCommands from './src/host/agent-commands.js'
 import * as tasks from './src/host/tasks.js'
 import * as approvals from './src/host/approvals.js'
 import * as resume from './src/host/resume.js'
+import { repairQuotaCards } from './src/host/repair-quota-cards.js'
 import * as memory from './src/host/memory.js'
 import * as parts from './src/host/parts.js'
-import * as botTasks from './src/host/bot-tasks.js'
 import * as changes from './src/host/changes.js'
 import * as images from './src/host/images.js'
 import * as avatarLibrary from './src/host/avatar-library.js'
@@ -38,6 +42,8 @@ import * as browserPlugins from './src/host/browser-plugins.js'
 import * as computer from './src/host/computer/index.js'
 import * as secrets from './src/host/secrets.js'
 import * as connectors from './src/host/connectors/index.js'
+import * as remoteChangeWatch from './src/host/remote-change-watch.mjs'
+import * as repositorySync from './src/host/repository-sync.mjs'
 import * as capabilities from './src/host/capabilities.js'
 import * as learning from './src/host/learning.js'
 import * as schedules from './src/host/schedules.js'
@@ -46,7 +52,6 @@ import * as update from './src/host/update.js'
 import * as dshUpdate from './src/host/dsh-update.js'
 import * as thinking from './src/host/thinking.js'
 import * as phone from './src/host/phone.js'
-import * as mcpServer from './src/host/mcp-server.js'
 import * as channel from './src/host/channel.js'
 import * as remote from './src/host/remote.js'
 import * as mobile from './src/host/mobile.js'
@@ -54,10 +59,7 @@ import * as feed from './src/host/feed.js'
 import * as im from './src/host/im/index.js'
 import * as officeSkills from './src/host/office-skills.js'
 import * as goalSkills from './src/host/goal-skills.js'
-import * as issueReport from './src/host/issue-report.js'
-import * as manualSkills from './src/host/manual-skills.js'
 import * as localAgents from './src/host/local-agents/index.js'
-import * as deepseekServices from './src/host/deepseek-services.js'
 
 export { COLORS } from './src/host/constants.js'
 
@@ -68,7 +70,7 @@ export { name, inject } from './src/host/entry.js'
 // install. Listeners run and tools are listed in registration order, so this order holds:
 // usage meters model requests after every listener that rewrites them. privacy checks a
 // call before the hooks of tools do, so a closed call never reaches a card they show.
-const MODULES = [diagnostics, store, ledger, models, providers, permissions, turns, steer, handoffs, requests, delivery, roster, folders, privacy, agents, prompt, timeContext, tools, issueReport, deepseekServices, chatIndex, groups, goals, agentCommands, tasks, approvals, resume, memory, parts, botTasks, changes, images, avatarLibrary, secrets, connectors, capabilities, learning, schedules, browser, browserPlugins, computer, usage, update, dshUpdate, thinking, mobile, feed, phone, mcpServer, im, channel, remote, officeSkills, goalSkills, manualSkills, localAgents]
+const MODULES = [diagnostics, store, boardService, legacyReview, ledger, models, fanttecQuotaRetry, providers, userRedoSession, permissions, turns, steer, handoffs, requests, delivery, roster, folders, privacy, agents, prompt, timeContext, tools, chatIndex, groups, goals, agentCommands, tasks, approvals, resume, memory, parts, changes, images, avatarLibrary, secrets, connectors, remoteChangeWatch, repositorySync, capabilities, learning, schedules, browser, browserPlugins, computer, usage, update, dshUpdate, thinking, mobile, feed, phone, im, channel, remote, officeSkills, goalSkills, localAgents]
 
 export function apply(ctx, config = {}) {
   createRuntime(ctx, config)
@@ -92,6 +94,7 @@ export function createRuntime(ctx, config = {}) {
     },
   }
   for (const module of MODULES) module.install(rt)
+  ctx.effect(() => () => { rt.stopping = true }, 'ds-bot: stopping')
   // A live Agent can be scoped before the last module has added its tools (the memory
   // module starts a load during install): complete the scope now that every tool is in.
   rt.syncScopedTools?.()
@@ -100,5 +103,6 @@ export function createRuntime(ctx, config = {}) {
   // maps. Adopt them now, so Stop, the group view and a late child settle still see
   // the work. A fresh start has nothing to adopt.
   void rt.adoptLiveWork?.().catch(error => rt.warn?.('ds-bot: adopting the work still running failed: %s', error))
+  void repairQuotaCards(rt).catch(() => rt.warn?.('ds-bot: checking earlier quota failures could not finish'))
   return rt
 }

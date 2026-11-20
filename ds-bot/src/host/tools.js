@@ -36,7 +36,6 @@ const GOAL_REFUSAL = 'Bot chats do not run /goal. To give a group a goal, use Se
 // has no Bot; a Bot's tasks deliver to its own chat, which DS Bot moves on with each part.
 const SCHEDULE_TARGET_TOOLS = ['schedule_create', 'schedule_edit']
 const SCHEDULE_TARGET_REFUSAL = 'A Bot’s scheduled tasks run in its own chat. Use target "this_session".'
-const SCHEDULE_UPDATE_FIELDS = new Set(['id', 'action', 'title', 'prompt', 'rrule', 'target', 'active', 'expectedUpdatedAt'])
 const DELEGATION_REFUSAL = 'Bots do not start subagents, teammates or workflows. Do the work yourself, or hand it to another Bot with message_bot.'
 const MODE_PARAM = {
   type: 'string',
@@ -56,14 +55,14 @@ export function install(rt) {
 
   const callerBot = (exec) => rt.botOf(rt.selfOf(exec.agent?.id))
   const callerRoom = (exec) => {
-    const roomId = (rt.groupOwners.get(exec.agent?.id) ?? rt.pastOwners?.get(exec.agent?.id))?.roomId
+    const roomId = rt.groupOwners.get(exec.agent?.id)?.roomId
     return roomId ? { fromRoomId: roomId } : {}
   }
   // The part of its own chat the caller speaks from, so a reply comes back to that part
   // of the thread (a Bot can work in a background part while the user reads another).
   const callerPart = (exec) => {
     const sessionId = exec.agent?.id
-    return sessionId === undefined || callerRoom(exec).fromRoomId !== undefined ? {} : { fromPart: sessionId }
+    return sessionId === undefined || rt.groupOwners.has(sessionId) ? {} : { fromPart: sessionId }
   }
 
   const sectionNameOf = id => (state.sections ?? []).find(sec => sec.id === id)?.name
@@ -101,7 +100,7 @@ export function install(rt) {
     const section = sectionNameOf(bot.sectionId)
     const tags = [bot.role, section ? `section "${section}"` : '', model ? `model ${model}` : '', bot.workDir ? `works in ${bot.workDir}` : '', rt.isMain(bot.id) ? 'Main Bot' : '', bot.private === true ? 'private' : '', bot.id === self ? 'you' : ''].filter(Boolean).join(', ')
     const job = bot.instructions ? ` — ${bot.instructions.split('\n')[0].slice(0, 120)}` : ''
-    const now = bot.id === self ? '' : `\n  now: ${rt.statusOf(bot.id)}`
+    const now = bot.id === self ? '' : `\n  now: ${rt.statusOf(bot.id, self)}`
     return `- ${bot.name}${tags ? ` (${tags})` : ''}${job}${now}`
   }
   // The Bots and group chats list_bots shows: the whole team, one Bot, one group's
@@ -121,16 +120,53 @@ export function install(rt) {
     return { bots: bot ? [bot] : members, rooms: [room] }
   }
 
+  // Inspect only loaded private Sessions. A missing input can also mean the
+  // worker consumed it, the Session moved, or this host restarted.
+  const observedInput = (bot, matches) => {
+    const registry = ctx.get?.('agents')
+    for (const id of ownChatSessions(bot)) {
+      if (rt.privateChatOwner(id) !== bot.id) continue
+      const turn = rt.live.get(id)
+      if (turn?.turn !== undefined && (matches(turn.info) || turn.joined?.some(item => matches(item.info)))) return 'read in a running turn'
+      const inbox = registry?.get?.(id)?.inbox
+      if (inbox?.nextStep?.some(message => matches(message.source))) return 'queued for the next step'
+      if (inbox?.nextTurn?.some(message => matches(message.source))) return 'queued for a later turn'
+    }
+  }
+
+  const inspectRequest = (args, exec) => {
+    const sender = rt.botOf(rt.privateChatOwner(exec.agent?.id))
+    if (sender === undefined || args.group) return 'Check a private request from the sending Bot’s own chat.'
+    const name = typeof args.request_id === 'string' ? args.request_id.trim() : ''
+    if (!args.bot || !name || name.length > NAME_MAX) return 'Give the recipient bot and original request_id.'
+    const target = rt.findBot(args.bot)
+    const record = rt.privateRequest(sender.id, name)
+    const handoff = record?.privateHandoff
+    if (!target || target.private === true || !handoff || handoff.to !== target.id || typeof handoff.exchangeId !== 'string' || !handoff.exchangeId) {
+      return 'No matching private handoff can be verified. Check the original task or conversation before resending.'
+    }
+    const reply = observedInput(sender, source => source?.kind === SOURCE_KIND && source.role === 'reply'
+      && source.senderSessionId === target.id && source.replyTo === handoff.exchangeId)
+    if (reply) return `A reply from ${target.name} to this request was returned to your chat (${reply}). Check its result against the task’s acceptance criteria.`
+    const input = observedInput(target, source => source?.kind === SOURCE_KIND && source.role === 'request'
+      && source.senderSessionId === sender.id && source.exchangeId === handoff.exchangeId)
+    if (input) return `This request is ${input} in ${target.name}’s chat. Task completion is unconfirmed.`
+    const delivery = record.outcome === 'delivered' ? 'Private delivery was recorded.' : 'Private delivery is unconfirmed.'
+    return `${delivery} Current processing and result are unconfirmed. Check the original task or conversation before resending.`
+  }
+
   rt.teamTools.push(defineTool({
     name: 'list_bots',
     description: 'List every Bot on the user\'s team with its role, what it does and what it is doing right now, and the group chats you can see. Give bot or group to list only that Bot or that group\'s members; with both, the Bot must be in the group.',
     parameters: {
       bot: { type: 'string', description: 'Exact name of one Bot to list, with the group chats you can see that it is in' },
       group: { type: 'string', description: 'Exact group chat name: list only its members and that group' },
+      request_id: { type: 'string', description: 'With bot, check a named private request from your own chat against current inputs and turns without sending again.' },
     },
     output,
     async execute(args, exec) {
       await rt.load()
+      if (args.request_id !== undefined) return inspectRequest(args, exec)
       const self = rt.selfOf(exec.agent?.id)
       if (Object.keys(state.bots).length === 0) return 'No Bots yet.'
       const { bots, rooms, none, error } = listScope(args, self)
@@ -155,39 +191,18 @@ export function install(rt) {
       .filter(sessionId => sessionId !== undefined && rt.live.get(sessionId)?.turn !== undefined)
     return { running, idle: running.length === 0 }
   }
-  const whereOf = (sessionId) => {
+  const whereOf = (sessionId, viewerId, botId) => {
     const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
-    if (room) return `group "${room.name}"`
-    if (rt.taskOwners?.has(sessionId)) return 'a background task'
+    if (room) return rt.isMain(viewerId) || room.members.includes(viewerId) ? `group "${room.name}"` : 'another conversation'
+    const bot = rt.botOf(botId)
+    if (bot === undefined || !ownChatSessions(bot).includes(sessionId)) return 'another conversation'
     // A Bot's own chat may keep another part live in the background: it is a second
     // conversation of that Bot, not its foreground chat.
     return isOpenPart(rt.botOf(rt.chatOwners.get(sessionId)), sessionId) ? 'another of its conversations' : 'its own chat'
   }
-  // A Bot request still in the inbox: no step or turn has taken it out yet.
-  const unreadRequest = (agent, senderId, toUser) => {
-    for (const [message, steered] of [...(agent.inbox?.nextStep ?? []).map(message => [message, true]), ...(agent.inbox?.nextTurn ?? []).map(message => [message, false])]) {
-      const source = message.source
-      if (source?.kind === SOURCE_KIND && source.role === 'request' && source.senderSessionId === senderId
-        && (source.audience === 'user') === toUser && !source.deferred && !source.resumed) return { message, steered }
-    }
-    return undefined
-  }
-  // A message's own words and files, without its header line.
-  const bodyOf = (message) => {
-    const content = Array.isArray(message.content) ? message.content : []
-    const first = content.find(block => block?.type === 'text')?.text ?? ''
-    return { text: first.slice(first.indexOf('\n') + 1), files: content.filter(block => block?.type === 'file' && block.attachment !== undefined).map(block => block.attachment) }
-  }
-
   // A tool that throws shows as failed in the chat, instead of as sent or stopped.
   const refuse = (message) => { throw new Error(message) }
 
-  // The works (handoffs.js) the calling turn does: what it answers, and the requests
-  // that joined it.
-  const worksOf = (exec) => {
-    const turn = rt.live.get(exec.agent?.id)
-    return [rt.workOf(turn?.info), ...(turn?.joined ?? []).map(joined => rt.workOf(joined.info))].filter(Boolean)
-  }
   const tooLong = text => `Not sent: the message has ${text.length} characters, more than ${MESSAGE_INLINE_MAX}, and this DeepSeek Harness cannot send it as a file. Write it to a file in your working folder and send its path instead.`
 
   // Work for a group stays in it: from a group Session, message_bot calls a member there
@@ -215,14 +230,17 @@ export function install(rt) {
   // written the message by now, so when it can stand as the answer to the turn's own
   // work it is kept as what the Bot said for that work (handoffs.js answerText). That
   // answer goes to whoever asked for the work, also when the target is further up.
-  const upstreamRefusal = (exec, sender, target, said, args) => {
+  const upstreamRefusal = (exec, sender, target, said, args, effectiveWhen) => {
     const plain = `Not sent: ${target.name} is waiting for the result of the work you are doing, and your answer reaches it by itself once everything you handed on is back.`
     const turn = rt.live.get(exec.agent?.id)
     const work = rt.workOf(turn?.info)
+    // The guard includes requests that joined this turn. Its final answer belongs
+    // to the opening work and cannot be used to answer one of those other requests.
+    if (!rt.upstreamOf([work]).has(target.id)) {
+      return `Not sent: ${target.name} is waiting on a separate request that arrived during this turn. Finish the current task for its original recipient. When the separate request opens in its own turn, put its result or question in that turn's final answer. DS Bot routes it through the original handoff.`
+    }
     const asker = rt.ownsWork(sender.id, work) ? rt.botOf(state.works[work].from) : undefined
-    // A request that joined the turn is answered in a later turn, and a queued or
-    // user-facing message is not an answer to this work.
-    const answers = asker !== undefined && args.reply_to !== 'user' && args.when !== 'queue' && rt.upstreamOf([work]).has(target.id)
+    const answers = asker !== undefined && args.reply_to !== 'user' && effectiveWhen === 'now'
     if (!answers) return `${plain} Finish the work and end your turn; to ask ${target.name} something, end your turn with the question.`
     const to = asker.id === target.id ? target.name : `${asker.name} as your answer, and reaches ${target.name} with ${asker.name}'s answer`
     // The turn's reply is all the text it wrote, so text from before this call goes up
@@ -252,7 +270,7 @@ export function install(rt) {
 
   rt.teamTools.push(defineTool({
     name: 'message_bot',
-    description: 'Send a message to another Bot on the team. If that Bot is working, it reads your message at its next step and can change course, then answers once that work is done; if it is idle, it starts on it right away. Its reply arrives later as a new message to you; with reply_to "user" it answers the user in its own chat instead. Do not message a Bot that is waiting for the result of the work you are doing (the Bot that asked you for it, or one above that): your answer reaches it by itself once you end your turn and everything you handed on is back. In a group chat it reaches only members of that group, as writing "@Name" there does. With request_id you name the request yourself: a repeat of that name with the same message is not sent again, but gives the receipt of the first call back.',
+    description: 'Send a message to another Bot on the team. Private requests queue behind work in the receiving Bot’s private chat. An idle private chat starts immediately, even if that Bot is working in a group. Use when "now" for an urgent correction or information needed for its current step. Its reply arrives later as a new message to you; with reply_to "user" it answers the user in its own chat instead. Do not message a Bot that is waiting for the result of the work you are doing (the Bot that asked you for it, or one above that): your answer reaches it by itself once you end your turn and everything you handed on is back. In a group chat it reaches only members of that group, as writing "@Name" there does. With request_id you name the request yourself: a repeat of that name with the same message is not sent again, but gives the receipt of the first call back.',
     parameters: {
       to: { type: 'string', required: true, description: 'Exact Bot name from list_bots' },
       message: { type: 'string', required: true, description: 'Self-contained message; the other Bot cannot see this conversation' },
@@ -264,7 +282,7 @@ export function install(rt) {
       when: {
         type: 'string',
         enum: ['now', 'queue'],
-        description: '"now" (default): a working Bot reads your message at its next step, between its current actions, and answers once its current work is done; use it for questions, information it needs, corrections and warnings. "queue": it reads your message only after its current work is done, as a separate task; use it only for a new task unrelated to what it is doing now. With reply_to "user" the message always queues.',
+        description: '"queue" (default in private chats): deliver an ordinary assignment, review or follow-up as a separate task after current work. "now": steer the next step with an urgent correction or information the recipient needs for its current work. With reply_to "user" the message always queues.',
       },
       request_id: {
         type: 'string',
@@ -273,7 +291,21 @@ export function install(rt) {
     },
     output,
     async execute(args, exec) {
+      const origin = rt.live.get(exec.agent?.id)
+      const originTurn = origin?.turn
+      const reviewId = origin?.info?.reviewId
+      const originalOwner = rt.groupOwners.get(exec.agent?.id)
+      const originalRoomId = originalOwner?.roomId
+      const originalBotId = originalOwner?.botId
+      const sameOwner = () => {
+        const owner = rt.groupOwners.get(exec.agent?.id)
+        return owner?.roomId === originalRoomId && owner?.botId === originalBotId
+      }
       await rt.load()
+      if (!sameOwner()) return 'Not sent: the caller\'s group context changed before dispatch.'
+      if (originalOwner !== undefined && (typeof originalRoomId !== 'string' || typeof originalBotId !== 'string' || rt.roomOf(originalRoomId) === undefined)) {
+        return 'Not sent: the caller\'s group is unavailable.'
+      }
       const sender = callerBot(exec)
       if (sender === undefined) return 'Only Bots on the team can use message_bot.'
       const target = rt.findBot(args.to)
@@ -283,22 +315,20 @@ export function install(rt) {
       const name = typeof args.request_id === 'string' ? args.request_id.trim() : ''
       if (name.length > NAME_MAX) return `The request_id is ${name.length} characters long; a request name is at most ${NAME_MAX}.`
       const text = absoluteLinks(String(args.message), rt.sessionFolder?.(exec.agent?.session ?? exec.agent))
-      const taskRoomId = rt.taskOwners?.get(exec.agent?.id)?.roomId
-      if (taskRoomId !== undefined) {
-        refuse('Background tasks in a group chat cannot call message_bot directly. Finish your work and mention @Name in your final reply so it goes to the group.')
-      }
       const room = rt.roomOf(rt.groupOwners.get(exec.agent?.id)?.roomId)
       // The request the caller named: it is admitted once, and a repeat of it is not sent again.
+      const defaultQueue = room === undefined && args.when === undefined
+      const payload = {
+        to: target.id,
+        message: String(args.message ?? '').replace(/\r\n?/g, '\n').trim(),
+        reply_to: args.reply_to === 'user' ? 'user' : 'me',
+        when: defaultQueue || args.when === 'queue' ? 'queue' : 'now',
+      }
       const request = name === '' ? undefined : rt.requestIdentity({
-        caller: sender.id,
-        context: room === undefined ? 'chat' : `room:${room.id}`,
-        name,
-        payload: {
-          to: target.id,
-          message: String(args.message ?? '').replace(/\r\n?/g, '\n').trim(),
-          reply_to: args.reply_to === 'user' ? 'user' : 'me',
-          when: args.when === 'queue' ? 'queue' : 'now',
-        },
+        caller: sender.id, context: room === undefined ? 'chat' : `room:${room.id}`, name, payload,
+        // Earlier private requests stored omitted timing as "now". A retry
+        // must recover that receipt without changing delivery or sending twice.
+        previousPayload: defaultQueue ? { ...payload, when: 'now' } : undefined,
       })
       // What the caller gets for a request that was admitted before.
       const answer = (outcome) => {
@@ -316,7 +346,23 @@ export function install(rt) {
       if (room !== undefined) {
         const refusal = groupRefusal(room, sender, target)
         if (refusal !== undefined) refuse(refusal)
-        const send = () => callInGroup(exec, room, sender, target, text.trim())
+        if (rt.goalDispatchBlocked?.(room, target.id)) refuse(`Not sent: work for ${target.name} in this group was stopped or its stop state is unknown. The user must explicitly resume the affected work first.`)
+        const blocked = () => !sameOwner() || rt.roomOf(room.id) !== room || !room.members.includes(target.id)
+          || !room.members.includes(sender.id) || rt.botOf(target.id) === undefined
+          || rt.botOf(sender.id) === undefined || rt.goalDispatchBlocked?.(room, target.id)
+          || (originTurn !== undefined && rt.live.get(exec.agent?.id)?.turn !== originTurn)
+          || (reviewId && !rt.goalReviewAllowed?.(room, reviewId))
+        const send = async () => {
+          // A stop can arrive while admitRequest persists the pending receipt.
+          if (blocked()) {
+            if (request !== undefined) request.unsent = true
+            return `Not sent: the group, membership or stop state changed before dispatch.`
+          }
+          const receipt = await callInGroup(exec, room, sender, target, text.trim())
+          // Delivery may have happened while the call yielded; do not retry it.
+          if (blocked()) throw new Error('Group state changed during dispatch; inspect the original message before retrying.')
+          return receipt
+        }
         return request === undefined ? await send() : answer(await rt.admitRequest(request, send))
       }
       const posted = calledInPosts.get(exec.agent?.id)
@@ -326,63 +372,39 @@ export function install(rt) {
       // sends the work round in a circle. Not a failed call: the turn goes on with
       // the work, and the result says where its answer goes instead of showing a
       // bare error the Bot cannot act on.
-      const works = worksOf(exec)
-      if (rt.upstreamOf(works).has(target.id)) return upstreamRefusal(exec, sender, target, text.trim(), args)
+      const turn = rt.live.get(exec.agent?.id)
+      const openingWork = rt.workOf(turn?.info)
+      const joinedWorks = (turn?.joined ?? []).map(joined => rt.workOf(joined.info))
+      if (rt.upstreamOf([openingWork, ...joinedWorks]).has(target.id)) return upstreamRefusal(exec, sender, target, text.trim(), args, payload.when)
+      const exchangeId = randomUUID()
+      if (request !== undefined) request.privateHandoff = { to: target.id, exchangeId }
       const send = async () => {
         const toUser = args.reply_to === 'user'
-        const work = toUser ? undefined : works[0]
+        const work = toUser ? undefined : openingWork
         // The part of the sender's own chat this request comes from: its answer goes back
         // to that part's thread.
         const fromPart = callerPart(exec).fromPart
-        const chat = rt.chatOf(target.id)
-        const agent = await rt.resolveAgent(chat)
-        const status = rt.statusOf(target.id)
-        // A request it has not read yet, sent for the same work, takes this one in, so
-        // messages to a Bot that cannot read them do not pile up. Two parts of the
-        // sender's own chat are two conversations, though: one answer could come back to
-        // only one of them, so their requests are sent and answered apart.
-        const earlier = unreadRequest(agent, sender.id, toUser)
-        const joinable = earlier !== undefined
-          && (toUser || ((earlier.message.source.senderPart ?? undefined) === fromPart && rt.sameWork(earlier.message.source.exchangeId, work)))
-        const before = joinable ? bodyOf(earlier.message) : undefined
-        let long = await rt.attachLong(before ? `${before.text}\n\n${text}` : text, `Message from ${sender.name}.txt`)
+        // Every request is a separate unit of work. In particular, never promote a
+        // queued request into an unread steer or append to a named request's payload.
+        const long = await rt.attachLong(text, `Message from ${sender.name}.txt`)
         // Nothing went out, so a named request must not take this as a delivered
         // receipt: admitRequest drops the pending record instead, and a retry can send.
         if (long === undefined) { if (request !== undefined) request.unsent = true; return tooLong(text) }
-        const joins = before !== undefined && agent.inbox?.remove?.(earlier.message.id) === true
-        if (before !== undefined && !joins) long = await rt.attachLong(text, `Message from ${sender.name}.txt`) ?? long
-        const working = rt.live.get(chat)?.turn !== undefined
-        const steer = (args.when !== 'queue' && !toUser) || (joins && earlier.steered)
-        const exchangeId = joins ? earlier.message.source.exchangeId : randomUUID()
-        const spawnInBackground = working && !toUser && !joins && args.when !== 'queue'
-          && rt.shouldMoveForeground?.(target, chat) === true
-          && typeof rt.spawnBotHandoffTask === 'function'
-        if (spawnInBackground) {
-          await rt.spawnBotHandoffTask(target, chat, {
-            fromBot: sender,
-            fromPart,
-            parentWork: work,
-            text: long.text,
-            files: long.files,
-            length: long.length,
-            exchangeId,
-          })
-          const asker = rt.ownsWork(sender.id, work) ? rt.botOf(state.works[work].from)?.name : undefined
-          const notes = [
-            `Delivered to ${target.name} in a background task while its foreground chat is busy. Its reply will arrive later as a new message; do not wait for it.`,
-            asker ? `When you have handed on everything, end your turn: each reply brings you back to this work, and your answer goes to ${asker} once all of it is back.` : '',
-          ].filter(Boolean)
-          return notes.join(' ')
-        }
-        if (joins) rt.forgetDelivery?.(exchangeId)
-        else if (!toUser) rt.openWork(exchangeId, { from: sender.id, to: target.id, parent: work, ...(fromPart ? { fromPart } : {}) })
+        let chat, working
+        const steer = args.when === 'now' && !toUser
+        if (!toUser) rt.openWork(exchangeId, { from: sender.id, to: target.id, parent: work, ...(fromPart ? { fromPart } : {}) })
         try {
-          await rt.deliver({ fromId: sender.id, toId: target.id, ...(fromPart ? { fromPart } : {}), text: long.text, files: [...long.files, ...(joins ? before.files : [])], length: long.length, role: 'request', steer, exchangeId, ...(joins ? { merged: true } : {}), ...(toUser ? { audience: 'user' } : {}) })
+          await rt.deliver({ fromId: sender.id, toId: target.id, ...(fromPart ? { fromPart } : {}), text: long.text, files: long.files, length: long.length, role: 'request', steer, exchangeId, ...(toUser ? { audience: 'user' } : {}) }, {
+            beforeAdmission(agent) {
+              chat = agent.session.id
+              working = rt.live.get(chat)?.turn !== undefined
+            },
+          })
         } catch (error) {
           // The delivery stays noted for the next start while its Bot exists
           // (resume.js), and the resent request still answers up the tree, so the
           // work it opened stays too. Only a target that is gone drops the work.
-          if (!joins && rt.botOf(target.id) === undefined) rt.dropWork(exchangeId)
+          if (rt.botOf(target.id) === undefined) rt.dropWork(exchangeId)
           throw error
         }
         const sent = toUser
@@ -390,12 +412,15 @@ export function install(rt) {
           : working && steer
             ? `Delivered to ${target.name} while it is working: it reads your message at its next step and answers once that work is done. Its reply will arrive later as a new message; do not wait for it.`
             : working
-              ? `Queued for ${target.name}: it reads your message after its current work. Its reply will arrive later as a new message; do not wait for it.`
+              ? `Queued for ${target.name} behind the work running at delivery. Its reply will arrive later as a new message; do not wait for it.`
               : `Delivered to ${target.name}. Its reply will arrive later as a new message; do not wait for it.`
         const asker = rt.ownsWork(sender.id, work) ? rt.botOf(state.works[work].from)?.name : undefined
+        let status
+        try { status = rt.statusOf(target.id, sender.id) }
+        catch { status = 'status unavailable' }
         const notes = [
-          joins ? `${target.name} had not read your earlier message yet, so this one was added to it, and it answers both at once.` : '',
           status === 'idle' ? '' : `${target.name} now: ${status}.`,
+          request ? 'To check this handoff, use list_bots with bot and request_id. Repeating message_bot returns this original receipt.' : '',
           asker ? `When you have handed on everything, end your turn: each reply brings you back to this work, and your answer goes to ${asker} once all of it is back.` : '',
         ].filter(Boolean)
         const out = [sent, ...notes].join(' ')
@@ -405,7 +430,7 @@ export function install(rt) {
         const elsewhere = activeSessions(target.id).running.filter(sessionId => sessionId !== chat)
         if (elsewhere.length === 0) return out
         const stop = rt.isMain(sender.id) ? ' If it must not go on there, use stop_bot.' : ''
-        return `${out} Your message does not reach its work in ${elsewhere.map(whereOf).join(' and ')}.${stop}`
+        return `${out} Your message does not reach its work in ${elsewhere.map(sessionId => whereOf(sessionId, sender.id, target.id)).join(' and ')}.${stop}`
       }
       return request === undefined ? await send() : answer(await rt.admitRequest(request, send))
     },
@@ -427,22 +452,14 @@ export function install(rt) {
       if (target === undefined) refuse(`No Bot named ${args.bot}. Team: ${Object.values(state.bots).map(bot => bot.name).join(', ')}`)
       if (target.id === sender.id) refuse('You cannot stop yourself.')
       const { running } = activeSessions(target.id)
-      const activeTasks = (target.tasks ?? []).filter(task => task && ['running', 'waiting_work', 'waiting_approval'].includes(task.status))
-      if (running.length === 0 && activeTasks.length === 0) refuse(`${target.name} is not running right now, so there is nothing to stop. Use message_bot to reach it.`)
-      // Separate non-task sessions before stopping tasks (stopping clears taskOwners).
-      const nonTaskRunning = running.filter(sessionId => !rt.taskOwners?.has(sessionId))
-      const places = nonTaskRunning.map(whereOf)
-      if (activeTasks.length > 0) {
-        await rt.stopAllTasksOfBot?.(target, String(args.reason ?? '').trim() || `stopped by ${sender.name}`)
-        places.push(`${activeTasks.length} background task${activeTasks.length === 1 ? '' : 's'}`)
-      }
-      for (const sessionId of nonTaskRunning) {
+      if (running.length === 0) refuse(`${target.name} is not running right now, so there is nothing to stop. Use message_bot to reach it.`)
+      for (const sessionId of running) {
         const agent = await rt.resolveAgent(sessionId)
         agent.cancel({ kind: 'hook', reason: 'ds-bot/stopped' })
       }
       const why = String(args.reason ?? '').trim() || 'Stop what you are doing; the previous turn was ended on purpose. Acknowledge briefly.'
       await rt.deliver({ fromId: sender.id, toId: target.id, ...callerPart(exec), text: why, role: 'stopped', ...callerRoom(exec) })
-      return `Stopped ${target.name} in ${places.join(' and ')}. It is told why in a new turn, whose reply comes back to you.`
+      return `Stopped ${target.name} in ${running.map(sessionId => whereOf(sessionId, sender.id, target.id)).join(' and ')}. It is told why in a new turn, whose reply comes back to you.`
     },
   }))
 
@@ -517,7 +534,7 @@ export function install(rt) {
         }
         const moving = typeof args.work_dir === 'string'
         const workDir = moving ? await rt.cleanWorkDir(args.work_dir) : undefined
-        if (moving && workDir !== bot.workDir) await rt.approveFolder(exec, { path: workDir, botId: bot.id, who: { en: bot.name, zh: ` ${bot.name} ` } })
+        if (moving && workDir !== bot.workDir) await rt.approveFolder(exec, { path: workDir, sessions: rt.sessionsOfBot(bot.id), who: { en: bot.name, zh: ` ${bot.name} ` } })
         // The photo rides on the Bot's other avatar fields, as the settings page's upload
         // does: setting one keeps a custom character, and clearing removes only the image.
         // They are read here, after the waits above, so a change made meanwhile stays.
@@ -546,10 +563,8 @@ export function install(rt) {
     await rt.load()
     const bot = callerBot(exec)
     if (bot === undefined) return next()
-    const taskEntry = rt.taskBySession?.(exec.agent.id)?.task
-    const room = rt.roomOf(rt.groupOwners.get(exec.agent.id)?.roomId ?? taskEntry?.roomId)
-    const taskDir = taskEntry?.workDir !== undefined ? (taskEntry.workDir ?? undefined) : rt.workDirOf({ botId: bot.id, roomId: room?.id })
-    const home = taskDir ?? rt.teamFolder()
+    const room = rt.roomOf(rt.groupOwners.get(exec.agent.id)?.roomId)
+    const home = rt.workDirOf({ botId: bot.id, roomId: room?.id }) ?? rt.teamFolder()
     const target = await rt.folderAt(rt.sessionFolder(session), cd)
     if (target === undefined || !(await rt.isFolder(target)) || home === undefined || within(target, await rt.real(home))) return next()
     if (room?.workDir) throw new Error(`Every member of "${room.name}" works in ${room.workDir} here, so you stay inside it. The user or a Main Bot can change the group's folder.`)
@@ -558,28 +573,11 @@ export function install(rt) {
     // Saved folders are trimmed like typed ones, so such a name would save another folder.
     if (unquote(target) !== target) throw new Error(`${JSON.stringify(target)} cannot be a working folder: its name starts or ends with a space or a quote mark.`)
     const workDir = await rt.workFolder(target)
-    if (taskEntry !== undefined) {
-      // A background task only widens its own Session and updates its own task.workDir
-      // for rollover continuity (null means team workspace, like room.memberDirs); it
-      // never rewrites room.memberDirs or the Bot's workDir, and a private Bot's tasks
-      // stay inside the Bot's own folder (matching startTask).
-      if (bot.private === true && bot.workDir !== undefined && !within(target, await rt.real(bot.workDir))) {
-        throw new Error(`${bot.name} is a private Bot and its background tasks must stay inside ${bot.workDir}.`)
-      }
-      await rt.checkPrivacyChange(bot, { moving: true, workDir })
-      await rt.approveFolder(exec, { path: workDir, sessions: [exec.agent.id], who: { en: `${bot.name}'s background task`, zh: `${bot.name} 的后台任务` } })
-      const result = await next()
-      if (result?.isError !== true) {
-        taskEntry.workDir = workDir ?? null
-        await rt.save()
-      }
-      return result
-    }
     if (room !== undefined) {
       // The folder holds only for this group conversation, so only this Session's
       // writes widen; the private-Bot check is the one updateBot would run.
       await rt.checkPrivacyChange(bot, { moving: true, workDir })
-      await rt.approveFolder(exec, { path: workDir, places: [{ sessionId: exec.agent.id, preset: room.permission ?? bot.permission }], who: { en: bot.name, zh: ` ${bot.name} ` } })
+      await rt.approveFolder(exec, { path: workDir, sessions: [exec.agent.id], who: { en: bot.name, zh: ` ${bot.name} ` } })
       const result = await next()
       if (result?.isError !== true) {
         ;(room.memberDirs ??= {})[bot.id] = workDir ?? null
@@ -587,7 +585,7 @@ export function install(rt) {
       }
       return result
     }
-    await rt.approveFolder(exec, { path: workDir, botId: bot.id, who: { en: bot.name, zh: ` ${bot.name} ` } })
+    await rt.approveFolder(exec, { path: workDir, sessions: rt.sessionsOfBot(bot.id), who: { en: bot.name, zh: ` ${bot.name} ` } })
     const result = await next()
     if (result?.isError !== true) await rt.updateBot(bot.id, { workDir: workDir ?? '' }, rt.selfOf(exec.agent?.id))
     return result
@@ -696,25 +694,14 @@ export function install(rt) {
       }
       try {
         const workDir = moving ? await rt.cleanWorkDir(args.work_dir) : undefined
-        const targetDir = moving ? workDir : room.workDir
-        const removing = new Set(remove.bots.map(bot => bot.id))
-        // A Bot that joins a group with a folder works there from its first turn; when a
-        // group has no folder of its own, its preset reaches each member's own folder.
-        const joining = add.bots.filter(bot => !room.members.includes(bot.id) && !removing.has(bot.id))
-        if (moving && workDir !== room.workDir && workDir !== undefined) {
-          const members = [...room.members.filter(id => !removing.has(id)), ...joining.map(bot => bot.id)]
-          await rt.approveFolder(exec, { path: workDir, room, botIds: members, who: { en: `every member of "${room.name}"`, zh: `群聊「${room.name}」的成员` } })
-        } else if (joining.length > 0 && targetDir !== undefined) {
+        // A Bot that joins a group with a folder works there from its first turn.
+        const joining = add.bots.filter(bot => !room.members.includes(bot.id))
+        if (moving && workDir !== room.workDir) {
+          const members = [...room.members, ...joining.map(bot => bot.id)]
+          await rt.approveFolder(exec, { path: workDir, sessions: members.map(id => room.sessions?.[id]).filter(Boolean), who: { en: `every member of "${room.name}"`, zh: `群聊「${room.name}」的成员` } })
+        } else if (joining.length > 0) {
           const names = joining.map(bot => bot.name)
-          await rt.approveFolder(exec, { path: targetDir, room, botIds: joining.map(bot => bot.id), who: { en: names.join(', '), zh: ` ${names.join('、')} ` } })
-        } else if (targetDir === undefined && room.permission !== undefined) {
-          const exposed = moving && room.workDir !== undefined
-            ? [...new Set([...room.members.filter(id => !removing.has(id)), ...joining.map(bot => bot.id)])].map(id => rt.botOf(id)).filter(Boolean)
-            : joining
-          for (const bot of exposed) {
-            if (!bot.workDir || (!(moving && room.workDir !== undefined) && Object.hasOwn(room.memberDirs ?? {}, bot.id))) continue
-            await rt.approveFolder(exec, { path: bot.workDir, room, botIds: [bot.id], who: { en: bot.name, zh: ` ${bot.name} ` } })
-          }
+          await rt.approveFolder(exec, { path: room.workDir, sessions: joining.map(bot => room.sessions?.[bot.id]).filter(Boolean), who: { en: names.join(', '), zh: ` ${names.join('、')} ` } })
         }
         const { room: next, changes } = await rt.updateRoom(room.id, {
           name: args.name,
@@ -873,18 +860,17 @@ export function install(rt) {
       }
       const long = await rt.attachLong(text, `Post from ${sender.name}.txt`)
       if (long === undefined) return tooLong(text)
-      // Replies the poster waits for, while it works on what a Bot asked it for — or from
-      // a background task that must stay open until the group replies — are tracked as work.
-      const work = reportBack ? worksOf(exec).find(id => rt.ownsWork(self, id)) : undefined
-      const trackTaskWait = reportBack && rt.taskOwners?.has(exec.agent?.id)
-      const sub = work !== undefined || trackTaskWait ? randomUUID() : undefined
-      if (sub !== undefined) rt.openWork(sub, { from: self, room: room.id, ...(work !== undefined ? { parent: work } : {}), ...callerPart(exec) })
+      // Replies the poster waits for, while it works on what a Bot asked it for, are
+      // work handed on for that request (handoffs.js).
+      const work = rt.workOf(info)
+      const sub = reportBack && rt.ownsWork(self, work) ? randomUUID() : undefined
+      if (sub !== undefined) rt.openWork(sub, { from: self, room: room.id, parent: work })
       const missingFiles = folder === undefined ? [] : missingFileRefs(text, folder)
       const claims = missingFiles.length > 0 ? { missingFiles } : undefined
       try {
         // A post that wants the replies names the conversation it was written
         // from, so the report comes back there instead of the own chat.
-        await rt.postToRoom(room, sender, long.text, { mentions, ...(claims ? { claims } : {}), ...(reportBack ? { reportBack: true, ...callerRoom(exec), ...callerPart(exec) } : {}), ...(member ? { member: true } : {}), ...(sub ? { sub } : {}), ...(long.length ? { length: long.length } : {}) }, long.files)
+        await rt.postToRoom(room, sender, long.text, { mentions, ...(claims ? { claims } : {}), ...(reportBack ? { reportBack: true, ...callerRoom(exec) } : {}), ...(member ? { member: true } : {}), ...(sub ? { sub } : {}), ...(long.length ? { length: long.length } : {}) }, long.files)
       } catch (failure) {
         if (sub !== undefined) rt.dropWork(sub)
         return `Could not post in "${room.name}": ${failure.message}`
@@ -929,7 +915,6 @@ export function install(rt) {
     async execute(args, exec) {
       await rt.load()
       const id = exec.agent?.id
-      if (rt.taskOwners?.has(id)) return 'Background tasks cannot show question cards directly. Put the question in your reply so it goes back to your own chat, where you can ask the user and start a follow-up task if needed.'
       if (rt.groupOwners.has(id)) return 'Question cards only work in your own chat. In a group, ask in your message instead.'
       if (!rt.chatOwners.has(id)) return `Only Bots on the team can use ask_user. Use ${BLOCKING_QUESTION_TOOL} if it is available in this session, or ask the user in your reply.`
       const options = (Array.isArray(args.options) ? args.options : [])
@@ -963,15 +948,11 @@ export function install(rt) {
   rt.teamTools.push(defineTool({
     name: 'show_view',
     description: showViewDescription({ where: 'your own chat' }),
-    parameters: {
-      ...showViewParameters,
-      report_issue: { type: 'string', description: 'Only for DS Bot issue approval: use the exact arguments from prepare_ds_bot_issue' },
-    },
+    parameters: showViewParameters,
     output,
     async execute(args, exec) {
       await rt.load()
       const id = exec.agent?.id
-      if (rt.taskOwners?.has(id)) return 'Background tasks cannot show view cards directly. Report the data or question back to your own chat, where you can show a view to the user.'
       if (rt.groupOwners.has(id)) return 'View cards only work in your own chat. In a group, ask in your message instead.'
       if (!rt.chatOwners.has(id)) return `Only Bots on the team can use show_view. Use ${BLOCKING_QUESTION_TOOL} if it is available in this session, or ask the user in your reply.`
       const checked = checkShownView(args.title, args.view)
@@ -980,8 +961,6 @@ export function install(rt) {
       const view = checked.view
       if (!checked.interactive && args.await_reply === true) return 'This view has nothing to submit; call show_view with await_reply: false.'
       if (checked.interactive && args.await_reply === false) return 'This view has controls to submit, so it waits for the user\'s answer; call show_view without await_reply: false.'
-      const issueDraft = args.report_issue === undefined ? undefined : rt.claimIssueDraft?.(id, args.report_issue, checked)
-      if (args.report_issue !== undefined && issueDraft === undefined) return 'This draft changed or expired. Call prepare_ds_bot_issue again and use its exact arguments.'
       const awaitReply = args.await_reply ?? checked.interactive
       if (!awaitReply) return 'The view is on screen.'
       state.views[id] = {
@@ -989,7 +968,6 @@ export function install(rt) {
         ...(exec.callId ? { callId: exec.callId } : {}),
         title,
         view,
-        ...(issueDraft === undefined ? {} : { issueDraft }),
         askedAt: Date.now(),
       }
       await rt.save()
@@ -1018,7 +996,9 @@ export function install(rt) {
     const held = scoped.get(id)
     if (held === undefined) return
     scoped.delete(id)
-    clearTimeout(held.retryTimer)
+    for (const lift of held.connectorLifts ?? []) { try { lift() } catch { /* already lifted */ } }
+    held.connectorLifts = []
+    held.connectorDenied = new Set()
     for (const dispose of held.disposers) {
       try {
         dispose()
@@ -1040,18 +1020,8 @@ export function install(rt) {
   }
   ctx.effect(() => () => { for (const id of scoped.keys()) unscope(id) }, 'ds-bot: scoped team tools')
 
-  const retryBotTools = (agent, held) => {
-    if (held.retryTimer !== undefined || (held.retries ?? 0) >= 5) return
-    held.retryTimer = setTimeout(() => {
-      held.retryTimer = undefined
-      held.retries = (held.retries ?? 0) + 1
-      if (scoped.get(agent.session?.id) !== held) return
-      shareBotTools(agent)
-    }, 1000)
-    held.retryTimer.unref?.()
-  }
-
-  // Warn once, but also retry independently of the next step.
+  // A wanted Session whose Agent cannot take scoped tools yet is warned about
+  // once; held.tools stays unset, so the next step's check tries again.
   const registerless = new WeakSet()
   const shareBotTools = (agent) => {
     if (agent === undefined) return
@@ -1073,10 +1043,17 @@ export function install(rt) {
       held = undefined
     }
     if (!wanted) return
-    if (held === undefined) {
-      held = { agent, relay: relayOnly, tools: false, restricted: false, filtered: false, disposers: [], unlisted: new Set() }
-      scoped.set(id, held)
-      agent.ctx?.effect?.(() => () => { if (scoped.get(id) === held) unscope(id) })
+    const projectEnabled=owns && rt.projectToolAvailable?.(id)===true
+    const offered=def=>(!relayOnly || def.name==='group_relay') && (def.name!=='project_coordination' || projectEnabled)
+    if (!projectEnabled && held?.added?.has('project_coordination')) {
+      const lift=held.toolLifts?.get('project_coordination')
+      if (lift) {
+        lift()
+        held.disposers=held.disposers.filter(dispose=>dispose!==lift)
+        held.toolLifts.delete('project_coordination')
+      }
+      held.added.delete('project_coordination')
+      held.unlisted.delete('project_coordination')
     }
     // A live Agent can be scoped while the modules that add tools are still installing:
     // loading the plugin again walks the live Agents from the load the memory module
@@ -1084,7 +1061,7 @@ export function install(rt) {
     // join that scope. Register what it is missing, so the next request is whole.
     if (held?.tools === true) {
       for (const def of [...rt.teamTools, ...(localBot ? (rt.localAgentTools ?? []) : [])]) {
-        if (relayOnly && def.name !== 'group_relay') continue
+        if (!offered(def)) continue
         if (held.added?.has(def.name) === true) continue
         try {
           const dispose = agent.ctx.tools.register(def)
@@ -1106,12 +1083,6 @@ export function install(rt) {
           rt.warn('ds-bot: team tool %s not added to %s: %s', def.name, id, error)
         }
       }
-      if ([...rt.teamTools, ...(localBot ? (rt.localAgentTools ?? []) : [])].some(def => (!relayOnly || def.name === 'group_relay') && !held.added?.has(def.name))) {
-        retryBotTools(agent, held)
-      } else {
-        clearTimeout(held.retryTimer)
-        held.retryTimer = undefined
-      }
       return
     }
     if (typeof agent.ctx?.tools?.register !== 'function') {
@@ -1119,19 +1090,18 @@ export function install(rt) {
         registerless.add(agent)
         rt.warn('ds-bot: %s needs the team tools but its Agent cannot register them yet', id)
       }
-      retryBotTools(agent, held)
       return
     }
     const disposers = []
     const failed = []
     const registered = []
     for (const def of [...rt.teamTools, ...(localBot ? (rt.localAgentTools ?? []) : [])]) {
-      if (relayOnly && def.name !== 'group_relay') continue
+      if (!offered(def)) continue
       try {
         const dispose = agent.ctx.tools.register(def)
         if (typeof dispose === 'function') {
           disposers.push(dispose)
-          held.toolLifts ??= new Map()
+          ;(held ??= { relay: relayOnly, tools: false, restricted: false, filtered: false, disposers: [], unlisted: new Set() }).toolLifts ??= new Map()
           held.toolLifts.set(def.name, dispose)
         }
         registered.push(def.name)
@@ -1141,6 +1111,7 @@ export function install(rt) {
         failed.push(`${def.name}: ${error.message ?? error}`)
       }
     }
+    held ??= { relay: relayOnly, tools: false, restricted: false, filtered: false, disposers: [], unlisted: new Set() }
     held.agent = agent
     held.relay = relayOnly
     held.tools = true
@@ -1152,11 +1123,6 @@ export function install(rt) {
     // assemble adds the pending names to the step's list once, then clears them.
     for (const name of registered) held.unlisted.add(name)
     if (failed.length > 0) rt.warn('ds-bot: team tools not served to %s: %s', id, failed.join('; '))
-    if (failed.length > 0) retryBotTools(agent, held)
-    else {
-      clearTimeout(held.retryTimer)
-      held.retryTimer = undefined
-    }
   }
 
   // The standard preset registers `subagent` (model selection) in each Agent's own
@@ -1175,7 +1141,7 @@ export function install(rt) {
       return {
         ...assembled,
         ...Array.isArray(assembled.tools) ? { tools: assembled.tools.filter(tool => !HIDDEN_TOOLS.includes(tool.name)) } : {},
-        ...Array.isArray(assembled.sections) ? { sections: assembled.sections.filter(section => !HIDDEN_SECTIONS.has(section.name)) } : {},
+        sections: assembled.sections.filter(section => !HIDDEN_SECTIONS.has(section.name)),
       }
     })
     held.filtered = true
@@ -1188,15 +1154,10 @@ export function install(rt) {
     if (rt.teamTools.some(tool => tool.name === def.name)) return
     rt.teamTools.push(def)
     for (const held of scoped.values()) {
-      if (held.relay || held.tools !== true || held.added?.has(def.name) || typeof held.agent?.ctx?.tools?.register !== 'function') continue
+      if (held.relay || typeof held.agent?.ctx?.tools?.register !== 'function') continue
       try {
         const dispose = held.agent.ctx.tools.register(def)
-        if (typeof dispose === 'function') {
-          held.disposers.push(dispose)
-          // removeTeamTool lifts by name from toolLifts, matching both
-          // shareBotTools registration paths.
-          ;(held.toolLifts ??= new Map()).set(def.name, dispose)
-        }
+        if (typeof dispose === 'function') held.disposers.push(dispose)
         ;(held.added ??= new Set()).add(def.name)
         held.unlisted.add(def.name)
       } catch { /* an agent that refuses it simply lacks the tool */ }
@@ -1206,17 +1167,8 @@ export function install(rt) {
     const at = rt.teamTools.findIndex(tool => tool.name === name)
     if (at !== -1) rt.teamTools.splice(at, 1)
     // Scoped registrations already handed out are disposed by name.
-    for (const [id, held] of scoped) {
-      const dispose = held.toolLifts?.get(name)
-      if (typeof dispose === 'function') {
-        const index = held.disposers.indexOf(dispose)
-        if (index !== -1) held.disposers.splice(index, 1)
-        try {
-          dispose()
-        } catch (error) {
-          rt.warn('ds-bot: a scoped tool %s of %s was not removed: %s', name, id, error)
-        }
-      }
+    for (const held of scoped.values()) {
+      held.toolLifts?.get(name)?.()
       held.toolLifts?.delete(name)
       held.added?.delete(name)
       held.unlisted.delete(name)
@@ -1269,7 +1221,6 @@ export function install(rt) {
   const reapplyToolMasks = () => {
     for (const held of scoped.values()) {
       if (held.agent === undefined) continue
-      try { rt.refreshShellShadows?.(held.agent) } catch (error) { rt.warn('ds-bot: shell shadow refresh failed: %s', error) }
       try { maskConnectorTools(held.agent, held) } catch (error) { rt.warn('ds-bot: connector mask failed: %s', error) }
     }
   }
@@ -1336,14 +1287,6 @@ export function install(rt) {
   ctx.tools.guard((exec) => {
     if (!rt.isBotSession(exec.agent?.id)) return undefined
     if (exec.name === BLOCKING_QUESTION_TOOL) return `Bots cannot use ${BLOCKING_QUESTION_TOOL}. Ask with ask_user in your own chat, or ask in your reply.`
-    if (rt.taskOwners?.has(exec.agent?.id)) {
-      if (exec.name === 'browser_handoff') return 'Background tasks cannot hand the browser to the user. Report back to your own chat so it can ask the user to take over.'
-      if (SCHEDULE_TARGET_TOOLS.includes(exec.name)) return 'Background tasks cannot create or change schedules on a temporary task session. Report back to your own chat so it can manage schedules there.'
-    }
-    if (exec.name === 'schedule_edit' && exec.arguments?.action === 'update') {
-      const unsupported = Object.keys(exec.arguments).filter(field => !SCHEDULE_UPDATE_FIELDS.has(field))
-      if (unsupported.length > 0) return `These schedule_edit fields are not editable: ${unsupported.join(', ')}. To change frequency, send rrule with a DTSTART anchor in the intended time zone followed by an RRULE line (for example, "DTSTART;TZID=Asia/Taipei:20261118T090000\nRRULE:FREQ=HOURLY;INTERVAL=3"); this converts the task to kind rrule.`
-    }
     const target = exec.arguments?.target
     if (SCHEDULE_TARGET_TOOLS.includes(exec.name) && target !== undefined && target !== 'this_session') return SCHEDULE_TARGET_REFUSAL
     return DELEGATION_TOOLS.includes(exec.name) ? DELEGATION_REFUSAL : undefined

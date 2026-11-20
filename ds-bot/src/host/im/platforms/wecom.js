@@ -9,11 +9,8 @@
 // matches Connection / Upgrade case-sensitively, so the socket comes from `ws`:
 // Node's built-in WebSocket sends those header names in lowercase.
 import { createDecipheriv } from 'node:crypto'
+import WebSocket from 'ws'
 import { chunkMarkdown } from '../format.js'
-
-// Loaded on first WeCom check or connect so plugin startup skips `ws` when unused.
-let wsModule
-const loadWs = () => (wsModule ??= import('ws').then(mod => mod.default))
 
 const WSS = 'wss://openws.work.weixin.qq.com'
 const TEXT_LIMIT = 4000
@@ -38,7 +35,6 @@ export default {
   // The subscription itself is the credential check: a bad bot id or secret
   // fails the aibot_subscribe response.
   async check(fields, env) {
-    const WebSocket = await loadWs()
     const botId = String(fields.botId ?? '').trim()
     const secret = String(fields.secret ?? '').trim()
     return await new Promise((resolve, reject) => {
@@ -173,14 +169,9 @@ export default {
       })
     }
 
-    const open = async () => {
+    const open = () => {
       const gen = generation
-      try {
-        const WebSocket = await loadWs()
-        if (stopped || generation !== gen) return
-        socket = new WebSocket(socketUrl(env))
-      } catch (error) {
-        if (stopped || generation !== gen) return
+      try { socket = new WebSocket(socketUrl(env)) } catch (error) {
         fail(`WeCom could not open a socket: ${socketError(error)}`)
         return
       }
@@ -233,7 +224,7 @@ export default {
     }
 
     handlers.onStatus({ state: 'connecting' })
-    void open()
+    open()
 
     return {
       send: async (chat, { text, buttons }) => {

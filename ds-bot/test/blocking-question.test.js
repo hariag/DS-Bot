@@ -3,7 +3,6 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import * as time from '@deepseek-ai/dsh-util-time'
 import { createRuntime } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 
@@ -162,6 +161,42 @@ test('a profile without the tool gets no mask, which restrict() would refuse', a
   assert.deepEqual(hidden, [])
   // The guard still holds should a later profile serve it.
   assert.match(guard(QUESTION, 'writer'), /Bots cannot use ask_user_question/)
+})
+
+test('connector restrictions survive tool changes and lift on re-enable or unload', async (t) => {
+  const env = await setup({ served: ['read'] })
+  t.after(env.stop)
+  const agent = await env.agentFor('writer')
+  const name = 'mcp__notion__read'
+  const masked = new Set()
+  let prefixes = []
+  let projected = 0
+  env.rt.connectorOffFor = () => prefixes
+  env.ctx.tools.definitions = () => [{ name: 'read' }, { name }]
+  env.ctx.tools.schemas = scoped => {
+    projected += 1
+    return [{ name: 'read' }, { name }].filter(tool => !scoped || !masked.has(tool.name))
+  }
+  agent.ctx.tools.restrict = ({ deny }) => {
+    for (const entry of deny) masked.add(entry)
+    env.ctx.emit('tools/change')
+    return () => { for (const entry of deny) masked.delete(entry); env.ctx.emit('tools/change') }
+  }
+  env.rt.reapplyToolMasks()
+  assert.equal(projected, 0)
+  prefixes = ['mcp__notion__']
+  env.rt.reapplyToolMasks()
+  assert.equal(masked.has(name), true)
+  env.ctx.emit('tools/change')
+  assert.equal(masked.has(name), true)
+  prefixes = []
+  env.rt.reapplyToolMasks()
+  assert.equal(masked.has(name), false)
+  prefixes = ['mcp__notion__']
+  env.rt.reapplyToolMasks()
+  assert.equal(masked.has(name), true)
+  await env.ctx.dispose()
+  assert.equal(masked.size, 0)
 })
 
 test('the guard refuses the blocking question tool in Bot Sessions only', async (t) => {
@@ -328,39 +363,6 @@ test('Bot Sessions filter the hidden tools and their guidance out of the prompt 
   assert.deepEqual(computer, { sections: [{ name: 'bot-identity' }], contexts: [], variables: {} })
   await stop()
   for (const record of scopedListeners) assert.equal(record.disposed, true)
-})
-
-test('a Bot refuses schedule update fields DSH would silently ignore', async (t) => {
-  const { ctx, stop } = await setup()
-  t.after(stop)
-  const guard = (args, sessionId = 'writer', name = 'schedule_edit') => ctx.guards.map(check => check({ name, arguments: args, agent: { id: sessionId } })).find(reason => reason !== undefined)
-  for (const sessionId of ['writer', 'room-writer', 'chief']) {
-    for (const field of ['everySeconds', 'every_seconds', 'scheduledAt', 'timing', 'unknown']) {
-      const args = { id: 's1', action: 'update', prompt: 'Unchanged prompt', [field]: 10800 }
-      const reason = guard(args, sessionId)
-      assert.equal(typeof reason, 'string')
-      assert.ok(reason.includes(field))
-      assert.match(reason, /not editable/)
-      assert.match(reason, /rrule/)
-      assert.match(reason, /RRULE:FREQ=HOURLY;INTERVAL=3/)
-      assert.match(reason, /kind rrule/)
-    }
-  }
-  const valid = { id: 's1', action: 'update', title: 'Task', prompt: 'Do it', rrule: 'DTSTART;TZID=Asia/Taipei:20261118T090000\nRRULE:FREQ=HOURLY;INTERVAL=3', target: 'this_session', active: false, expectedUpdatedAt: '2026-11-01T00:00:00.000Z' }
-  for (const args of [valid, { id: 's1', action: 'update' }, { id: 's1', action: 'delete' }, undefined]) assert.equal(guard(args), undefined)
-  const unsupported = { id: 's1', action: 'update', prompt: 'Unchanged prompt', everySeconds: 10800 }
-  assert.equal(guard(unsupported, 'plain'), undefined)
-  assert.equal(guard(unsupported, 'writer', 'schedule_create'), undefined)
-})
-
-test('schedule edit recovery gives a recurrence accepted by DSH', { skip: time.RRule === undefined && 'DSH does not support rrule yet' }, async (t) => {
-  const { ctx, stop } = await setup()
-  t.after(stop)
-  const exec = { name: 'schedule_edit', agent: { id: 'writer' }, arguments: { id: 's1', action: 'update', prompt: 'Unchanged prompt', everySeconds: 10800 } }
-  const reason = ctx.guards.map(check => check(exec)).find(reason => reason !== undefined)
-  const example = /"(DTSTART[^"]+)"/.exec(reason)?.[1]
-  assert.ok(example)
-  assert.equal(time.RRule.parse(example, { rejectIneffectiveSetPositions: true }).kind, 'accepted')
 })
 
 // DSH 0.2.2's schedule tools can deliver to a new Session, outside the team.

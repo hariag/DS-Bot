@@ -358,8 +358,15 @@ export function install(rt) {
     if (cardsDir !== undefined && writes()) await rm(join(cardsDir, botId), { recursive: true, force: true }).catch(error => rt.warn('ds-bot: btw cards of %s not removed: %s', botId, error))
   }
 
-  // Channel can be installed without the roster (the thinking route test).
-  rt.onBotDelete?.(dropBot)
+  // Channel can be installed without the roster (the thinking route test). The
+  // full runtime always has deleteBot, and that is the path that must drop cards.
+  if (typeof rt.deleteBot === 'function') {
+    const originalDelete = rt.deleteBot.bind(rt)
+    rt.deleteBot = async (id) => {
+      if (rt.botOf(id) !== undefined && !rt.isMain(id)) await dropBot(id)
+      return originalDelete(id)
+    }
+  }
 
   Object.assign(rt, { btwDelete, btwDispose, btwView, btwPartCards: readPart })
 }

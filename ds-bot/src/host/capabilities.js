@@ -61,12 +61,11 @@ export function install(rt) {
   const chains = new WeakMap()
   const queued = new WeakSet()
   const sessionStatuses = new Map()
-  let statusesCache
-  let statusesKey
   let pluginPromise
   let scheduled = null
   let loadingSecrets = 0
   let stopped = false
+  const isStopped = () => stopped || rt.stopping === true
 
   const library = () => state.capabilities.items
   const ensureLibrary = () => {
@@ -199,7 +198,6 @@ export function install(rt) {
   }
 
   const statusSet = (botId, itemName, sessionId, status) => {
-    statusesCache = undefined
     let byItem = sessionStatuses.get(botId)
     if (!byItem) sessionStatuses.set(botId, byItem = new Map())
     let bySession = byItem.get(itemName)
@@ -207,7 +205,6 @@ export function install(rt) {
     bySession.set(sessionId, status)
   }
   const clearStatus = (botId, itemName, sessionId) => {
-    statusesCache = undefined
     const byItem = sessionStatuses.get(botId)
     const bySession = byItem?.get(itemName)
     bySession?.delete(sessionId)
@@ -215,7 +212,6 @@ export function install(rt) {
     if (byItem?.size === 0) sessionStatuses.delete(botId)
   }
   const clearSession = sessionId => {
-    statusesCache = undefined
     for (const [botId, byItem] of sessionStatuses) {
       for (const [name, bySession] of byItem) {
         bySession.delete(sessionId)
@@ -232,15 +228,6 @@ export function install(rt) {
     return values.length > 0 ? { state: 'ready' } : undefined
   }
   const capabilityStatusesView = () => {
-    // The returned view is shared and cached; callers must not mutate it.
-    // Store adoption and in-place attachment/pack edits need no separate notification.
-    const key = JSON.stringify(Object.values(state.bots).map(bot => [bot.id,
-      (bot.capabilities ?? []).map(name => {
-        const item = own(library(), name)
-        return [name, item?.kind, item?.kind === 'pack' ? item.items : undefined]
-      }),
-    ]))
-    if (statusesCache && statusesKey === key) return statusesCache
     const result = {}
     for (const bot of Object.values(state.bots)) {
       const statuses = {}
@@ -261,8 +248,6 @@ export function install(rt) {
       }
       result[bot.id] = statuses
     }
-    statusesKey = key
-    statusesCache = result
     return result
   }
   const libraryView = () => Object.values(library()).map(item => ({
@@ -339,11 +324,11 @@ export function install(rt) {
           },
         }
         : await loadMcpPlugin()
-      if (stopped) return
+      if (isStopped()) return
       const fiber = item.kind === 'skill' ? agent.ctx.plugin(plugin) : agent.ctx.plugin(plugin, config)
       agentMounts.set(name, { key, fiber })
       await fiber.await()
-      if (stopped || agents.get(sessionId)?.deref() !== agent) return
+      if (isStopped() || agents.get(sessionId)?.deref() !== agent) return
       statusSet(bot.id, name, sessionId, { state: 'ready' })
     } catch (error) {
       await drop()
@@ -379,7 +364,7 @@ export function install(rt) {
     const run = (chains.get(agent) ?? Promise.resolve()).then(async () => {
       queued.delete(agent)
       const sessionId = agent.session.id
-      if (stopped || agents.get(sessionId)?.deref() !== agent) return
+      if (isStopped() || agents.get(sessionId)?.deref() !== agent) return
       await reconcileAgent(agent, botOfSession(sessionId))
     }).catch(error => rt.warn('ds-bot: capability reconcile for %s failed: %s', agent.session?.id, error))
     chains.set(agent, run)
@@ -395,8 +380,9 @@ export function install(rt) {
     }
   }
   async function reconcile() {
-    if (stopped) return
+    if (isStopped()) return
     await loadInputs()
+    if (isStopped()) return
     const runs = []
     for (const [sessionId, reference] of agents) {
       const agent = reference.deref()
@@ -422,8 +408,9 @@ export function install(rt) {
   // same Agent do not wait for it again.
   const stalled = new WeakSet()
   const prepare = async (agent, sessionId) => {
-    const run = loadInputs().then(() => reconcileOne(agent)).then(() => true, error => {
-      rt.warn('ds-bot: capability mount for %s failed: %s', sessionId, error)
+    if (isStopped()) return
+    const run = loadInputs().then(() => isStopped() ? undefined : reconcileOne(agent)).then(() => true, error => {
+      if (!isStopped()) rt.warn('ds-bot: capability mount for %s failed: %s', sessionId, error)
       return true
     })
     if (stalled.has(agent)) return
@@ -438,6 +425,7 @@ export function install(rt) {
   }
   async function ensureCapabilities(sessionId) {
     await rt.load()
+    if (isStopped()) return
     const bot = botOfSession(sessionId)
     if (!bot) return
     if ((bot.capabilities ?? []).length === 0 && !mounts.get(agents.get(sessionId)?.deref())?.size) return
@@ -445,13 +433,14 @@ export function install(rt) {
     try {
       agent = await rt.resolveAgent(sessionId)
     } catch (error) {
-      rt.warn('ds-bot: capability Agent for %s could not be resolved: %s', sessionId, rt.redactSecrets(String(error)))
+      if (!isStopped()) rt.warn('ds-bot: capability Agent for %s could not be resolved: %s', sessionId, rt.redactSecrets(String(error)))
       return
     }
     trackAgent(agent)
     await prepare(agent, sessionId)
   }
   const trackAgent = agent => {
+    if (isStopped()) return
     const sessionId = agent?.session?.id
     if (typeof sessionId !== 'string' || !agent.ctx) return
     if (agents.get(sessionId)?.deref() === agent) return
@@ -464,6 +453,7 @@ export function install(rt) {
     }, `ds-bot: capabilities ${sessionId}`)
   }
   const trackBotAgents = async bot => {
+    if (isStopped()) return
     const sessionIds = new Set()
     try {
       const sessionId = rt.chatOf(bot.id)
@@ -479,9 +469,13 @@ export function install(rt) {
       rt.warn('ds-bot: capability group sessions for %s could not be read: %s', bot.id, error)
     }
     for (const sessionId of sessionIds) {
+      if (isStopped()) return
       try {
-        trackAgent(await rt.resolveAgent(sessionId))
+        const agent = await rt.resolveAgent(sessionId)
+        if (isStopped()) return
+        trackAgent(agent)
       } catch (error) {
+        if (isStopped()) return
         rt.warn('ds-bot: capability Agent for %s could not be resolved: %s', sessionId, error)
       }
     }
@@ -523,6 +517,7 @@ export function install(rt) {
     trackAgent(agent)
     try {
       await rt.load()
+      if (isStopped()) return
       const bot = botOfSession(agent.session.id)
       if ((bot?.capabilities ?? []).length > 0) await prepare(agent, agent.session.id)
     } catch (error) {
@@ -532,8 +527,10 @@ export function install(rt) {
   ctx.effect(() => {
     void rt.load().then(async () => {
       for (const bot of Object.values(state.bots)) {
+        if (isStopped()) return
         if ((bot.capabilities ?? []).length > 0) await trackBotAgents(bot)
       }
+      if (isStopped()) return
       await scheduleReconcile()
     }).catch(error => rt.warn('ds-bot: capability startup failed: %s', error))
     return async () => {
@@ -542,7 +539,6 @@ export function install(rt) {
       mounts.clear()
       agents.clear()
       sessionStatuses.clear()
-      statusesCache = undefined
       await Promise.all(live.flatMap(agentMounts => [...agentMounts.values()].map(disposeMount)))
     }
   }, 'ds-bot: capabilities')

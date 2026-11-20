@@ -51,8 +51,6 @@
 | 优先级 | `P0` 崩溃、丢数据或无法使用 · `P1` 影响日常使用 · `P2` 一般缺陷或功能 · `P3` 建议或窄场景 |
 | 领域 | `area/host` 服务端（`index.js`、`src/host/`）· `area/client` 界面（`src/client/`）· `area/group` 群聊、@ 提及、Bot 之间的消息 · `area/memory` 记忆、对话分段、上下文 · `area/browser` Bot 浏览器、读网页、网页搜索 · `area/build` CI、发版、脚本、测试台 · `area/docs` |
 | 流程 | `maintainer` 等维护者 · `needs-info` 等报告人 · `upstream` 原因在 DSH 或其他插件 · `duplicate` · `auto-found` 自动测试发现 |
-| PR 制作 Agent | `agent/antigravity` · `agent/claude-code` · `agent/codex` · `agent/devin` · `agent/dsbot` · `agent/other`（哪个 AI Agent 开的 PR） |
-| PR 审查状态 | `review/approved` · `review/changes-requested` · `review/needs-decision` · `review/re-review`（互斥）· `reviewed-by/<agent>`（哪个 AI Agent 做的独立审查） |
 
 跨多个领域或不属于任何领域的 Issue，不打领域标签。
 
@@ -83,23 +81,20 @@
 
 - Node.js `22.19` 或更高（或 `24` 及以上）。
 - Git。
-- 仅测试台需要：pnpm `11`，以及插件测试所用 DSH 版本的 DeepSeek Harness 源码。
+- 仅 Linux 开发测试台、截图和桌面测试台需要：pnpm `11`，以及插件测试所用 DSH 版本的官方 DeepSeek Harness 源码。
 
 ```sh
 git clone https://github.com/Fei2411/DS-Bot.git ds-bot-repo
 cd ds-bot-repo/ds-bot
 
-# 插件的依赖和构建工具（esbuild）。
+# 插件自己的构建工具（只有 esbuild）。
 npm ci
-
-# 手机链接的依赖：构建时打进 link.js，有一条单元测试也会构建它。
-npm ci --prefix ../link
 
 # 单元测试和 lint 要加载的 DSH 包，从 npm 装进 dev/harness/。
 npm run harness
 ```
 
-测试台需要把 DeepSeek Harness 源码放在插件目录旁边（这个目录被 Git 忽略）：
+Linux 开发测试台、截图和桌面测试台需要把官方 DeepSeek Harness 源码放在插件目录旁边（这个目录被 Git 忽略）。单元测试、lint 和看板/生命周期测试台使用 `npm run harness` 从 npm 装进 `dev/harness/` 的官方包，不需要源码：
 
 ```sh
 cd ..
@@ -109,6 +104,8 @@ git -C deepseek-harness checkout dsh-v0.2.2-rc.1
 ```
 
 如果 DeepSeek Harness 源码放在别处，把 `DSH_HARNESS` 设为它的路径。`DSH_HARNESS` 也会代替 `dev/harness/`，供单元测试和 lint 使用。
+
+只支持官方 `deepseek-ai/deepseek-harness` 仓库。个人 fork 可能带有官方版本没有的补丁；插件必须能在官方包上运行。
 
 `@deepseek-ai/*` 包是 peer 依赖：真实安装时由 DSH 的 profile 提供。`ds-bot/.npmrc` 阻止 npm 把它们装进插件目录。
 
@@ -135,7 +132,7 @@ node scripts/build-client.mjs --check  # client.js 与 src/client 一致
 npm run lint                           # oxlint
 ```
 
-对改动到 `ds-bot/`、`link/` 或 `start.ps1` 的 Pull Request（以及 `dev`/`main` 分支），CI 会在 Linux 和 Windows 上跑 `npm test`（含生成文件一致性校验），在 Linux 上跑 `npm run lint`。它还会扫描入库的文件，查找密钥、token、个人路径和邮箱，以及只应留在本地的材料。想自己扫描，在仓库根目录运行：
+CI 在每个 Pull Request 上，在 Linux 和 Windows 上跑同样的三项检查。它还会扫描入库的文件，查找密钥、token、个人路径和邮箱，以及只应留在本地的材料。想自己扫描，在仓库根目录运行：
 
 ```sh
 mkdir -p /tmp/ds-bot-tree && git archive HEAD | tar -x -C /tmp/ds-bot-tree && node scripts/scan.mjs /tmp/ds-bot-tree
@@ -148,13 +145,6 @@ mkdir -p /tmp/ds-bot-tree && git archive HEAD | tar -x -C /tmp/ds-bot-tree && no
 ```sh
 CONTEXT_WINDOW=100000 CHECK_RATIO=0.45 dev/bench.sh smoke 3096 8796 reset && node dev/smoke.mjs smoke 3096
 dev/bench.sh smoke 3096 8796 stop
-```
-
-改 Bot 浏览器（`src/host/browser/`）时，还要跑它的测试。它们驱动真实的 Chromium，检查 Bot 没有用户时不能在页面上做的事（付款、删除、提交、上传），以及 Bot 之间不共用 cookie。CI 在 Linux 上跑它们。先装一次 Chromium，再运行：
-
-```sh
-npx playwright-core install --only-shell chromium
-npm run test:browser
 ```
 
 想手动试用插件，启动一个测试台，打开它打印的地址：

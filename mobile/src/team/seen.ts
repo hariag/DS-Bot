@@ -7,11 +7,11 @@ const KEY = 'dsbot.seenAt'
 
 const defaultStorage: SeenStorage = {
   async getItem(key) {
-    const SecureStore = await import('../storage')
+    const SecureStore = await import('expo-secure-store')
     return SecureStore.getItemAsync(key)
   },
   async setItem(key, value) {
-    const SecureStore = await import('../storage')
+    const SecureStore = await import('expo-secure-store')
     await SecureStore.setItemAsync(key, value)
   },
 }

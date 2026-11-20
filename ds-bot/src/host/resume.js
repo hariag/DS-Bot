@@ -9,17 +9,36 @@
 // is settled from the Session's durable log: an answer that was produced goes to the Bot
 // that waits for it, and an outcome that cannot be read is said to be unknown. The
 // request itself is never sent again there.
-import { randomUUID } from 'node:crypto'
-import { readFileSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
+import { constants, lstatSync, readFileSync } from 'node:fs'
+import { lstat, mkdir, open, unlink, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { HISTORY_TIMEOUT_MS, MESSAGE_INLINE_MAX, SOURCE_KIND, STEER_CUT } from './constants.js'
 import { answerSender, cutOffText, failureLine, turnFailure } from './turns.js'
+import { replaceFile } from './files.js'
 import { textOf } from './text.js'
-import { threadCurrentOfPart, threadOfPart } from './threads.js'
+import { heldTurnsView, queuedDeliveriesView } from './recovery-held.js'
+import { collectRecoveryCandidates, collectRecoveryOrigins, observeRecoveryRecords } from './recovery-observation.mjs'
+import { syncDirectory } from './directory-sync.mjs'
+import { threadCurrentOfPart } from './threads.js'
 
 // Long enough for DSH to finish opening its workspaces after a start.
 export const RESUME_DELAY_MS = 3000
+const RECOVERY_VIEW_MAX_BYTES = 64 * 1024 * 1024
+const RECOVERY_VIEW_TIMEOUT_MS = 5000
+const HISTORY_PAGE_SIZE = 50
+const HISTORY_MAX_PAGES = 200
+const unavailableRecoveryView = () => ({ available: false, incomplete: true, items: [] })
+
+// A stuck filesystem or writer must not keep a board request open indefinitely.
+export async function boundedRecoveryView(work, timeoutMs = RECOVERY_VIEW_TIMEOUT_MS) {
+  let timer
+  try {
+    return await Promise.race([work.catch(() => unavailableRecoveryView()), new Promise(resolve => {
+      timer = setTimeout(() => resolve(unavailableRecoveryView()), timeoutMs)
+    })])
+  } finally { clearTimeout(timer) }
+}
 
 export const resumeText = record => [
   'DeepSeek Harness restarted while you were working on this, so your last turn stopped before it finished.',
@@ -101,15 +120,45 @@ const triggerOf = info => ({
   ...(info.audience ? { audience: info.audience } : {}),
   ...(info.askedBy ? { askedBy: info.askedBy } : {}),
   ...(info.senderRoomId ? { senderRoomId: info.senderRoomId } : {}),
+  ...(info.reviewId ? { reviewId: info.reviewId } : {}),
+  ...(info.reviewInspect === true ? { reviewInspect: true } : {}),
+  ...(info.reviewReceipt === true ? { reviewReceipt: true } : {}),
+  ...(info.groupKickoff === true ? { groupKickoff: true } : {}),
 })
 
+// Keep the last committed bytes for comparison under the home lock. Decode only to parse JSON.
+const sameBytes = (a, b) => a === b || (a !== undefined && b !== undefined && a.equals(b))
+
 const readNotes = (file) => {
+  let raw
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf8'))
-    const object = value => (value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {})
-    return { turns: object(parsed?.turns), queued: object(parsed?.queued) }
+    raw = readFileSync(file)
+  } catch (error) {
+    return error?.code === 'ENOENT' ? { turns: {}, queued: {}, heldTurns: {}, raw: undefined }
+      : { turns: {}, queued: {}, heldTurns: {}, blocked: error?.code ?? error?.name ?? 'read error' }
+  }
+  try {
+    const parsed = JSON.parse(raw.toString('utf8'))
+    const object = value => value !== null && typeof value === 'object' && !Array.isArray(value)
+    if (!object(parsed) || (parsed.turns !== undefined && !object(parsed.turns)) || (parsed.queued !== undefined && !object(parsed.queued)) || (parsed.heldTurns !== undefined && !object(parsed.heldTurns))) throw new Error('invalid notes')
+    return { turns: parsed.turns ?? {}, queued: parsed.queued ?? {}, heldTurns: parsed.heldTurns ?? {}, raw }
   } catch {
-    return { turns: {}, queued: {} }
+    return { turns: {}, queued: {}, heldTurns: {}, blocked: 'invalid recovery notes' }
+  }
+}
+
+// The injectable file operations allow a failed replacement to be tested without
+// touching an active host's recovery file.
+export async function writeNotesAtomically(file, snapshot, check, ops = { writeFile, unlink, replaceFile }) {
+  const temp = `${file}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    check()
+    await ops.writeFile(temp, snapshot, { encoding: 'utf8', mode: 0o600, flag: 'wx' })
+    check()
+    await ops.replaceFile(temp, file, check)
+  } catch (error) {
+    await ops.unlink(temp).catch(() => {})
+    throw error
   }
 }
 
@@ -119,46 +168,457 @@ export function install(rt) {
 
   // What the last run left; read before this run notes anything.
   let interrupted = readNotes(file)
+  let expected = interrupted.raw
+  let blocked = interrupted.blocked
+  if (blocked !== undefined) rt.warn('ds-bot: recovery notes %s are unreadable (%s); the original file is preserved and Bot deliveries are paused until it is repaired and the plugin is reloaded', file, blocked)
 
   /** @type {Record<string, {botId:string, roomId?:string, since:number, trigger?:any, approval?:{tool:string, reason:string}, resumed?:boolean}>} */
-  let turns = {}
+  // Keep every original turn until recovery has actually inspected it: a
+  // crash while resumeAll prepares the queue must not erase other work either.
+  let turns = { ...interrupted.turns }
+  let unknownQueueGeneration = 0n
+  // A later turn in the same session must not overwrite an older uncertain
+  // interruption. Preserve it separately before the first possible snapshot.
+  const heldTurns = { ...interrupted.heldTurns }
+  // Linking the original turn or exchange also prevents ordinary Retry and
+  // automatic pre-step continuation from bypassing an interrupted-work hold.
+  const heldInputs = new Map()
+  const indexHeldInput = (sessionId, record) => {
+    if (!record || typeof sessionId !== 'string') return
+    const identities = heldInputs.get(sessionId) ?? new Set()
+    if (Number.isSafeInteger(record.turn)) identities.add(record.turn)
+    if (typeof record.trigger?.exchangeId === 'string') identities.add(record.trigger.exchangeId)
+    heldInputs.set(sessionId, identities)
+  }
+  for (const held of Object.values(heldTurns)) indexHeldInput(held?.sessionId, held?.record)
+  rt.isHeldRecoveryInput = (sessionId, item) => {
+    const identities = heldInputs.get(sessionId)
+    return blocked !== undefined || identities?.has(item.turn) === true || identities?.has(item.exchangeId) === true
+  }
+  const heldReason = 'interrupted outcome unknown'
+  const retainedAtStartup = new WeakSet()
+  const holdTurn = (sessionId, value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid interrupted turn; inspect recovery notes')
+    const { recoveryHold: _, ...record } = value
+    const id = createHash('sha256').update(JSON.stringify([sessionId, record])).digest('hex')
+    const saved = heldTurns[id]
+    if (saved === undefined) {
+      // A newly held turn can invalidate checks for any room until its exact
+      // provenance has been matched to the current roster.
+      unknownQueueGeneration += 1n
+      heldTurns[id] = { sessionId, record, reason: heldReason }
+      indexHeldInput(sessionId, record)
+      return false
+    }
+    return value.recoveryHold === heldReason && saved?.reason === heldReason
+      && saved.sessionId === sessionId && JSON.stringify(saved.record) === JSON.stringify(record)
+  }
+  for (const [sessionId, value] of Object.entries(interrupted.turns)) {
+    try { if (holdTurn(sessionId, value)) retainedAtStartup.add(value) } catch {
+      blocked = 'invalid interrupted turn'
+      rt.warn('ds-bot: invalid interrupted turn for %s; the original recovery notes are preserved for inspection', sessionId)
+    }
+  }
   // A new delivery can persist before recovery runs; it must keep the old queue.
   /** @type {Record<string, {at:number, args:any}[]>} deliveries no turn has taken up, by Session */
   let queued = interrupted.queued
   let writing = Promise.resolve()
   let stopped = false
-  let latest
+  // Scoped review evidence is valid only in this exact host incarnation and
+  // while no queue mutation has occurred. Reloading loses the epoch on purpose.
+  const reviewQueueEpoch = randomUUID()
+  const roomQueueGenerations = new Map()
+  const ownerQueueGenerations = new Map()
+  const bump = (map, key) => map.set(key, (map.get(key) ?? 0n) + 1n)
+  const bumpRoomNote = args => {
+    const room = rt.roomOf(args.roomId), bot = typeof args.toId === 'string' ? rt.botOf(args.toId) : undefined
+    if (!bot || !Array.isArray(room?.members) || !room.members.includes(bot.id)) bump(roomQueueGenerations, args.roomId)
+    else bump(ownerQueueGenerations, JSON.stringify([args.roomId, bot.id]))
+  }
+  const queueChanged = (args, sessionId) => {
+    if (!args || typeof args !== 'object') { unknownQueueGeneration += 1n; return }
+    if (typeof args.roomId === 'string' && args.roomId !== '') { bumpRoomNote(args); return }
+    if (args.role === 'room' || args.role === 'report' || typeof args.role !== 'string') { unknownQueueGeneration += 1n; return }
+    for (const inferred of roomNotesForTurn(sessionId,{botId:args.toId,trigger:{role:args.role}})) {
+      if (inferred.roomId) bumpRoomNote(inferred)
+      else unknownQueueGeneration += 1n
+    }
+  }
+  rt.reviewQueueVersion = (roomId, ownerId) => {
+    if (stopped || blocked !== undefined || rt.readOnly() !== undefined) return undefined
+    if (typeof roomId !== 'string' || typeof ownerId !== 'string') return undefined
+    let lease
+    try { lease = rt.homeLockVersion?.() } catch { return undefined }
+    if (lease === undefined) return undefined
+    return `${reviewQueueEpoch}:${unknownQueueGeneration}:${roomQueueGenerations.get(roomId) ?? 0n}:${ownerQueueGenerations.get(JSON.stringify([roomId, ownerId])) ?? 0n}:${lease}`
+  }
+  // A secondary host cannot know the live writer's current in-memory notes.
+  // Return no possibly stale records until this host can read its own state.
+  const unavailableHeld = unavailableRecoveryView
+  const ownsRecoveryView = () => {
+    if (blocked !== undefined || stopped || rt.readOnly() !== undefined) return false
+    // readOnly() alone does not cover an unusable lock or a lock whose token
+    // has been replaced before holder state is refreshed. Do not present this
+    // host's in-memory snapshot as current unless it actually owns the lock.
+    try { rt.requireHomeLock(); return true } catch { return false }
+  }
+  // Do not present a pending or externally changed file snapshot as current.
+  // Read the visible file bytes with a fixed memory bound, then
+  // recheck the path identity and the writer/lock after asynchronous I/O.
+  const readRecoveryForView = async () => {
+    let handle
+    try {
+      handle = await open(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0))
+      const before = await handle.stat({ bigint: true })
+      if (!before.isFile() || before.size > BigInt(RECOVERY_VIEW_MAX_BYTES)) return { ok:false }
+      const buffer = Buffer.alloc(Number(before.size) + 1)
+      let length = 0
+      while (length < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length)
+        if (bytesRead === 0) break
+        length += bytesRead
+      }
+      const after = await handle.stat({ bigint: true })
+      const entry = await lstat(file, { bigint: true })
+      if (!entry.isFile() || BigInt(length) !== before.size) return { ok:false }
+      for (const key of ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs']) {
+        if (before[key] !== after[key] || after[key] !== entry[key]) return { ok:false }
+      }
+      return { ok:true, raw:buffer.subarray(0, length) }
+    } catch (error) {
+      return error?.code === 'ENOENT' && !handle ? { ok:true, raw:undefined } : { ok:false }
+    } finally { await handle?.close().catch(() => {}) }
+  }
+  const sampleRecoveryHeld = async scope => {
+    if (ownsRecoveryView() !== true) return unavailableHeld()
+    const pendingWrite = writing
+    await pendingWrite
+    if (writing !== pendingWrite || ownsRecoveryView() !== true) return unavailableHeld()
+    const saved = expected
+    const disk = await readRecoveryForView()
+    if (!disk.ok || !sameBytes(disk.raw, saved) || expected !== saved || writing !== pendingWrite || ownsRecoveryView() !== true) return unavailableHeld()
+    // Startup copies interrupted turns into memory before the first file
+    // replacement. Do not show those new holds as a saved snapshot until
+    // the visible recovery file contains exactly the same held records.
+    const parsed = disk.raw === undefined ? {} : JSON.parse(disk.raw.toString('utf8'))
+    const savedHolds = parsed?.heldTurns ?? {}
+    const savedQueued = parsed?.queued ?? {}
+    if (!savedHolds || typeof savedHolds !== 'object' || Array.isArray(savedHolds)
+      || JSON.stringify(savedHolds) !== JSON.stringify(heldTurns)
+      || !savedQueued || typeof savedQueued !== 'object' || Array.isArray(savedQueued)
+      || JSON.stringify(savedQueued) !== JSON.stringify(queued)) return unavailableHeld()
+    if (expected !== saved || writing !== pendingWrite || ownsRecoveryView() !== true) return unavailableHeld()
+    const turns = heldTurnsView(savedHolds, scope, rt.state?.bots)
+    const deliveries = queuedDeliveriesView(savedQueued, scope, rt.state?.bots)
+    return { ...turns, incomplete:turns.incomplete || deliveries.incomplete, deliveries:deliveries.items,
+      deliveriesIncomplete:deliveries.incomplete, sampledAt:Date.now() }
+  }
+  let recoverySample
+  rt.recoveryHeldView = async scope => {
+    // A slow filesystem read may outlive the caller's timeout. Never stack
+    // additional large reads while that earlier read is still running.
+    if (recoverySample) return unavailableHeld()
+    const work = sampleRecoveryHeld(scope)
+    recoverySample = work
+    void work.then(() => { if (recoverySample === work) recoverySample = undefined },
+      () => { if (recoverySample === work) recoverySample = undefined })
+    return boundedRecoveryView(work)
+  }
+  const hasSingleOrigin = sessionId => {
+    // A stale or corrupt roster can assign one Session to several places;
+    // the convenience indexes silently choose one and cannot prove origin.
+    let origins = 0
+    for (const candidate of Object.values(rt.state.bots ?? {})) {
+      if (rt.chatOf(candidate.id) === sessionId) origins += 1
+      origins += (candidate.segments ?? []).filter(part => part?.sessionId === sessionId).length
+    }
+    for (const agent of Object.values(rt.state.agents ?? {})) origins += (agent.sessions ?? []).filter(id => id === sessionId).length
+    for (const room of Object.values(rt.state.rooms ?? {})) {
+      if (rt.sessionOfRoom(room) === sessionId) origins += 1
+      origins += (room.parts ?? []).filter(part => part?.sessionId === sessionId).length
+      origins += Object.values(room.sessions ?? {}).filter(id => id === sessionId).length
+      for (const segments of Object.values(room.segments ?? {})) origins += segments.filter(part => part?.sessionId === sessionId).length
+    }
+    return origins === 1
+  }
+  // Internal evidence for an explicit user redo. This is not a public view:
+  // it contains the original trigger. Callers must first authenticate the user
+  // and authorize the board scope, and recheck isCurrent across every await.
+  // A scoped metadata listing alone is not authorization for a group input
+  // to be executed from a personal context.
+  const readRecoveryHeldOriginal = async (scope, recoveryId) => {
+    if (!/^[a-f0-9]{64}$/.test(recoveryId)) return undefined
+    const pending = writing
+    await pending
+    if (writing !== pending || ownsRecoveryView() !== true) return undefined
+    const view = await rt.recoveryHeldView(scope)
+    if (writing !== pending || !view.available || !view.items.some(item => item.recoveryId === recoveryId)) return undefined
+    const hold = heldTurns[recoveryId], record = hold?.record, sessionId = hold?.sessionId
+    if (!record || typeof sessionId !== 'string' || typeof record.botId !== 'string'
+      || createHash('sha256').update(JSON.stringify([sessionId, record])).digest('hex') !== recoveryId) return undefined
+    const bot = rt.botOf(record.botId), roomId = record.roomId ?? record.trigger?.roomId
+    if (!bot || (record.roomId !== undefined && record.trigger?.roomId !== undefined && record.roomId !== record.trigger.roomId)) return undefined
+    const validScope = () => {
+      if (rt.botOf(record.botId) !== bot) return false
+      if (!hasSingleOrigin(sessionId)) return false
+      const owner = rt.groupOwners.get(sessionId) ?? rt.pastOwners.get(sessionId)
+      if (scope.kind === 'room') {
+        const room = rt.roomOf(scope.id)
+        return roomId === scope.id && !!room && room.members?.includes(record.botId) === true
+          && owner?.botId === record.botId && owner?.roomId === scope.id
+      }
+      return scope.kind === 'personal' && (scope.id === 'user' || scope.id === record.botId)
+        && roomId === undefined && (rt.chatOwners.get(sessionId) === record.botId
+          || (owner?.botId === record.botId && owner.roomId === undefined && rt.pastOwners.has(sessionId)))
+    }
+    if (!validScope() || ownsRecoveryView() !== true) return undefined
+    const generation = rt.homeLockVersion(), saved = expected, snapshot = JSON.stringify(hold)
+    if (generation === undefined) return undefined
+    const validMemory = () => ownsRecoveryView() === true && rt.homeLockVersion() === generation
+      && writing === pending && expected === saved && JSON.stringify(heldTurns[recoveryId]) === snapshot && validScope()
+    let handle
+    try {
+      handle = await open(file, (process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | (constants.O_NOFOLLOW ?? 0))
+      const before = await handle.stat({ bigint:true })
+      if (!before.isFile() || before.size > BigInt(RECOVERY_VIEW_MAX_BYTES) || !sameBytes(await handle.readFile(), saved) || !validMemory()) return undefined
+      await handle.sync()
+      await syncDirectory(dirname(file))
+      const after = await handle.stat({ bigint:true }), path = await lstat(file, { bigint:true })
+      if (!path.isFile() || path.isSymbolicLink() || !validMemory()) return undefined
+      for (const key of ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs']) {
+        if (before[key] !== after[key] || after[key] !== path[key]) return undefined
+      }
+      const isCurrent = () => {
+        if (!validMemory()) return false
+        try {
+          const current = lstatSync(file, { bigint:true })
+          return current.isFile() && !current.isSymbolicLink()
+            && ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'].every(key => current[key] === before[key])
+        } catch { return false }
+      }
+      return isCurrent() ? { sessionId, record:JSON.parse(JSON.stringify(record)), isCurrent } : undefined
+    } catch { return undefined } finally { await handle?.close().catch(() => {}) }
+  }
+  let recoveryOriginalPending
+  rt.recoveryHeldOriginal = async (scope, recoveryId) => {
+    if (recoveryOriginalPending) return undefined
+    const work = readRecoveryHeldOriginal(scope, recoveryId)
+    recoveryOriginalPending = work
+    void work.then(() => { if (recoveryOriginalPending === work) recoveryOriginalPending = undefined },
+      () => { if (recoveryOriginalPending === work) recoveryOriginalPending = undefined })
+    let timer
+    try {
+      return await Promise.race([work.catch(() => undefined), new Promise(resolve => { timer = setTimeout(resolve, RECOVERY_VIEW_TIMEOUT_MS) })])
+    } finally { clearTimeout(timer) }
+  }
+  // Read-only origins for an owner-initiated manual review. A missing result is
+  // not evidence that the work did not execute; it never triggers a delivery.
+  rt.recoveryWorkOrigins = async workId => {
+    if (recoverySample || typeof workId !== 'string' || !workId) return undefined
+    const sample = (async () => {
+      if (ownsRecoveryView() !== true) return undefined
+      const pendingWrite = writing
+      await pendingWrite
+      if (writing !== pendingWrite || ownsRecoveryView() !== true) return undefined
+      const saved = expected, disk = await readRecoveryForView()
+      if (!disk.ok || !sameBytes(disk.raw, saved) || expected !== saved || writing !== pendingWrite || ownsRecoveryView() !== true) return undefined
+      const raw = disk.raw === undefined ? {} : JSON.parse(disk.raw.toString('utf8'))
+      const parsed = { queued: raw.queued ?? {}, turns: raw.turns ?? {}, heldTurns: raw.heldTurns ?? {} }
+      const observed = observeRecoveryRecords({ workId, inflight: parsed })
+      const ids = collectRecoveryOrigins({ workId, inflight: parsed })
+      if (!ids || expected !== saved || writing !== pendingWrite || ownsRecoveryView() !== true) return undefined
+      return { ids, observed, sampledAt: Date.now() }
+    })()
+    recoverySample = sample
+    void sample.finally(() => { if (recoverySample === sample) recoverySample = undefined }).catch(() => {})
+    return boundedRecoveryView(sample)
+  }
+  rt.recoveryWorkCandidates = async () => {
+    if (recoverySample) return undefined
+    const sample = (async () => {
+      if (ownsRecoveryView() !== true) return undefined
+      const pendingWrite = writing
+      await pendingWrite
+      if (writing !== pendingWrite || ownsRecoveryView() !== true) return undefined
+      const saved=expected,disk=await readRecoveryForView()
+      if(!disk.ok || !sameBytes(disk.raw, saved) || expected!==saved || writing!==pendingWrite || ownsRecoveryView()!==true)return undefined
+      const raw=disk.raw===undefined?{}:JSON.parse(disk.raw.toString('utf8'))
+      const result=collectRecoveryCandidates({queued:raw.queued??{},turns:raw.turns??{},heldTurns:raw.heldTurns??{}})
+      if(expected!==saved || writing!==pendingWrite || ownsRecoveryView()!==true)return undefined
+      return result
+    })()
+    recoverySample=sample
+    void sample.finally(()=>{if(recoverySample===sample)recoverySample=undefined}).catch(()=>{})
+    return boundedRecoveryView(sample)
+  }
   let due = false
-  const persist = () => {
+  let pending
+  rt.onHomeDrain(() => writing)
+  const persist = ({ required = false } = {}) => {
     // Only the host that saves the team runs its work again.
-    if (stopped || rt.readOnly() !== undefined) return
-    latest = JSON.stringify({ turns, queued })
-    // One write waits at a time and takes the latest notes, so a busy round does not
-    // write the file once per change.
-    if (due) return
+    if (stopped || blocked !== undefined || rt.readOnly() !== undefined) {
+      return required ? Promise.reject(new Error('Recovery notes cannot be saved by this host.')) : writing
+    }
+    // Serialize after coalescing so a burst of deliveries does not repeatedly
+    // encode the entire recovery journal before the pending write starts.
+    if (due) return pending
     due = true
-    // Written in place: a rename over the file fails on Windows while anything reads
-    // it, and a torn write only loses what one restart would pick up.
-    writing = writing.then(async () => {
+    const run = writing.then(async () => {
       due = false
-      const snapshot = latest
+      if (blocked !== undefined) throw new Error(`Recovery notes are unavailable (${blocked}).`)
+      const snapshot = Buffer.from(JSON.stringify({ turns, queued, ...(Object.keys(heldTurns).length ? { heldTurns } : {}) }), 'utf8')
+      const check = () => {
+        rt.requireHomeLock()
+        let actual
+        try { actual = readFileSync(file) } catch (error) { if (error?.code !== 'ENOENT') throw error }
+        if (!sameBytes(actual, expected)) throw Object.assign(new Error('Recovery notes changed outside this host.'), { code: 'ECONFLICT' })
+      }
+      // An already committed snapshot still needs its ownership and disk proof:
+      // a retry must observe an outside edit even when its desired bytes match.
+      if (sameBytes(snapshot, expected)) { check(); return }
       await mkdir(home, { recursive: true })
-      await writeFile(file, snapshot, 'utf8')
-    }).catch(error => rt.warn('ds-bot: noting running turns failed: %s', error))
+      await writeNotesAtomically(file, snapshot, check)
+      expected = snapshot
+    })
+    pending = run
+    writing = run.catch(error => {
+      blocked = error?.code ?? error?.name ?? 'write error'
+      rt.warn('ds-bot: noting running turns failed (%s); Bot deliveries are paused and recovery notes require review', blocked)
+    })
+    return run
+  }
+  // A choice only annotates the original hold. It does not settle work, alter
+  // the inbox, or establish whether an external effect occurred.
+  const syncHeldDecision = async (recoveryId, entry) => {
+    rt.requireHomeLock()
+    const lease = rt.homeLockVersion(), handle = await open(file, (process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | (constants.O_NOFOLLOW ?? 0))
+    try {
+      const before = await handle.stat()
+      if (!before.isFile()) throw new Error('Decision journal unavailable')
+      const saved = JSON.parse(await handle.readFile('utf8'))?.heldTurns?.[recoveryId]
+      if (!saved?.decisions?.some(item => JSON.stringify(item) === JSON.stringify(entry))) throw new Error('Decision not saved')
+      await handle.sync()
+      await syncDirectory(dirname(file))
+      const afterHandle = await handle.stat(), after = await lstat(file)
+      rt.requireHomeLock()
+      if (!after.isFile() || after.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino
+        || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.size !== afterHandle.size || before.mtimeMs !== afterHandle.mtimeMs
+        || rt.homeLockVersion() !== lease || !heldTurns[recoveryId]?.decisions?.includes(entry)) throw new Error('Decision changed during confirmation')
+    } finally { await handle.close() }
+  }
+  const queuedRecoveryId = (sessionId, exchangeId) => createHash('sha256')
+    .update(JSON.stringify(['ds-bot:queued-delivery:v1', sessionId, exchangeId])).digest('hex')
+  const findQueuedDelivery = recoveryId => {
+    const matches = []
+    for (const [sessionId, entries] of Object.entries(queued)) {
+      if (!Array.isArray(entries)) continue
+      for (const item of entries) if (item?.args?.exchangeId && queuedRecoveryId(sessionId, item.args.exchangeId) === recoveryId)
+        matches.push({ sessionId, item })
+    }
+    return matches.length === 1 ? matches[0] : undefined
+  }
+  const syncQueuedDecision = async (recoveryId, entry) => {
+    rt.requireHomeLock()
+    const lease = rt.homeLockVersion(), handle = await open(file, (process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | (constants.O_NOFOLLOW ?? 0))
+    try {
+      const before = await handle.stat()
+      if (!before.isFile()) throw new Error('Decision journal unavailable')
+      const saved = JSON.parse(await handle.readFile('utf8'))?.queued ?? {}
+      const matches = Object.entries(saved).flatMap(([sessionId, entries]) => Array.isArray(entries)
+        ? entries.filter(item => item?.args?.exchangeId && queuedRecoveryId(sessionId, item.args.exchangeId) === recoveryId) : [])
+      if (matches.length !== 1 || !matches[0].decisions?.some(item => JSON.stringify(item) === JSON.stringify(entry))) throw new Error('Decision not saved')
+      await handle.sync()
+      await syncDirectory(dirname(file))
+      const afterHandle = await handle.stat(), after = await lstat(file)
+      rt.requireHomeLock()
+      if (!after.isFile() || after.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino
+        || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.size !== afterHandle.size || before.mtimeMs !== afterHandle.mtimeMs
+        || rt.homeLockVersion() !== lease || !findQueuedDelivery(recoveryId)?.item.decisions?.includes(entry)) throw new Error('Decision changed during confirmation')
+    } finally { await handle.close() }
+  }
+  rt.setHeldDecision = async (scope, recoveryId, expectedRevision, choice) => {
+    if (!/^[a-f0-9]{64}$/.test(recoveryId) || !Number.isSafeInteger(expectedRevision)
+      || expectedRevision < 0 || !['ignored', 'open'].includes(choice)) throw new Error('Invalid interrupted turn decision')
+    const view = await rt.recoveryHeldView(scope)
+    const item = view.available && view.items.find(row => row.recoveryId === recoveryId)
+    if (!item) throw new Error('Interrupted turn is unavailable; refresh the board')
+    const hold = heldTurns[recoveryId], history = hold?.decisions ?? []
+    if (!hold || !Array.isArray(history)) throw new Error('Interrupted turn is unavailable')
+    const previous = history[expectedRevision]
+    if (previous?.revision === expectedRevision + 1 && previous.choice === choice) { await syncHeldDecision(recoveryId,previous); return { decision:choice, revision:previous.revision } }
+    if (history.length !== expectedRevision || item.decisionRevision !== expectedRevision || history.length >= 100) throw new Error('Interrupted turn changed; refresh the board')
+    rt.requireHomeLock()
+    const entry = { revision:expectedRevision + 1, choice, by:'user', at:Date.now() }
+    hold.decisions = [...history, entry]
+    await persist({ required:true })
+    await syncHeldDecision(recoveryId,entry)
+    const verified = await sampleRecoveryHeld(scope)
+    const saved = verified.available && verified.items.find(row => row.recoveryId === recoveryId)
+    if (!saved || saved.decisionRevision !== expectedRevision + 1 || saved.decision !== choice) throw new Error('Decision outcome is unknown; refresh the board')
+    return { decision:choice, revision:saved.decisionRevision }
+  }
+  rt.setQueuedDeliveryDecision = async (scope, recoveryId, expectedRevision, choice) => {
+    if (!/^[a-f0-9]{64}$/.test(recoveryId) || !Number.isSafeInteger(expectedRevision)
+      || expectedRevision < 0 || !['ignored', 'open'].includes(choice)) throw new Error('Invalid queued delivery decision')
+    const view = await rt.recoveryHeldView(scope)
+    const item = view.available && view.deliveries.find(row => row.recoveryId === recoveryId)
+    if (!item) throw new Error('Queued delivery is unavailable; refresh the board')
+    const match = findQueuedDelivery(recoveryId), history = match?.item.decisions ?? []
+    if (!match || !Array.isArray(history)) throw new Error('Queued delivery is unavailable')
+    const previous = history[expectedRevision]
+    if (previous?.revision === expectedRevision + 1 && previous.choice === choice) {
+      await syncQueuedDecision(recoveryId, previous)
+      return { decision:choice, revision:previous.revision }
+    }
+    if (history.length !== expectedRevision || item.decisionRevision !== expectedRevision || history.length >= 100)
+      throw new Error('Queued delivery changed; refresh the board')
+    rt.requireHomeLock()
+    const entry = { revision:expectedRevision + 1, choice, by:'user', at:Date.now() }
+    match.item.decisions = [...history, entry]
+    queueChanged(match.item.args, match.sessionId)
+    await persist({ required:true })
+    await syncQueuedDecision(recoveryId, entry)
+    const verified = await sampleRecoveryHeld(scope)
+    const saved = verified.available && verified.deliveries.find(row => row.recoveryId === recoveryId)
+    if (!saved || saved.decisionRevision !== expectedRevision + 1 || saved.decision !== choice)
+      throw new Error('Decision outcome is unknown; refresh the board')
+    return { decision:choice, revision:saved.decisionRevision }
+  }
+
+  const roomNotesForTurn = (sessionId, record) => {
+    if (!record || typeof record !== 'object') return []
+    const trigger = record?.trigger
+    if (trigger?.reviewReceipt === true) return []
+    const explicit = record?.roomId ?? trigger?.roomId
+    if (typeof explicit === 'string' && explicit !== '') return [{role:'room',roomId:explicit,toId:record?.botId}]
+    const rooms = Object.values(rt.state?.rooms ?? {})
+    const matches = rooms.filter(room => [rt.sessionOfRoom(room), ...Object.values(room.sessions ?? {}),
+      ...(room.parts ?? []).map(part => part?.sessionId),
+      ...Object.values(room.segments ?? {}).flat().map(part => part?.sessionId)].includes(sessionId))
+    if (matches.length) return matches.map(room => ({role:'room',roomId:room.id,toId:record?.botId}))
+    if (['request','reply','stopped','kickoff','handoff'].includes(trigger?.role)) return []
+    const bot = typeof record?.botId === 'string' ? rt.botOf(record.botId) : undefined
+    if (bot) return rooms.filter(room => room.members?.includes(bot.id)).map(room => ({role:'room',roomId:room.id,toId:bot.id}))
+    return [{role:'room',toId:record?.botId}]
   }
   const update = (id, change) => {
     const next = change(turns[id])
     if (next === turns[id]) return
+    for (const args of roomNotesForTurn(id, turns[id])) queueChanged(args)
+    for (const args of roomNotesForTurn(id, next)) queueChanged(args)
     turns = { ...turns }
     if (next === undefined) delete turns[id]
     else turns[id] = next
     persist()
   }
-  const forgetQueued = (exchangeId) => {
+  const forgetQueued = (exchangeId, onlySession) => {
     for (const [sessionId, list] of Object.entries(queued)) {
-      const at = list.findIndex(item => item.args.exchangeId === exchangeId)
+      if (onlySession !== undefined && sessionId !== onlySession) continue
+      if (!Array.isArray(list)) continue
+      const at = list.findIndex(item => item?.args?.exchangeId === exchangeId)
       if (at === -1) continue
       const rest = list.toSpliced(at, 1)
+      queueChanged(list[at].args,sessionId)
       queued = { ...queued }
       if (rest.length === 0) delete queued[sessionId]
       else queued[sessionId] = rest
@@ -166,33 +626,147 @@ export function install(rt) {
       return
     }
   }
+  const markSent = exchangeId => {
+    for (const [sessionId, list] of Object.entries(queued)) {
+      if (!Array.isArray(list)) continue
+      const at = list.findIndex(item => item?.args?.exchangeId === exchangeId)
+      if (at === -1 || list[at].recoveryHold !== 'prepared') continue
+      const next = [...list]
+      const { recoveryHold: _, ...item } = next[at]
+      next[at] = item
+      queued = { ...queued, [sessionId]: next }
+      persist()
+      return
+    }
+  }
 
   const deliver = rt.deliver
-  rt.deliver = async (args) => {
-    const noted = { ...args, exchangeId: args.exchangeId ?? randomUUID() }
+  rt.deliver = async (args, observation) => {
+    if (blocked !== undefined) throw new Error(`Recovery notes are unavailable (${blocked}); Bot delivery is paused until the notes are repaired and the plugin is reloaded.`)
+    if (stopped || rt.readOnly() !== undefined) throw new Error('Recovery notes cannot be saved by this host.')
+    // The sender can be removed or renamed while the write barrier is pending.
+    // Keep the identity visible at admission, including in a recovered delivery.
+    const fromName = args.fromName ?? rt.botOf(args.fromId)?.name
+    const noted = { ...args, ...(fromName === undefined ? {} : { fromName }), exchangeId: args.exchangeId ?? randomUUID() }
     const sessionId = noted.sessionId ?? rt.chatOf(noted.toId)
     // Noted before it is sent: a turn may take it up before the send returns. Notes
     // are kept whole; nothing waits out a delivery silently.
-    queued = { ...queued, [sessionId]: [...(queued[sessionId] ?? []), { at: Date.now(), args: noted }] }
-    persist()
+    // If this process stops between saving the note and calling deliver, the
+    // caller may see a failure and retry. A prepared note is held for review on
+    // restart; it must not be silently turned into an automatic extra delivery.
+    queueChanged(noted,sessionId)
+    queued = { ...queued, [sessionId]: [...(queued[sessionId] ?? []), { at: Date.now(), args: { ...noted }, recoveryHold: 'prepared' }] }
+    await persist({ required: true })
+    if (stopped) throw new Error('Bot delivery stopped after its recovery note was saved; the note is retained for recovery.')
+    rt.requireHomeLock()
+    let notAdmitted = false
     try {
-      return await deliver(noted)
+      const result = await deliver(noted, { beforeAdmission: observation?.beforeAdmission, afterAdmission: observation?.afterAdmission, preparedMessage:observation?.preparedMessage, onNotAdmitted: () => {
+        notAdmitted = true
+        try { observation?.onNotAdmitted?.() } catch {}
+      } })
+      markSent(noted.exchangeId)
+      return result
     } catch (error) {
-      // A delivery that never reached the inbox stays noted: the next start sends
-      // it again. One whose Bot is gone is dropped, since it can never be sent.
-      if (rt.botOf(noted.toId) === undefined) forgetQueued(noted.exchangeId)
+      // The delivery outcome can be uncertain: its prepared note stays for review.
+      // If admission was not reached and the Bot is gone, it cannot be sent.
+      // After a possible admission, keep the note even if the Bot was removed.
+      if (notAdmitted && rt.botOf(noted.toId) === undefined) forgetQueued(noted.exchangeId)
       throw error
     }
   }
 
   // What a Session was sent and no turn has read yet.
-  rt.unreadOf = sessionId => (queued[sessionId] ?? []).map(item => item.args)
+  // Do not expose mutable queue entries: changing a recipient through a
+  // reference would bypass the generation used by scoped reviews.
+  rt.unreadOf = sessionId => Array.isArray(queued[sessionId]) ? queued[sessionId].map(item => ({ ...item?.args }))
+    : queued[sessionId] === undefined ? [] : [{}]
+  // Recovery may still be keyed by an old or unknown Session. Room provenance,
+  // not the current Session map, is the authority for inspection fencing.
+  rt.unreadRoomOf = roomId => {
+    const notes = []
+    for (const [sessionId,list] of Object.entries(queued)) {
+      if (!Array.isArray(list)) { notes.push({role:'room'}); continue }
+      for (const item of list) {
+        const args = item?.args
+        if (args?.reviewReceipt === true) continue
+        if (!args || typeof args !== 'object' || typeof args.role !== 'string') {
+          for (const unknown of roomNotesForTurn(sessionId, {}))
+            if (!unknown.roomId || unknown.roomId === roomId) notes.push(unknown)
+        } else if (typeof args.roomId === 'string' && args.roomId !== '') {
+          if (args.roomId === roomId) notes.push({ ...args })
+        } else if (args.role === 'room' || args.role === 'report') {
+          notes.push({ ...args })
+        } else {
+          for (const inferred of roomNotesForTurn(sessionId,{botId:args.toId,trigger:{role:args.role}}))
+            if (!inferred.roomId || inferred.roomId === roomId) notes.push(inferred)
+        }
+      }
+    }
+    for (const held of Object.values(heldTurns)) for (const args of roomNotesForTurn(held?.sessionId,held?.record))
+      if (!args.roomId || args.roomId === roomId) notes.push(args)
+    for (const [sessionId,record] of Object.entries(turns)) for (const args of roomNotesForTurn(sessionId,record))
+      if (!args.roomId || args.roomId === roomId) notes.push(args)
+    return notes
+  }
   rt.forgetDelivery = forgetQueued
+  const retained = new Map()
+  rt.keepQueued = (sessionId, messages, action) => {
+    const ids = new Set(messages.filter(message => message.source?.kind === SOURCE_KIND).map(message => message.source.exchangeId).filter(Boolean))
+    const counts = retained.get(sessionId) ?? new Map()
+    retained.set(sessionId, counts)
+    for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1)
+    try { return action() } finally {
+      for (const id of ids) {
+        const remaining = counts.get(id) - 1
+        if (remaining === 0) counts.delete(id)
+        else counts.set(id, remaining)
+      }
+      if (counts.size === 0) retained.delete(sessionId)
+    }
+  }
+  rt.moveQueued = (sourceSession, target, messages) => {
+    if (sourceSession === target || !Array.isArray(queued[sourceSession])) return
+    if (queued[target] !== undefined && !Array.isArray(queued[target])) return
+    const forwarded = new Set(messages.flatMap(({ source }) => source?.kind === SOURCE_KIND && source.exchangeId
+      ? [JSON.stringify([source.exchangeId, source.role, source.roomId, source.senderSessionId,
+        source.senderPart, source.senderRoomId, source.reviewId, source.replyTo])] : []))
+    if (forwarded.size === 0) return
+    const route = args => JSON.stringify([args?.exchangeId, args?.role, args?.roomId, args?.fromId,
+      args?.fromPart, args?.fromRoomId, args?.reviewId, args?.replyTo])
+    const incoming = [...(queued[target] ?? [])]
+    const present = new Map(incoming.map((item, index) => [JSON.stringify([item?.args?.toId, route(item?.args)]), index]))
+    const rest = []
+    for (const item of queued[sourceSession]) {
+      const args = item?.args
+      const messageRoute = route(args)
+      if (!args || !forwarded.has(messageRoute)) {
+        rest.push(item)
+        continue
+      }
+      queueChanged(args, sourceSession)
+      const identity = JSON.stringify([args.toId, messageRoute])
+      const index = present.get(identity)
+      if (index === undefined) {
+        present.set(identity, incoming.length)
+        incoming.push({ ...item, resumeOrigins:[...new Set([...(Array.isArray(item.resumeOrigins) ? item.resumeOrigins : []), sourceSession])] })
+      } else if (item.recoveryHold === 'history-seen' && incoming[index].recoveryHold !== 'history-seen') {
+        incoming[index] = { ...incoming[index], recoveryHold:'history-seen' }
+        queueChanged(incoming[index].args, target)
+      }
+    }
+    if (rest.length === queued[sourceSession].length) return
+    queued = { ...queued, [target]:incoming, [sourceSession]:rest }
+    if (rest.length === 0) delete queued[sourceSession]
+    persist()
+  }
 
   // A message is done with once a turn takes it up, or once it leaves the inbox untaken
   // while DS Bot runs: the user stopped the Bot, or DS Bot moved or withdrew it.
-  ctx.on('agent/inbox/discarded', ({ message } = {}) => {
-    if (message?.source?.kind === SOURCE_KIND && message.source.exchangeId) forgetQueued(message.source.exchangeId)
+  ctx.on('agent/inbox/discarded', ({ agent, message } = {}) => {
+    if (message?.source?.kind !== SOURCE_KIND || !message.source.exchangeId) return
+    if (retained.get(agent?.id)?.has(message.source.exchangeId)) return
+    forgetQueued(message.source.exchangeId, agent?.id)
   })
   // Exchanges a turn took up since this start, until the resends are done, so a resend
   // never repeats one.
@@ -218,7 +792,9 @@ export function install(rt) {
         const botId = owner?.botId ?? rt.chatOwners.get(id)
         // turns.js runs first and has already claimed or restored the trigger.
         const info = rt.live.get(id)?.info
-        update(id, () => ({ botId, ...(owner ? { roomId: owner.roomId } : {}), since: event.time ?? Date.now(), ...(info !== undefined ? { trigger: triggerOf(info) } : {}) }))
+        update(id, () => ({ botId, ...(owner ? { roomId: owner.roomId } : {}), since: event.time ?? Date.now(),
+          ...(Number.isSafeInteger(event.data?.turn) && event.data.turn >= 0 ? { turn:event.data.turn } : {}),
+          ...(info !== undefined ? { trigger: triggerOf(info) } : {}) }))
         break
       }
       case 'user/message': {
@@ -244,56 +820,161 @@ export function install(rt) {
     : approval === undefined ? (({ approval: _, ...rest }) => rest)(record) : { ...record, approval }))
 
   async function resumeTurn(sessionId, record) {
-    const bot = rt.botOf(record.botId)
-    if (bot === undefined) return false
-    const text = resumeText(record)
-    if (record.roomId !== undefined) {
-      const room = rt.roomOf(record.roomId)
-      if (room === undefined || !room.members.includes(bot.id)) return false
-      await rt.postToRoom(room, bot, '', { resumed: true, quiet: true, ...(record.resumed ? { again: true } : {}) })
-      // A turn already picked up once and cut off again stays stopped: a restart loop
-      // must not run it forever.
-      if (record.resumed) return false
-      await rt.deliver({ toId: bot.id, sessionId: room.sessions?.[bot.id] ?? sessionId, role: 'room', roomId: room.id, note: 'picking up after a restart', resumed: true, text, ...(record.trigger?.askedBy ? { askedBy: record.trigger.askedBy } : {}) })
-      return true
+    // A restart does not prove whether an external effect happened. Keep the
+    // original trigger and do not generate a second, unrelated exchange ID.
+    const retained = retainedAtStartup.has(record)
+    // Both the marker and the matching archive were already on disk. The
+    // startup summary covers this hold. A review may still need reconciliation.
+    if (retained && (!record.trigger?.reviewId || record.trigger.reviewReceipt === true)) return
+    if (!retained) {
+      holdTurn(sessionId, record)
+      update(sessionId, current => current === undefined || current === record
+        ? { ...record, recoveryHold: heldReason } : current)
     }
-    if (record.resumed) return false
-    // The turn ran in a part that is still one of the Bot's: it goes on there, not in the
-    // foreground chat when that part is a background one. A part gone since (archived and
-    // dropped) falls back to the Bot's current chat.
-    const ownPart = rt.selfOf(sessionId) === bot.id && rt.isBotSession(sessionId) ? { sessionId } : {}
-    const trigger = record.trigger
-    if ((trigger?.role === 'request' || trigger?.role === 'stopped') && trigger.senderSessionId && trigger.audience !== 'user' && rt.botOf(trigger.senderSessionId)) {
-      // The sender still waits for this turn's answer, so it goes on under the same exchange.
-      await rt.deliver({ fromId: trigger.senderSessionId, toId: bot.id, ...ownPart, ...(trigger.senderPart ? { fromPart: trigger.senderPart } : {}), role: trigger.role, ...(trigger.exchangeId ? { exchangeId: trigger.exchangeId } : {}), ...(trigger.senderRoomId ? { fromRoomId: trigger.senderRoomId } : {}), resumed: true, text })
-      return true
+    await persist({ required: true })
+    if (record.trigger?.reviewId && record.trigger.reviewReceipt !== true) {
+      await rt.goalReviewFailed?.(rt.roomOf(record.roomId), sessionId, record.trigger.reviewId)
     }
-    // A turn that went on with work another Bot asked for still owes that Bot its answer.
-    await rt.deliver({ toId: bot.id, ...ownPart, role: 'resume', resumed: true, text, ...(trigger?.work ? { work: trigger.work } : {}) })
-    return true
+    if (!retained) rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_UNCERTAIN_HOLD', text: `Interrupted work in ${sessionId} was retained without replay; inspect its original result before recovery.`, sessionId })
   }
+  rt.holdInterruptedTurn = resumeTurn
 
   // Where a queued note goes now: its Session if it still is one, else the
   // current Session of its Bot, or of its group when the message went to one.
-  const sessionFor = (sessionId, args) => (rt.isBotSession(sessionId) ? sessionId
-    : args?.roomId === undefined ? rt.chatOf(args?.toId) : rt.roomOf(args.roomId)?.sessions?.[args.toId])
+  const sessionFor = (sessionId, args) => {
+    if (typeof args?.toId !== 'string') return
+    const currentGroup = rt.groupOwners.get(sessionId)
+    const group = currentGroup ?? rt.pastOwners.get(sessionId)
+    if (group?.botId && group.botId !== args.toId) return
+    // A report's roomId identifies the group being reported on. Its original
+    // private recipient, like any other non-room delivery, keeps its own thread.
+    if (rt.chatOwners.has(sessionId)) {
+      return !currentGroup && rt.chatOwners.get(sessionId) === args.toId && args.role !== 'room' ? sessionId : undefined
+    }
+    const roomId = group?.roomId ?? (args.role === 'room' ? args.roomId : undefined)
+    if (roomId) {
+      if (args.role === 'room' && args.roomId !== undefined && args.roomId !== roomId) return
+      const room = rt.roomOf(roomId), target = room?.sessions?.[args.toId]
+      const owner = rt.groupOwners.get(target)
+      return room?.members?.includes(args.toId) && owner?.botId === args.toId && owner.roomId === roomId ? target : undefined
+    }
+    if (args.role === 'room' || group?.botId !== args.toId) return
+    return threadCurrentOfPart(rt.botOf(args.toId), sessionId)
+  }
+
+  const setQueuedRecoveryHold = async (sessionId, args, recoveryHold) => {
+    // A part can move while its history is being read. Locate the original note
+    // by its shared args object rather than changing another delivery with the same ID.
+    const containsNote = id => Array.isArray(queued[id]) && queued[id].some(item => item?.args === args)
+    if (!containsNote(sessionId)) sessionId = Object.keys(queued).find(containsNote)
+    if (sessionId === undefined) return
+    const list = queued[sessionId]
+    const index = list.findIndex(item => item?.args === args)
+    const current = list[index]
+    // Positive evidence of receipt survives a later stop, inbox check, or
+    // truncated history. Only actual uptake or explicit withdrawal retires it.
+    if (current.recoveryHold === 'history-seen' || current.recoveryHold === recoveryHold) return
+    const updated = { ...current }
+    if (recoveryHold === undefined) delete updated.recoveryHold
+    else updated.recoveryHold = recoveryHold
+    queued = { ...queued, [sessionId]:list.toSpliced(index, 1, updated) }
+    queueChanged(args, sessionId)
+    await persist({ required:true })
+  }
 
   // A hard stop keeps the inbox, which the Session runs once it wakes; only what DSH
   // cancelled is sent again. The notes stay queued until a turn takes the messages
   // up, so a send that fails here, or a Session that cannot be opened, leaves them
   // for the next start instead of losing them.
-  async function resendQueued(sessionId, list) {
-    const active = new Set()
+  async function resendQueued(sessionId, list, held, seenBeforeRestart) {
+    for (const item of list) if (taken?.has(item?.args?.exchangeId) === true) held.add(item.args.exchangeId)
     const fresh = list.filter(item => rt.botOf(item.args?.toId) !== undefined
       && sessionFor(sessionId, item.args) !== undefined && taken?.has(item.args.exchangeId) !== true)
-    if (fresh.length === 0) return active
-    const target = sessionFor(sessionId, fresh[0].args)
-    const agent = await rt.resolveAgent(target)
-    const waiting = new Set([...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])].map(message => message.source?.exchangeId))
-    for (const { args } of fresh) {
-      const dest = sessionFor(sessionId, args)
-      if (waiting.has(args.exchangeId)) {
-        if (dest !== undefined) active.add(dest)
+    if (fresh.length === 0) return
+    const agents = new Map()
+    const logs = new Map()
+    const logFor = id => {
+      if (!logs.has(id)) logs.set(id, logOf(id))
+      return logs.get(id)
+    }
+    const heldCounts = { seen:0, unreadable:0 }
+    for (const { args, resumeOrigins, recoveryHold, decisions } of fresh) {
+      if (decisions?.at(-1)?.choice === 'ignored') { held.add(args.exchangeId); continue }
+      const target = sessionFor(sessionId, args)
+      const room = args.role === 'room' ? rt.roomOf(args.roomId ?? rt.groupOwners.get(target)?.roomId) : undefined
+      const blocked = () => room !== undefined && rt.goalRecoveryBlocked?.(room, args.toId) === true
+      const previouslySeen = recoveryHold === 'history-seen' || seenBeforeRestart.has(args)
+      if (previouslySeen) {
+        held.add(args.exchangeId)
+        if (!args.reviewId && !blocked()) continue
+      }
+      if (!agents.has(target)) agents.set(target, await rt.resolveAgent(target))
+      const agent = agents.get(target)
+      if (args.reviewReceipt === true) {
+        held.add(args.exchangeId)
+        const waiting = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
+          .filter(message => message.source?.exchangeId === args.exchangeId)
+        rt.keepQueued(target, waiting, () => { for (const message of waiting) agent.inbox?.remove?.(message.id) })
+        continue
+      }
+      if (args.reviewId && args.role === 'room') {
+        const room = rt.roomOf(args.roomId)
+        const stillAllowed = rt.goalReviewAllowed?.(room, args.reviewId) === true
+        const waiting = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
+          .filter(message => message.source?.exchangeId === args.exchangeId)
+        if (!stillAllowed) {
+          const remove = () => { for (const message of waiting) agent.inbox?.remove?.(message.id) }
+          if (previouslySeen) rt.keepQueued(target, waiting, remove)
+          else remove()
+        }
+        held.add(args.exchangeId)
+        if (waiting.length === 0) {
+          await setQueuedRecoveryHold(target, args, 'review-uncertain')
+          await rt.goalReviewFailed?.(room, target, args.reviewId)
+          rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GOAL_REVIEW_UNCERTAIN', text: `Goal review ${args.reviewId} was not resent after restart; inspect the original delivery before recovery.` })
+        } else await setQueuedRecoveryHold(target, args, undefined)
+        continue
+      }
+      if (blocked()) {
+        held.add(args.exchangeId)
+        await setQueuedRecoveryHold(target, args, 'work-stopped')
+        const waiting = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
+          .filter(message => message.source?.exchangeId === args.exchangeId)
+        rt.keepQueued(target, waiting, () => { for (const message of waiting) agent.inbox?.remove?.(message.id) })
+        rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_STOPPED_HOLD', text: `Queued group delivery ${args.exchangeId} is held because its work is stopped or its stop state is unknown.`, sessionId: target })
+        continue
+      }
+      if (previouslySeen) continue
+      const waiting = () => [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
+        .some(message => message.source?.exchangeId === args.exchangeId)
+      if (waiting()) {
+        held.add(args.exchangeId)
+        if (recoveryHold !== undefined) await setQueuedRecoveryHold(target, args, undefined)
+        continue
+      }
+      if (recoveryHold === 'prepared') {
+        held.add(args.exchangeId)
+        const text = `Queued exchange ${args.exchangeId} was prepared for delivery, but its send outcome is unknown. Its recovery note is retained for review.`
+        rt.warn('ds-bot: %s', text)
+        rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_DELIVERY_UNCERTAIN', text, sessionId: target })
+        continue
+      }
+      // A note can outlive the turn that took it: note writes run asynchronously.
+      // An earlier user/message is not proof of completion (it may be a joined,
+      // deferred or failed input), so retain it for reconciliation rather than
+      // sending it again or dropping it. Include old parts after a Session move.
+      const origins = [...new Set([sessionId, target, ...(Array.isArray(resumeOrigins) ? resumeOrigins : [])]
+        .filter(id => typeof id === 'string' && id !== ''))]
+      const histories = await Promise.all(origins.map(logFor))
+      if (waiting() || taken?.has(args.exchangeId) === true) { held.add(args.exchangeId); continue }
+      const seen = histories.some(events => events?.some(event => event.type === 'user/message' && event.data?.source?.exchangeId === args.exchangeId))
+      const unreadable = histories.some(events => events === undefined)
+      if (seen || unreadable) {
+        held.add(args.exchangeId)
+        await setQueuedRecoveryHold(target, args, seen ? 'history-seen' : 'history-unavailable')
+        const why = seen ? 'it appeared in a previous turn; its outcome is not established' : 'a relevant Session history could not be read'
+        heldCounts[seen ? 'seen' : 'unreadable']++
+        rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_DELIVERY_UNCERTAIN', text: `Queued exchange ${args.exchangeId} was not resent: ${why}. Its recovery note is retained for review.`, sessionId: target })
         continue
       }
       if (taken?.has(args.exchangeId) === true) {
@@ -303,95 +984,78 @@ export function install(rt) {
       // A request that waited through a restart reaches its target late: the work
       // it is for is marked, so the answer that comes back says so.
       if (args.role === 'request' || args.role === 'stopped') rt.lateWork?.(args.exchangeId)
-      const ok = await deliver({ ...args, sessionId: dest, steer: false, resent: true })
-        .then(() => true, (error) => { rt.warn('ds-bot: sending again what %s was sent failed: %s', sessionId, error); return false })
-      if (ok && dest !== undefined) active.add(dest)
+      await deliver({ ...args, ...(room ? { roomId:room.id } : {}), sessionId:target, steer:false, resent:true }, { beforeAdmission: () => {
+        if (sessionFor(sessionId,args) !== target || blocked()) throw new Error('Queued work changed destination or was stopped before recovery admission')
+      } })
+        .then(() => setQueuedRecoveryHold(target, args, undefined))
+        .catch(error => rt.warn('ds-bot: sending again what %s was sent failed: %s', sessionId, error))
     }
-    return active
+    if (heldCounts.seen || heldCounts.unreadable) {
+      rt.warn('ds-bot: %d queued exchange(s) for %s were not resent: %d appeared in history and %d whose history could not be read; individual recovery notes are retained for review',
+        heldCounts.seen + heldCounts.unreadable, sessionId, heldCounts.seen, heldCounts.unreadable)
+    }
   }
 
-  // A Session's durable log, as DSH keeps it: what happened there, and what it said.
-  // Undefined when this DSH cannot read it, or when the Session is gone.
+  // Current DSH exposes bounded `events` pages. Keep a compatibility path for
+  // older Hosts that still expose `inspect`; incomplete reads remain unknown.
   async function logOf(sessionId) {
-    const inspect = ctx.sessionController?.inspect
+    const controller = ctx.sessionController
+    const readPage = typeof controller?.events === 'function' ? controller.events.bind(controller)
+      : typeof controller?.page === 'function' ? controller.page.bind(controller) : undefined
+    if (readPage) {
+      const signal = AbortSignal.timeout(HISTORY_TIMEOUT_MS), pages = []
+      let throughSeq, beforeSeq
+      for (let pageNumber = 0; pageNumber < HISTORY_MAX_PAGES; pageNumber += 1) {
+        const request = { address:{ kind:'session', sessionId }, maxMessages:HISTORY_PAGE_SIZE,
+          ...(throughSeq !== undefined ? { throughSeq } : {}), ...(beforeSeq !== undefined ? { beforeSeq } : {}) }
+        const page = await readPage(request, signal).catch(() => undefined)
+        if (!page || !Array.isArray(page.records) || !Number.isSafeInteger(page.cursor) || page.cursor < -1
+          || typeof page.hasMore !== 'boolean' || (throughSeq !== undefined && page.cursor !== throughSeq)) return undefined
+        if (throughSeq === undefined) throughSeq = page.cursor
+        const events = []
+        let previousSeq = -1
+        for (const record of page.records) {
+          const event = record?.type === 'event' ? record.event : undefined
+          if (!event || typeof event.type !== 'string' || !Number.isSafeInteger(event.seq)
+            || event.seq <= previousSeq || event.seq > throughSeq || (beforeSeq !== undefined && event.seq >= beforeSeq)) return undefined
+          previousSeq = event.seq
+          events.push(event)
+        }
+        if (events.length === 0 && (page.hasMore || page.cursor !== -1)) return undefined
+        pages.unshift(events)
+        if (!page.hasMore) return pages.flat()
+        const firstSeq = events[0]?.seq
+        if (!Number.isSafeInteger(firstSeq) || firstSeq < 0 || (beforeSeq !== undefined && firstSeq >= beforeSeq)) return undefined
+        beforeSeq = firstSeq
+      }
+      return undefined
+    }
+    const inspect = controller?.inspect
     if (typeof inspect !== 'function') return undefined
     const seen = await inspect(sessionId, AbortSignal.timeout(HISTORY_TIMEOUT_MS)).catch(() => undefined)
     return Array.isArray(seen?.events) ? seen.events : undefined
   }
 
-  const isTerminalReason = reason => reason !== undefined && reason.kind !== 'interrupted'
-    && !(reason.kind === 'aborted' && reason.reason?.kind === 'disposed')
-
-  const whereFor = (asker) => {
-    const sender = asker?.senderSessionId
-    if (sender === undefined) return { sender: undefined, back: undefined, where: undefined }
-    const back = rt.roomOf(asker.senderRoomId)?.sessions?.[sender]
-    // The answer would have gone to the part of the asking Bot's chat the request came
-    // from, which is not its foreground chat when that part is a background one.
-    const where = back ?? (asker.senderPart === undefined ? undefined : threadCurrentOfPart(rt.botOf(sender), asker.senderPart)) ?? rt.chatOf(sender)
-    return { sender, back, where }
-  }
-
-  async function deliveredAnswer(botId, sender, workId) {
-    const delivered = rt.deliveredReplyOf?.(botId, sender, workId)
-    if (delivered === undefined) {
-      return { answered: rt.deliveredReplyOf === undefined && sender !== undefined && rt.wasReplyDelivered?.(botId, sender, workId) === true }
-    }
-    const file = delivered.files?.[0]
-    const stored = file === undefined ? undefined : await rt.fileText(file, delivered.length)
-    if (stored?.whole !== true) return { answered: true, text: delivered.text }
-    // Delivery warnings are prepended to the preview and included in its declared length.
-    const prefixLength = (delivered.length ?? stored.text.length) - stored.text.length
-    const prefix = prefixLength > 0 ? delivered.text.slice(0, prefixLength) : ''
-    return { answered: true, text: prefix + stored.text }
-  }
-
-  async function alreadyAnswered(botId, sender, where, back, roomId, workId) {
-    const delivered = await deliveredAnswer(botId, sender, workId)
-    if (delivered.answered) return delivered
-    if (where === undefined) return { answered: false }
-    const sent = await logOf(where)
-    if (sent !== undefined && answeredIn(sent, workId)) return { answered: true }
-    const segments = back === undefined
-      ? (threadOfPart(rt.botOf(sender), where)?.segments ?? [])
-      : (rt.roomOf(roomId)?.segments?.[sender] ?? [])
-    for (const segment of [...segments].reverse()) {
-      if (segment?.sessionId === undefined || segment.sessionId === where) continue
-      const earlier = await logOf(segment.sessionId)
-      if (earlier !== undefined && answeredIn(earlier, workId)) return { answered: true }
-    }
-    return { answered: false }
-  }
-
   // A turn that ended while DS Bot was not watching it: its answer may exist and never
   // have gone to the Bot that waits for it. The Session's durable log says what it did;
   // the work it was for is settled once, the way a finished turn settles it.
-  async function reconcileEnded(sessionId, record, ended, prefetchedEvents) {
+  async function reconcileEnded(sessionId, record, ended) {
     const trigger = record.trigger
     if (trigger === undefined) return
     const workId = rt.workOf(trigger)
-    const ownsPrimary = rt.ownsWork(record.botId, workId)
-    const hasOwnedWork = ownsPrimary || Object.values(rt.state?.works ?? {}).some(work => work.to === record.botId)
-    if (!hasOwnedWork) return
+    if (!rt.ownsWork(record.botId, workId)) return
     const exchangeId = trigger.exchangeId
-    if (exchangeId === undefined) return
-    const primaryAsker = ownsPrimary ? rt.workAsker(workId) : undefined
-    const primarySender = primaryAsker?.senderSessionId
-    const canSettlePrimary = ownsPrimary && primarySender !== undefined && rt.botOf(primarySender) !== undefined
-    const name = rt.botOf(rt.selfOf(sessionId))?.name ?? rt.botOf(record.botId)?.name ?? 'The other Bot'
+    const asker = rt.workAsker(workId)
+    const sender = asker?.senderSessionId
+    if (exchangeId === undefined || sender === undefined || rt.botOf(sender) === undefined) return
+    const name = rt.botOf(rt.selfOf(sessionId))?.name ?? 'The other Bot'
     // DSH stopped that turn as it shut down: it is picked up at the next start.
     if (ended.reason?.kind === 'aborted' && ended.reason.reason?.kind === 'disposed') {
       update(sessionId, () => record)
       return
     }
-    const events = prefetchedEvents ?? await logOf(sessionId)
+    const events = await logOf(sessionId)
     if (events === undefined) {
-      if (!canSettlePrimary) return
-      const delivered = await deliveredAnswer(record.botId, primarySender, workId)
-      if (delivered.answered) {
-        rt.closeWork?.(workId, name, delivered.text || rt.answerText(workId, '', name))
-        return
-      }
       // The record of that work cannot be read: whether it answered cannot be
       // established. The sender is told that, and the work is not run again.
       const why = 'the record of that work could not be read'
@@ -405,7 +1069,7 @@ export function install(rt) {
         where: room === undefined ? 'own chat' : `group "${room.name}"`,
         sessionId,
       })
-      answerSender(rt, sessionId, primaryAsker, text)
+      answerSender(rt, sessionId, asker, text)
       return
     }
     const turn = turnOf(events, exchangeId)
@@ -413,16 +1077,16 @@ export function install(rt) {
     // waiting for it keeps what it had.
     if (turn === undefined) return
     const said = turn.texts.join('\n\n')
-    let primarySettled = !canSettlePrimary
-    if (canSettlePrimary) {
-      // The answer went up in another run (even before a part switch): the work closes
-      // with what it said, and nothing is sent twice.
-      const { sender, back, where } = whereFor(primaryAsker)
-      const answered = await alreadyAnswered(record.botId, sender, where, back, primaryAsker.senderRoomId, workId)
-      if (answered.answered) {
-        rt.closeWork?.(workId, name, answered.text || rt.answerText(workId, said, name))
-        primarySettled = true
-      }
+    // The answer went up in another run: the work closes with what it said, and
+    // nothing is sent twice.
+    const back = rt.roomOf(asker.senderRoomId)?.sessions?.[sender]
+    // The answer would have gone to the part of the asking Bot's chat the request came
+    // from, which is not its foreground chat when that part is a background one.
+    const where = back ?? (asker.senderPart === undefined ? undefined : threadCurrentOfPart(rt.botOf(sender), asker.senderPart)) ?? rt.chatOf(sender)
+    const sent = await logOf(where)
+    if (sent !== undefined && answeredIn(sent, workId)) {
+      rt.closeWork?.(workId, name, rt.answerText(workId, said, name))
+      return
     }
     const reason = turn.reason
     // A turn that went on to a fresh part goes on there; it is not settled here.
@@ -430,48 +1094,20 @@ export function install(rt) {
     // The turn was cut off before it finished: the work is picked up again, as after
     // a restart that cut it off.
     if (reason === undefined || reason.kind === 'interrupted') {
-      if (!primarySettled) await resumeTurn(sessionId, record)
+      await resumeTurn(sessionId, record)
       return
     }
-    const failure = reason.kind === 'error' ? turnFailure(reason.error) : undefined
-    const dedupKey = failure !== undefined
-      ? `reconcile:${sessionId}:${turn.turn ?? ''}:error:${failure.requestId ?? failure.code}`
-      : reason.kind === 'aborted'
-        ? `reconcile:${sessionId}:${turn.turn ?? ''}:aborted`
-        : undefined
-    const settleFailureOrAbort = (asker) => {
-      if (failure !== undefined) {
-        answerSender(rt, sessionId, asker, `${name} could not answer your message: its model call failed (${failureLine(failure)}). Tell the user if it matters; do not retry right away.`, undefined, { failure, dedupKey })
-      } else {
-        // The turn was stopped before it could answer: the sender is told, as it is told
-        // when DS Bot watches the turn end.
-        answerSender(rt, sessionId, asker, `${name} was stopped before it could answer your message.`, undefined, { dedupKey })
-      }
-    }
-    if (reason.kind === 'error' || reason.kind === 'aborted') {
-      if (!primarySettled) settleFailureOrAbort(primaryAsker)
-      // Steered requests that joined the same failed or aborted turn also owe their own
-      // callers settlement, so distinct parent works cannot stall across a restart.
-      const seen = new Set([workId, exchangeId])
-      for (const took of turn.took) {
-        if (took?.kind !== SOURCE_KIND || (took.role !== 'request' && took.role !== 'stopped') || took.audience === 'user') continue
-        const joinedId = took.exchangeId
-        if (typeof joinedId !== 'string' || joinedId === '' || seen.has(joinedId)) continue
-        seen.add(joinedId)
-        if (!rt.ownsWork(record.botId, joinedId)) continue
-        const joinedAsker = rt.workAsker(joinedId)
-        const { sender, back, where } = whereFor(joinedAsker)
-        if (sender === undefined || rt.botOf(sender) === undefined) continue
-        const answered = await alreadyAnswered(record.botId, sender, where, back, joinedAsker.senderRoomId, joinedId)
-        if (answered.answered) {
-          rt.closeWork?.(joinedId, name, answered.text || rt.answerText(joinedId, '', name))
-          continue
-        }
-        settleFailureOrAbort(joinedAsker)
-      }
+    if (reason.kind === 'error') {
+      const failure = turnFailure(reason.error)
+      answerSender(rt, sessionId, asker, `${name} could not answer your message: its model call failed (${failureLine(failure)}). Tell the user if it matters; do not retry right away.`)
       return
     }
-    if (primarySettled) return
+    if (reason.kind === 'aborted') {
+      // The turn was stopped before it could answer: the sender is told, as it is told
+      // when DS Bot watches the turn end.
+      answerSender(rt, sessionId, asker, `${name} was stopped before it could answer your message.`)
+      return
+    }
     // A turn cut off at the output limit is not a finish: the answer says so, and the
     // diagnostics record it, with the route the Session's log holds for it.
     const cutOff = reason?.kind === 'max-tokens'
@@ -503,51 +1139,32 @@ export function install(rt) {
     }
     const text = rt.answerText(workId, answer, name)
     const long = text.length > MESSAGE_INLINE_MAX ? await rt.attachLong(text, `Answer from ${name}.txt`) : undefined
-    answerSender(rt, sessionId, primaryAsker, text, long)
+    answerSender(rt, sessionId, asker, text, long)
   }
 
-  // Checks whether the work or reply-expecting trigger a stale inflight turn names has
-  // already been answered in the pair ledger or the asker's session log. For a
-  // continuation turn (`role: 'reply' | 'report' | 'resume'`), the owed answer is the
-  // upstream work and its asker, never the child reply that triggered the turn.
-  async function settleDeliveredTrigger(record, trigger) {
-    const workId = rt.workOf(trigger)
-    if (workId !== undefined) {
-      const owns = rt.ownsWork(record.botId, workId)
-      const asker = owns ? rt.workAsker(workId) : undefined
-      const sender = asker?.senderSessionId
-        ?? (trigger.role === 'request' && trigger.audience !== 'user' ? trigger.senderSessionId : undefined)
-      const name = rt.botOf(record.botId)?.name ?? 'The other Bot'
-      if (owns && asker !== undefined && sender !== undefined && rt.botOf(sender) !== undefined) {
-        const { back, where } = whereFor(asker)
-        const answered = await alreadyAnswered(record.botId, sender, where, back, asker.senderRoomId, workId)
-        if (answered.answered) {
-          rt.closeWork?.(workId, name, answered.text || rt.answerText(workId, '', name))
-          return true
-        }
-        return false
-      }
-      const delivered = await deliveredAnswer(record.botId, sender, workId)
-      if (delivered.answered) {
-        if (owns) rt.closeWork?.(workId, name, delivered.text || rt.answerText(workId, '', name))
-        return true
-      }
-      return false
+  async function publishCompletedRoomReply(sessionId, record) {
+    if (!record?.roomId || !rt.restoreMissedRoomReply) return false
+    const { recoveryHold: _marker, ...original } = record
+    const key = createHash('sha256').update(JSON.stringify([sessionId, original])).digest('hex')
+    const held = heldTurns[key]
+    const current = () => ownsRecoveryView() && hasSingleOrigin(sessionId) && held && heldTurns[key] === held && !held.decisions?.length
+      && (turns[sessionId] === record || turns[sessionId] === undefined)
+    if (!current()) return false
+    if (!await rt.restoreMissedRoomReply(sessionId, record, current) || !current()) return false
+    // The group ledger now contains the terminal exchange receipt. If the
+    // process stops before this save, the next read accepts that same row.
+    const previous = turns[sessionId]
+    delete heldTurns[key]
+    unknownQueueGeneration += 1n
+    update(sessionId, value => value === record ? undefined : value)
+    try {
+      await persist({ required:true })
+    } catch (error) {
+      heldTurns[key] ??= held
+      if (previous && !turns[sessionId]) turns = { ...turns, [sessionId]:previous }
+      throw error
     }
-    if (trigger.role === 'stopped' && trigger.exchangeId !== undefined && trigger.senderSessionId !== undefined) {
-      return rt.wasReplyDelivered?.(record.botId, trigger.senderSessionId, trigger.exchangeId) === true
-    }
-    return false
-  }
-
-  async function settleEnded(sessionId, record, ended, events) {
-    const task = rt.taskOwners?.has(sessionId)
-    if (!task || isTerminalReason(ended.reason)) {
-      await reconcileEnded(sessionId, record, ended, events).catch(error => rt.warn('ds-bot: settling the work of %s failed: %s', sessionId, error))
-    }
-    if (task) {
-      await rt.reconcileEndedTask?.(sessionId, ended).catch(error => rt.warn('ds-bot: settling task %s failed: %s', sessionId, error))
-    }
+    return true
   }
 
   async function resumeAll() {
@@ -560,81 +1177,77 @@ export function install(rt) {
     // A Bot that is gone takes its notes with it; what a turn already read here
     // is done with.
     const pending = queued
+    const seenBeforeRestart = new WeakSet()
+    for (const [sessionId,list] of Object.entries(pending)) if (Array.isArray(list)) for (const item of list) queueChanged(item?.args,sessionId)
     queued = {}
     for (const [oldId, list] of Object.entries(pending)) {
-      if (!Array.isArray(list)) continue
+      if (!Array.isArray(list)) { queued = { ...queued, [oldId]: list }; continue }
       for (const item of list) {
-        if (item?.args?.exchangeId === undefined || taken?.has(item.args.exchangeId) === true || rt.botOf(item.args.toId) === undefined) continue
+        if (item?.args?.exchangeId !== undefined && taken?.has(item.args.exchangeId) === true) continue
+        // Preserve unresolved notes even when their recipient was removed or the
+        // record lacks an exchange id. Neither condition proves completion.
+        if (!item?.args || item.args.exchangeId === undefined || rt.botOf(item.args.toId) === undefined) {
+          queued = { ...queued, [oldId]: [...(queued[oldId] ?? []), item] }
+          continue
+        }
+        if (item.recoveryHold === 'history-seen') seenBeforeRestart.add(item.args)
         const key = sessionFor(oldId, item.args) ?? oldId
-        queued = { ...queued, [key]: [...(queued[key] ?? []), item] }
+        const resumeOrigins = [...new Set([...(Array.isArray(item.resumeOrigins) ? item.resumeOrigins : []), oldId])]
+        queued = { ...queued, [key]: [...(queued[key] ?? []), { ...item, resumeOrigins }] }
       }
     }
     persist()
     // Agents and inboxes are read before anything wakes their Sessions.
     const cut = []
-    const keepTaskSessions = new Set()
     for (const [sessionId, record] of Object.entries(noted)) {
       const first = firstTurn.get(sessionId)
       if (first?.type === 'turn/end') {
         // The turn ended while DS Bot was not watching it: what it did is settled from
         // the Session's durable log.
-        await settleEnded(sessionId, record, first)
+        if (await publishCompletedRoomReply(sessionId, record).catch(() => false)) continue
+        await reconcileEnded(sessionId, record, first).catch(error => rt.warn('ds-bot: settling the work of %s failed: %s', sessionId, error))
         continue
       }
       // Still running: noted again, as if it had started here.
-      if (first === undefined && (await rt.resolveAgent(sessionId).catch(() => undefined))?.status === 'running') {
-        update(sessionId, () => record)
-        keepTaskSessions.add(sessionId)
-        continue
-      }
-      // If inflight.json still held a turn whose durable log already shows a finished
-      // turn/end, or whose owed reply is already recorded in the pair ledger, settle it
-      // instead of re-running via resumeTurn.
-      if (first === undefined && record.roomId === undefined && record.trigger !== undefined) {
-        const trigger = record.trigger
-        const events = trigger.exchangeId !== undefined ? await logOf(sessionId) : undefined
-        const turn = events === undefined ? undefined : turnOf(events, trigger.exchangeId)
-        if (isTerminalReason(turn?.reason)) {
-          await settleEnded(sessionId, record, { reason: turn.reason }, events)
-          continue
-        }
-        if (await settleDeliveredTrigger(record, trigger)) continue
-      }
-      cut.push([sessionId, record])
+      if (first === undefined && (await rt.resolveAgent(sessionId).catch(() => undefined))?.status === 'running') update(sessionId, () => record)
+      else cut.push([sessionId, record])
     }
     firstTurn = undefined
+    const held = new Set()
     for (const [sessionId, list] of Object.entries(dropped)) {
       if (!Array.isArray(list)) continue
-      const active = await resendQueued(sessionId, list).catch((error) => {
+      await resendQueued(sessionId, list, held, seenBeforeRestart).catch(error => {
+        for (const item of list) if (typeof item?.args?.exchangeId === 'string') held.add(item.args.exchangeId)
         rt.warn('ds-bot: sending again what %s was sent failed: %s', sessionId, error)
-        return new Set()
       })
-      for (const dest of active ?? []) keepTaskSessions.add(dest)
     }
     taken = undefined
     for (const [sessionId, record] of cut) {
-      const resumed = await resumeTurn(sessionId, record).catch((error) => {
-        rt.warn('ds-bot: picking up the turn of %s failed: %s', sessionId, error)
-        return false
-      })
-      if (resumed === true) keepTaskSessions.add(sessionId)
+      if (held.has(record.trigger?.exchangeId)) {
+        // Do not bypass the queued-delivery hold by starting the same exchange
+        // through the interrupted-turn recovery path.
+        update(sessionId, current => current ?? record)
+        continue
+      }
+      if (await publishCompletedRoomReply(sessionId, record).catch(() => false)) continue
+      await resumeTurn(sessionId, record).catch(error => rt.warn('ds-bot: picking up the turn of %s failed: %s', sessionId, error))
     }
-    // Reconcile orphaned background tasks before settling room batches so a zombie
-    // group task does not keep `hasRoomTasks` true and mask a stuck batch.
-    await rt.reconcileTasksAfterRestart?.(keepTaskSessions).catch(error => rt.warn('ds-bot: reconciling background tasks failed: %s', error))
     // What a group's members were asked for and will not pick up is settled now.
     await rt.settleRoomBatches?.()
   }
 
   ctx.effect(() => {
     const pending = Object.keys(interrupted.turns).length > 0 || Object.keys(interrupted.queued).length > 0
-    // With nothing to pick up, orphaned tasks and group batches a restart left are settled at once.
+    const reportHolds = () => {
+      const count = Object.keys(heldTurns).length
+      if (!count) return
+      rt.warn('ds-bot: %d interrupted turn record(s) remain held in %s; inspect their original results before recovery', count, file)
+      rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_HELD_RECORDS', text: `${count} interrupted turn record(s) remain held in recovery notes; inspect their original results before recovery.` })
+    }
+    // With nothing to pick up, the group batches a restart left are settled at once.
     const timer = pending
-      ? setTimeout(() => void resumeAll().catch(error => rt.warn('ds-bot: picking up interrupted work failed: %s', error)), RESUME_DELAY_MS)
-      : setTimeout(() => void rt.load()
-        .then(() => rt.reconcileTasksAfterRestart?.(new Set()))
-        .then(() => rt.settleRoomBatches?.())
-        .catch(error => rt.warn('ds-bot: settling group batches failed: %s', error)), 0)
+      ? setTimeout(() => { reportHolds(); void resumeAll().catch(error => rt.warn('ds-bot: picking up interrupted work failed: %s', error)) }, RESUME_DELAY_MS)
+      : setTimeout(() => { reportHolds(); void rt.load().then(() => rt.settleRoomBatches?.()).catch(error => rt.warn('ds-bot: settling group batches failed: %s', error)) }, 0)
     timer?.unref?.()
     // What the turns stopped by this shutdown left stays as last noted.
     return () => {

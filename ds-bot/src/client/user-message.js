@@ -1,5 +1,5 @@
 import { createElement as h, Fragment, useEffect, useRef, useState } from 'react'
-import * as ui from './dsh-primitives.js'
+import * as ui from '@deepseek-ai/dsh-client-ui-primitives'
 import { imPlatform } from '../shared/im-platforms.js'
 import { mentionSpans } from '../shared/mentions.js'
 import { BotMark } from './mark.js'

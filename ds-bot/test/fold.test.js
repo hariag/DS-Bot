@@ -35,9 +35,7 @@ runInNewContext(bundle.outputFiles[0].text, {
     return react
   },
 })
-const { FOLD_AT, FOLD_HUGE, foldView, stripLongNote, useFold } = module.exports
-// The text a folded message shows before it is opened; null when it does not fold.
-const foldPreview = (...args) => foldView(...args)?.head ?? null
+const { FOLD_AT, FOLD_HUGE, foldPreview, foldView, stripLongNote, useFold } = module.exports
 const render = (text, options) => { at = 0; return useFold(text, options) }
 const fresh = () => { slots = [] }
 const buttons = node => (node === null || typeof node !== 'object' ? [] : [...(node.type === 'button' ? [node] : []), ...node.children.flatMap(buttons)])

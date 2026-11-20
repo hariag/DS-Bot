@@ -1,3 +1,4 @@
+import { indexRoster } from '../src/client/sources.js'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -36,6 +37,8 @@ function start(team, { models = [], reasoning = {}, archiveError, keys, selectio
   if (lock !== undefined) writeFileSync(join(home, 'state.lock'), JSON.stringify(lock))
   const services = {}
   const ctx = fakeContext({ services })
+  const eventLog = new Map()
+  eventLogsByContext.set(ctx, eventLog)
   const records = new Set()
   if (keys !== undefined) Object.assign(services, keyed(ctx, new Set(keys), records))
   if (selection !== undefined) {
@@ -71,7 +74,18 @@ function start(team, { models = [], reasoning = {}, archiveError, keys, selectio
     },
     sessionController: {
       create: async () => ({ sessionId: `s${++sessions}` }),
-      resolveAgent: async sessionId => ({ agent: { session: { id: sessionId }, followup: message => sent.push({ sessionId, message }) } }),
+      resolveAgent: async sessionId => ({ agent: {
+        id: sessionId,
+        status: 'idle',
+        session: { id: sessionId, seq: Math.max(0, ...(eventLog.get(sessionId) ?? []).map(event => event.seq + 1)) },
+        followup: message => sent.push({ sessionId, message }),
+      } }),
+      page: async ({ address, throughSeq, beforeSeq, maxMessages }) => {
+        const eligible = (eventLog.get(address.sessionId) ?? [])
+          .filter(event => Number.isSafeInteger(event.seq) && event.seq <= throughSeq && (beforeSeq === undefined || event.seq < beforeSeq))
+          .sort((a, b) => a.seq - b.seq)
+        return { records: eligible.slice(-maxMessages).map(event => ({ event })), hasMore: eligible.length > maxMessages }
+      },
       selectModel: async (request) => { selected.push(request) },
     },
     sessionTitle: { rename: async () => {} },
@@ -301,8 +315,76 @@ test('the state reports a changed model list without a new revision', async (t) 
   const { call, stop } = start(undefined, { models: ['deepseek-v4-flash'] })
   t.after(stop)
   const first = (await call('state', {})).value
-  assert.equal((await call('state', { since: first.revision, models: first.modelsKey })).value.unchanged, true)
+  const withoutLiveKey = (await call('state', { since: first.revision, models: first.modelsKey })).value
+  assert.equal(withoutLiveKey.unchanged, undefined)
+  assert.ok(Array.isArray(withoutLiveKey.rooms), 'without a known live key the client must refresh scoped goal projections')
   assert.equal((await call('state', { since: first.revision, models: 'stale' })).value.unchanged, undefined)
+})
+
+test('an opt-in web roster reuses bot instructions across team saves and refreshes edits', async t => {
+  const { call, stop } = start()
+  t.after(stop)
+  const { id } = (await call('create-bot', { name: 'Writer', instructions: 'long instructions '.repeat(800) })).value
+  const first = indexRoster((await call('state', { instructionsKey: '' })).value)
+  assert.equal(typeof first.instructionsKey, 'string')
+  const text = first.byId[id].instructions
+  assert.ok(text.length > 10000)
+  await rt.save()
+  const query = { since: first.revision, live: first.liveKey, models: first.modelsKey, instructionsKey: first.instructionsKey }
+  const next = (await call('state', query)).value
+  assert.equal(next.instructionsKey, first.instructionsKey)
+  assert.equal(Object.hasOwn(next.bots.find(bot => bot.id === id), 'instructions'), false)
+  assert.equal(indexRoster(next, first).byId[id].instructions, text)
+  assert.equal((await call('state', {})).value.bots.find(bot => bot.id === id).instructions, text)
+  rt.state.bots[id].instructions = ''
+  await rt.save()
+  const changed = (await call('state', query)).value
+  assert.notEqual(changed.instructionsKey, first.instructionsKey)
+  assert.equal(indexRoster(changed, first).byId[id].instructions, '')
+})
+
+test('conditional instructions and notice updates preserve the winning edit and reject stale patches', async t => {
+  const { call, stop } = start()
+  t.after(stop)
+  const main = (await call('state', {})).value.mainBotId
+  const bot = (await call('create-bot', { name: 'Writer', instructions: 'role' })).value
+  const room = (await call('create-room', { name: 'Docs', members: [main, bot.id] })).value
+  for (const [endpoint, id, field, expected, initial, name] of [
+    ['update-bot', bot.id, 'instructions', 'expectedInstructions', 'role', 'Writer'],
+    ['update-room', room.id, 'notice', 'expectedNotice', '', 'Docs'],
+  ]) {
+    const updates = ['first', 'second'].map(value => call(endpoint, { id, [field]: value, [expected]: initial }))
+    const results = await Promise.all(updates)
+    assert.equal(results.filter(result => result.ok).length, 1)
+    assert.equal(results.find(result => !result.ok).error.code, 'bot/stale')
+    const winner = results[0].ok ? 'first' : 'second'
+    const stale = await call(endpoint, { id, name: 'Wrong', [field]: 'stale', [expected]: initial })
+    assert.equal(stale.error.code, 'bot/stale')
+    const team = (await call('state', {})).value
+    const entry = [...team.bots, ...team.rooms].find(item => item.id === id)
+    assert.equal(entry.name, name)
+    assert.equal(entry[field], winner)
+    assert.equal((await call(endpoint, { id, [field]: 'legacy' })).ok, true)
+  }
+})
+
+test('web roster cursor survives private saves but invalidates on a visible change', async t => {
+  const { call, stop } = start()
+  t.after(stop)
+  const { id } = (await call('create-bot', { name: 'Writer' })).value
+  await until(() => Object.keys(rt.state.bots).every(botId => rt.chatTail(rt.chatOf(botId))))
+  const first = (await call('state', { instructionsKey: '', rosterKey: '' })).value
+  const query = { since: first.revision, live: first.liveKey, models: first.modelsKey, instructionsKey: first.instructionsKey, rosterKey: first.rosterKey }
+  await rt.save()
+  const quiet = (await call('state', query)).value
+  assert.equal(quiet.unchanged, true)
+  assert.ok(quiet.revision > query.since)
+  assert.equal(quiet.bots, undefined)
+  rt.state.bots[id].name = 'Editor'
+  await rt.save()
+  const edit = (await call('state', { ...query, since: quiet.revision })).value
+  assert.notEqual(edit.rosterKey, first.rosterKey)
+  assert.equal(edit.bots.find(bot => bot.id === id).name, 'Editor')
 })
 
 test('an unchanged state answer skips the live fields a window already holds', async (t) => {
@@ -320,7 +402,8 @@ test('an unchanged state answer skips the live fields a window already holds', a
   assert.equal(quiet.connectors, undefined)
   // A key that names an older answer still gets the fields with the current one.
   const stale = (await call('state', { since: first.revision, models: first.modelsKey, live: 'an older answer' })).value
-  assert.equal(stale.unchanged, true)
+  assert.equal(stale.unchanged, undefined)
+  assert.ok(Array.isArray(stale.rooms), 'an unknown live key cannot reuse scoped goal projections')
   assert.equal(stale.liveKey, first.liveKey)
   assert.equal(typeof stale.activity, 'object')
   assert.equal(typeof stale.work, 'object')
@@ -355,7 +438,8 @@ test('a window holding live state gets fresh fields after the host restarts at t
   const second = start(saved)
   t.after(second.stop)
   const now = (await second.call('state', { since: held.revision, models: held.modelsKey, live: held.liveKey })).value
-  assert.equal(now.unchanged, true)
+  assert.equal(now.unchanged, undefined)
+  assert.ok(Array.isArray(now.rooms), 'a key from a previous host cannot reuse scoped goal projections')
   assert.equal(now.revision, held.revision)
   assert.deepEqual(now.work?.bots, {})
   assert.deepEqual(now.activity, {})
@@ -537,11 +621,32 @@ test('a hidden Bot made Main Bot shows again, and a replaced Chief drops its hel
 })
 
 // A turn in a Bot Session as DSH reports it, to every listener.
-const emitIn = (ctx, sessionId, event) => { for (const listener of ctx.listeners.get('session/event')) listener({ id: sessionId }, event) }
+const eventLogsByContext = new WeakMap()
+const emitIn = (ctx, sessionId, event) => {
+  const logs = eventLogsByContext.get(ctx)
+  if (logs !== undefined) {
+    const events = logs.get(sessionId) ?? []
+    events.push(event)
+    logs.set(sessionId, events)
+  }
+  for (const listener of ctx.listeners.get('session/event')) listener({ id: sessionId }, event)
+}
+const eventSeqs = new Map()
+const nextEventSeq = sessionId => {
+  const next = (eventSeqs.get(sessionId) ?? 0) + 1
+  eventSeqs.set(sessionId, next)
+  return next
+}
 function runTurn(ctx, sessionId, turn, message, reason) {
-  emitIn(ctx, sessionId, { type: 'turn/start', data: { turn } })
-  emitIn(ctx, sessionId, { type: 'user/message', data: message })
-  emitIn(ctx, sessionId, { type: 'turn/end', data: { turn, reason } })
+  emitIn(ctx, sessionId, { type: 'turn/start', seq: nextEventSeq(sessionId), data: { turn } })
+  const inputs = []
+  for (const input of Array.isArray(message) ? message : [message]) {
+    const seq = nextEventSeq(sessionId)
+    inputs.push(`${sessionId}:${seq}`)
+    emitIn(ctx, sessionId, { type: 'user/message', seq, data: input })
+  }
+  emitIn(ctx, sessionId, { type: 'turn/end', seq: nextEventSeq(sessionId), data: { turn, reason } })
+  return inputs
 }
 const typed = text => ({ source: { kind: 'user' }, content: [{ type: 'text', text }] })
 const failed = (code, extra = {}) => ({ kind: 'error', error: { code, message: `${code}: sk-12***34 was refused`, ...extra } })
@@ -626,7 +731,7 @@ test('a greeting that fails on a key is held again and goes out once the key is 
   await settle()
   const main = await botIn(call, chief)
   assert.equal(main.waiting, true)
-  assert.deepEqual(Object.keys(main.blocked).sort(), ['at', 'code', 'provider'])
+  assert.deepEqual(Object.keys(main.blocked).sort(), ['at', 'code', 'provider', 'sessionId', 'turn'])
   assert.equal(main.blocked.provider, 'deepseek')
   // Setting the same model again (or only a thinking level) fixes nothing, so the
   // greeting stays held.
@@ -653,7 +758,7 @@ test('a Bot is blocked by the facts of a failure only the user can fix, until it
   runTurn(ctx, chief, 1, typed('hi'), failed('QUOTA', { status: 402, requestId: 'req-1' }))
   await settle()
   const { blocked } = await botIn(call, chief)
-  assert.deepEqual({ ...blocked, at: typeof blocked.at }, { code: 'QUOTA', status: 402, requestId: 'req-1', provider: 'deepseek', at: 'number' })
+  assert.deepEqual({ ...blocked, at: typeof blocked.at }, { code: 'QUOTA', sessionId: chief, turn: 1, status: 402, requestId: 'req-1', provider: 'deepseek', at: 'number' })
   // A failure a retry can fix leaves it as it is.
   runTurn(ctx, chief, 2, typed('again'), failed('SERVER', { status: 503 }))
   await settle()
@@ -681,8 +786,8 @@ test('a Bot is blocked by the facts of a failure only the user can fix, until it
   assert.equal((await botIn(call, chief)).blocked, undefined)
 })
 
-test('Retry has the Bot answer the user\'s last message without sending it again, or sends a failed greeting again', async (t) => {
-  const { call, stop, sent, ctx } = start(undefined, { models: ['deepseek-v4-flash'] })
+test('Retry recovers all dequeued inputs once without resending their original messages', async (t) => {
+  const { call, stop, sent, ctx, home } = start(undefined, { models: ['deepseek-v4-flash'] })
   t.after(stop)
   const chief = (await call('state', {})).value.mainBotId
   await call('update-bot', { id: chief, model: 'deepseek/deepseek-v4-flash' })
@@ -696,14 +801,85 @@ test('Retry has the Bot answer the user\'s last message without sending it again
   assert.equal(sent[1].message.content[0].text, sent[0].message.content[0].text)
 
   runTurn(ctx, chief, 2, sent[1].message, { kind: 'completed' })
-  runTurn(ctx, chief, 3, typed('Plan my week'), failed('QUOTA', { status: 402 }))
+  const failedInputs = runTurn(ctx, chief, 3, [typed('Plan my week'), typed('Also book the meeting')], failed('QUOTA', { status: 402 }))
   await settle()
+  // Simulate a crash before the queued state write: the Session log is the recovery source.
+  delete rt.state.pendingInputs[chief]
+  delete rt.state.recoveryCursor[chief]
+  await rt.save()
   assert.equal((await call('resume', { botId: chief })).ok, true)
+  assert.deepEqual(rt.state.pendingInputs[chief]?.map(item => item.id), failedInputs)
   assert.equal(sent.length, 3)
   assert.equal(sent[2].sessionId, chief)
   assert.equal(sent[2].message.source.role, 'continue')
-  assert.equal(sent[2].message.content[0].text, '[Retry after a failed turn]\nYour last turn failed (QUOTA) and the user has fixed it. Answer the user\'s last unanswered message.')
+  assert.deepEqual(sent[2].message.source.recoveryIds, failedInputs)
+  assert.match(sent[2].message.content[0].text, /Handle every outstanding message in its original order/)
+  assert.doesNotMatch(sent[2].message.content[0].text, /Plan my week|book the meeting/)
+  assert.equal((await call('resume', { botId: chief })).ok, true)
+  assert.equal(sent.length, 3, 'a second Retry must not enqueue the same recovery batch')
+  runTurn(ctx, chief, 4, sent[2].message, failed('QUOTA', { status: 402 }))
+  await settle()
+  let saved = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
+  assert.deepEqual(saved.pendingInputs[chief].map(item => item.id), failedInputs)
+  assert.equal((await call('resume', { botId: chief })).ok, true)
+  assert.equal(sent.length, 4)
+  assert.deepEqual(sent[3].message.source.recoveryIds, sent[2].message.source.recoveryIds)
+  assert.notEqual(sent[3].message.source.recoveryKey, sent[2].message.source.recoveryKey)
+  runTurn(ctx, chief, 5, sent[3].message, { kind: 'completed' })
+  await settle()
+  saved = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
+  assert.equal(saved.pendingInputs?.[chief], undefined)
+  assert.equal(saved.pendingRecovery?.[chief], undefined)
   assert.equal((await botIn(call, chief)).waiting, undefined)
+})
+
+test('Retry retains its identity when followup succeeds but the Session flush fails', async (t) => {
+  const { call, stop, sent, ctx, home } = start(undefined, { models: ['deepseek-v4-flash'] })
+  t.after(stop)
+  const chief = (await call('state', {})).value.mainBotId
+  await call('update-bot', { id: chief, model: 'deepseek/deepseek-v4-flash' })
+  await until(() => sent.length === 1)
+  runTurn(ctx, chief, 1, sent[0].message, { kind: 'completed' })
+  const failedInputs = runTurn(ctx, chief, 2, typed('Finish the work'), failed('QUOTA', { status: 402 }))
+  await settle()
+  ctx.sessions.flush = async () => { throw new Error('Session flush failed') }
+  assert.equal((await call('resume', { botId: chief })).ok, false)
+  assert.equal(sent.length, 2, 'followup happened before flush failed')
+  const recoveryKey = sent[1].message.source.recoveryKey
+  assert.deepEqual(sent[1].message.source.recoveryIds, failedInputs)
+  const saved = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
+  assert.equal(saved.pendingRecovery[chief].key, recoveryKey)
+  assert.equal(saved.pendingRecovery[chief].uncertain, true)
+  ctx.sessions.flush = async () => {}
+  // A missing log receipt remains uncertain even after the former 60-second window.
+  rt.state.pendingRecovery[chief].at = 0
+  await rt.save()
+  const retry = await call('resume', { botId: chief })
+  assert.equal(retry.ok, false)
+  assert.equal(sent.length, 2, 'Retry must not enqueue a second recovery')
+  assert.equal(rt.state.pendingRecovery[chief].key, recoveryKey)
+})
+
+test('Retry does not deliver if its recovery marker cannot be saved', async (t) => {
+  const { call, stop, sent, ctx } = start(undefined, { models: ['deepseek-v4-flash'] })
+  t.after(stop)
+  const chief = (await call('state', {})).value.mainBotId
+  await call('update-bot', { id: chief, model: 'deepseek/deepseek-v4-flash' })
+  await until(() => sent.length === 1)
+  runTurn(ctx, chief, 1, sent[0].message, { kind: 'completed' })
+  runTurn(ctx, chief, 2, typed('Finish the work'), failed('QUOTA', { status: 402 }))
+  await settle()
+  const save = rt.save
+  rt.save = async options => {
+    if (options?.required) throw new Error('required save failed')
+    return save(options)
+  }
+  try {
+    assert.equal((await call('resume', { botId: chief })).ok, false)
+    assert.equal(sent.length, 1)
+  } finally {
+    rt.save = save
+  }
 })
 
 // The record a DeepSeek account sign-in writes.

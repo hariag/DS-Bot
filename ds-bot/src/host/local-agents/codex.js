@@ -179,15 +179,13 @@ export class CodexEngine {
     return Promise.reject({ code: -32601, message: `method not found: ${method}` })
   }
 
-  async open(dshSessionId, { cwd, mcp, resumeId, mode, instructions, model, ephemeral }) {
+  async open(dshSessionId, { cwd, mcp, resumeId, mode, instructions, refreshInstructions, model, ephemeral }) {
     const peer = await this.ensure()
     const thread = this.threadFor(dshSessionId)
     if (resumeId !== undefined) thread.threadId = resumeId
     // Codex 0.166 reads `ThreadStartParams` from the top level and takes the MCP
     // servers from `config`; it drops unknown keys without a word. So the fields keep
     // their documented names: `sandbox`, `approvalPolicy`, and `config.mcp_servers`.
-    // The team instructions belong to a new thread: a resumed one keeps the
-    // instructions it was started with, and instruct() updates them later.
     const params = {
       cwd,
       ...(model && model !== 'default' ? { model } : {}),
@@ -196,9 +194,10 @@ export class CodexEngine {
     }
     if (thread.threadId !== undefined) {
       try {
-        // thread/resume takes the same params, plus the thread id. The instructions it
-        // was started with stay: they are not sent again here.
-        await peer.request('thread/resume', { threadId: thread.threadId, ...params }, { timeout: 30_000 })
+        await peer.request('thread/resume', {
+          threadId: thread.threadId, ...params,
+          ...(refreshInstructions && instructions ? { developerInstructions: instructions } : {}),
+        }, { timeout: 30_000 })
         return thread
       } catch {
         thread.threadId = undefined

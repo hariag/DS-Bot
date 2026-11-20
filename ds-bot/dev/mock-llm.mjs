@@ -99,6 +99,40 @@ const WRITTEN_CALL = '我先看一下目录。\n<tool_call>\n<function=pwsh>\n<p
 // Deterministic filler that grows a conversation by about `chars` characters.
 const filler = (chars, tag) => Array.from({ length: Math.ceil(chars / 20) }, (_, index) => `${tag}第${index + 1}段：这是一段用来撑长上下文的测试文字。`).join('').slice(0, chars)
 const isResults = message => Array.isArray(message?.content) && message.content.some(block => block.type === 'tool_result')
+// Optional deterministic board lifecycle: when the bench asks for it, a Bot
+// answers a Trello task delivery by starting the card, reporting evidence and
+// (for the independent reviewer) passing the review. This keeps the mock model
+// out of the product path; it is only used by the lifecycle end-to-end check.
+const boardTaskPrompt = messages => {
+  const latest = [...messages].reverse().find(message => message.role === 'user' && !isResults(message))
+  const text = latest ? textOf(latest.content) : ''
+  return /Task ID: .+ \(revision \d+\)/.test(text) && /(task from Trello|Independently compare|Use board_task show first|board_task)/.test(text) ? text : undefined
+}
+const boardTaskArgs = prompt => {
+  const id = /Task ID: (.+?) \(revision (\d+)\)/.exec(prompt)
+  return id ? { taskId:id[1], revision:Number(id[2]), review:/Independently compare/.test(prompt) } : undefined
+}
+function boardAuto(messages, tools, result, used) {
+  if (process.env.MOCK_BOARD_AUTORUN !== '1') return undefined
+  const prompt = boardTaskPrompt(messages)
+  const task = prompt && boardTaskArgs(prompt)
+  if (!task) return undefined
+  if (!tools.has('board_task')) { console.error('board-auto: board_task is not in tools: ' + [...tools].join(',')); return undefined }
+  if (result && used?.name === 'board_task') {
+    try {
+      const parsed = JSON.parse(typeof result.content === 'string' ? result.content : textOf(result.content))
+      const state = parsed?.task
+      if (!state) return undefined
+      if (state.status === 'ready') return [tool('board_task', { action:'start', task_id:state.id, operation_id:`mock-start-${state.id}-${state.revision}`, expected_revision:state.revision })]
+      if (state.status === 'working') return [tool('board_task', { action:'report', task_id:state.id, operation_id:`mock-report-${state.id}-${state.revision}`, expected_revision:state.revision, value:{ kind:'personal', evidence:`mock evidence for ${state.title ?? state.id}`, environment:'mock-bench' } })]
+      if (state.status === 'done') return [text('Task is complete.')]
+      return undefined
+    } catch { return undefined }
+  }
+  if (result) return undefined
+  if (task.review) return [tool('board_task', { action:'review', task_id:task.taskId, operation_id:`mock-review-${task.taskId}-${task.revision}`, expected_revision:task.revision, value:{ evidence:'mock independent review passed', result:'pass' } })]
+  return [tool('board_task', { action:'start', task_id:task.taskId, operation_id:`mock-start-${task.taskId}-${task.revision}`, expected_revision:task.revision })]
+}
 // 'handoff' or 'backend' for a summary request, by its final prompt. The adapter merges
 // that prompt into the user message before it, so it is the last text block, not the
 // whole message.
@@ -191,10 +225,16 @@ function decide(body) {
   // A stopped call's result can share a message with the next group turn, which wins.
   const fresh = textBlocks(last?.content).some(value => value.trimStart().startsWith('[Group chat'))
   const result = fresh ? undefined : blocks.find(block => block.type === 'tool_result')
+  if (!result) {
+    const board = boardAuto(messages, tools, undefined, undefined)
+    if (board) return board
+  }
   if (result) {
     const resultText = typeof result.content === 'string' ? result.content : textOf(result.content)
     const call = [...messages].reverse().find(m => m.role === 'assistant' && Array.isArray(m.content) && m.content.some(b => b.type === 'tool_use'))
     const used = call?.content.find(b => b.type === 'tool_use' && b.id === result.tool_use_id) ?? call?.content.find(b => b.type === 'tool_use')
+    const board = boardAuto(messages, tools, result, used)
+    if (board) return board
     // "长任务 N [K]": N steps in one turn, each adding about K thousand characters (default 4).
     const openerAt = messages.findLastIndex(m => m.role === 'user' && !isResults(m) && /^长任务\s*\d+/.test(textOf(m.content).trimStart()))
     if (openerAt !== -1 && used?.name === 'list_bots') {
@@ -204,12 +244,6 @@ function decide(body) {
       const done = messages.slice(openerAt + 1).filter(isResults).length
       if (done < steps) return [text(filler(size * 1000, `步骤${done + 1}`)), tool('list_bots', {})]
       return [text(`长任务做完了，一共 ${done} 步。`)]
-    }
-    // "慢活 N": runs list_bots first (marking toolCount >= 1) then waits N seconds before finishing.
-    const slowAsked = messages.map(m => (m.role === 'user' ? textOf(m.content).trim() : '')).filter(Boolean).at(-1) ?? ''
-    const slowJob = /^慢活\s+(\d+)/.exec(slowAsked)
-    if (slowJob && used?.name === 'list_bots') {
-      return Object.assign([text(`慢活已完成，耗时 ${slowJob[1]} 秒。`)], { delay: Number(slowJob[1]) * 1000 })
     }
     // "看网页结构 [N]": answer with the first N lines (default 40) of what read_browser
     // returned, fenced so the chat shows the Markdown as text.
@@ -275,10 +309,10 @@ function decide(body) {
         const content = resultText.replace(/<[^>]+>/g, '').replace(/^\s*\d+[\t→|:]/gm, '').trim()
         return [text(result.is_error ? `附件没读成：${resultText.slice(0, 200)}` : `读了附件（${content.length} 字），结尾是「${content.slice(-24)}」。`)]
       }
-      case 'bot_remember':
-      case 'bot_forget':
-        return [text(/^(Saved to|Updated in|Removed from) /.test(resultText) ? (used.name === 'bot_remember' ? '记下了。' : '已经忘掉了。') : `没记成：${resultText}`)]
-      case 'bot_recall': return [text(`记忆里有：\n${resultText}`)]
+      case 'remember':
+      case 'forget':
+        return [text(/^(Saved to|Updated in|Removed from) /.test(resultText) ? (used.name === 'remember' ? '记下了。' : '已经忘掉了。') : `没记成：${resultText}`)]
+      case 'recall': return [text(`记忆里有：\n${resultText}`)]
       case 'web_search': return [text(result.is_error ? `搜索失败：${resultText}` : `搜到了：\n${resultText}`)]
       case 'working_directory': return [text(result.is_error ? `没进去：${resultText}` : `现在在 ${resultText}`)]
       case 'read_browser': {
@@ -360,6 +394,9 @@ function decide(body) {
     const room = /^\[Group chat "([^"]+)"/.exec(userText)?.[1] ?? ''
     const leads = /^Members: .* and you \(admin\)\./m.test(userText)
     let ask
+    if ((ask = /^User: 调用\s*(\S+)(?:\s+([\s\S]+))?$/.exec(userLine))) {
+      try { return [tool(ask[1], ask[2] ? JSON.parse(ask[2]) : {})] } catch { return [text('调用参数不是有效 JSON')] }
+    }
     if ((ask = /把\s*(\S+?)\s*拉进群/.exec(userLine))) return [tool('update_group', { group: room, add_members: [ask[1]] })]
     if ((ask = /把\s*(\S+?)\s*踢出群/.exec(userLine))) return [tool('update_group', { group: room, remove_members: [ask[1]] })]
     if ((ask = /群名改成\s*(\S+)/.exec(userLine))) return [tool('update_group', { group: room, name: ask[1] })]
@@ -373,12 +410,12 @@ function decide(body) {
       return [text(earlier.includes(ask[1]) ? `上下文里有「${ask[1]}」。` : `上下文里没有「${ask[1]}」。`)]
     }
     // Group memory: the admin saves, so a round of members does not save it twice.
-    if ((ask = /^User: (团队|自己)?记住(?:@(\S+))?\s*[:：]?\s*(.+)$/.exec(userLine)) && tools.has('bot_remember')) {
+    if ((ask = /^User: (团队|自己)?记住(?:@(\S+))?\s*[:：]?\s*(.+)$/.exec(userLine)) && tools.has('remember')) {
       if (!leads) return [text('[PASS]')]
-      return [tool('bot_remember', { text: ask[3].trim(), ...(ask[2] ? { topic: ask[2] } : {}), ...(ask[1] ? { scope: ask[1] === '团队' ? 'team' : 'own' } : {}) })]
+      return [tool('remember', { text: ask[3].trim(), ...(ask[2] ? { topic: ask[2] } : {}), ...(ask[1] ? { scope: ask[1] === '团队' ? 'team' : 'own' } : {}) })]
     }
-    if ((ask = /^User: 忘掉\s*[:：]?\s*(.+)$/.exec(userLine)) && tools.has('bot_forget')) return leads ? [tool('bot_forget', { entry: ask[1].trim() })] : [text('[PASS]')]
-    if ((ask = /^User: 回忆(?:\s+(.+))?$/.exec(userLine)) && tools.has('bot_recall')) return [tool('bot_recall', ask[1] ? { query: ask[1].trim() } : {})]
+    if ((ask = /^User: 忘掉\s*[:：]?\s*(.+)$/.exec(userLine)) && tools.has('forget')) return leads ? [tool('forget', { entry: ask[1].trim() })] : [text('[PASS]')]
+    if ((ask = /^User: 回忆(?:\s+(.+))?$/.exec(userLine)) && tools.has('recall')) return [tool('recall', ask[1] ? { query: ask[1].trim() } : {})]
     // Group Sessions: the frozen brief is in the Session's first message, the lookup a tool.
     if ((ask = /查能力\s*(\S*)/.exec(userLine))) return [text(capabilityReport(me, tools, messages, ask[1]))]
     if ((ask = /查私聊\s*(\S*)/.exec(userLine))) return [tool('read_own_chat', ask[1] ? { query: ask[1] } : {})]
@@ -419,8 +456,6 @@ function decide(body) {
   }
   // Secret cards: ask for a key, and use it once the card says it is saved or allowed.
   if (userText.startsWith('[Secret card]')) return secretNote(userText, tools)
-  if (userText.startsWith('[Background task ·')) return [text(`后台任务已完成，共继承 ${messages.length} 条消息。`)]
-  if (userText.startsWith('[Background task report ·')) return [text(`已收到后台任务汇报：${userText.split('\n').slice(1).join(' ').slice(0, 120)}`)]
   // Multiline: a runtime-context or policy notice can share the user's message.
   const secretAsk = /^要密钥(?:[ \t]+([A-Za-z][\w]*))?/m.exec(userText)
   if (secretAsk && tools.has('request_secret')) {
@@ -452,18 +487,17 @@ function decide(body) {
   }
   if ((order = /^看群\s*(.+)$/.exec(userText))) return [tool('read_group_chat', { group: order[1].trim() })]
   // Memory: 记住[@话题] 事实 · 团队记住 事实 · 忘掉 事实 · 回忆 [词]
-  if ((order = /^(团队)?记住(?:@(\S+))?\s*[:：]?\s*(.+)$/.exec(userText)) && tools.has('bot_remember')) {
-    return [tool('bot_remember', { text: order[3].trim(), ...(order[2] ? { topic: order[2] } : {}), ...(order[1] ? { scope: 'team' } : {}) })]
+  if ((order = /^(团队)?记住(?:@(\S+))?\s*[:：]?\s*(.+)$/.exec(userText)) && tools.has('remember')) {
+    return [tool('remember', { text: order[3].trim(), ...(order[2] ? { topic: order[2] } : {}), ...(order[1] ? { scope: 'team' } : {}) })]
   }
-  if ((order = /^忘掉\s*[:：]?\s*(.+)$/.exec(userText)) && tools.has('bot_forget')) return [tool('bot_forget', { entry: order[1].trim() })]
-  if ((order = /^回忆(?:\s+(.+))?$/.exec(userText)) && tools.has('bot_recall')) return [tool('bot_recall', order[1] ? { query: order[1].trim() } : {})]
+  if ((order = /^忘掉\s*[:：]?\s*(.+)$/.exec(userText)) && tools.has('forget')) return [tool('forget', { entry: order[1].trim() })]
+  if ((order = /^回忆(?:\s+(.+))?$/.exec(userText)) && tools.has('recall')) return [tool('recall', order[1] ? { query: order[1].trim() } : {})]
   if ((order = /^搜索\s*[:：]\s*([^\n]+)/.exec(userText)) && tools.has('web_search')) return [tool('web_search', { queries: order[1].trim().split(/\s*[|｜]\s*/) })]
   if ((order = /^进目录\s+(.+)$/.exec(userText)) && tools.has('working_directory')) return [tool('working_directory', { cd: order[1].trim() })]
   if (/^看(?:网页|页面)/.test(userText) && tools.has('read_browser')) return [tool('read_browser', {})]
   if (userText.startsWith('写成文字')) return [text(WRITTEN_CALL)]
   // Context-line tests: grow the context, run a long multi-step turn, search history.
   if ((order = /^(?:长文|long)\s*(\d+)/.exec(userText))) return [text(filler(Number(order[1]) * 1000, '长文'))]
-  if ((order = /^慢活\s+(\d+)/.exec(userText)) && tools.has('list_bots')) return Object.assign([tool('list_bots', {})], { delay: 100 })
   if ((order = /^长任务\s*(\d+)(?:\s+(\d+))?/.exec(userText))) return [text(filler(Number(order[2] ?? 4) * 1000, '步骤0')), tool('list_bots', {})]
   if ((order = /^查记录\s*([^\n]+)/.exec(userText))) return [tool('read_own_chat', { query: order[1].trim() })]
   if ((order = /^查锚点\s*([^\n]+)/.exec(userText))) return [tool('read_own_chat', { around: order[1].trim() })]

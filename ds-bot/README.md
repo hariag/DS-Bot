@@ -10,6 +10,7 @@ Tested with dsh `0.2.2-rc.1` (Web and Desktop).
 - **Working folders**: a Bot can work in a folder you choose instead of the team workspace, and a group chat can set one folder for all its members there. Pick it in the Bot's settings or details panel or in the group's settings, or ask a Bot (`update_bot`, `update_group`). After a change, the chat goes on in a fresh part that starts in the new folder. When a Bot sets a folder outside the team workspace, or adds a Bot to a group that works in one, it asks for your approval if those Bots can only write in their folder. Folders that hold dsh data (`$DSH_HOME`, the team's data) are refused. The team workspace itself moves in Settings > General > Locations; Bots and groups that work there go on in a fresh part in the new folder, and the old folder keeps its files.
 - **Permission presets**: each Bot runs with its own dsh permission preset (Read only, Workspace or Full access), set in its details panel. A group chat can run all its members with one preset there, in place of their own: turn on **Same for every member** under Permissions in the group's settings. Only you set permissions; Bots cannot change them.
 - **Bots work together**: `message_bot` sends a message to another Bot, `create_bot` and `update_bot` add and set up Bots (including a profile photo from a local image file or a data URL), and `ask_user` asks you a question without blocking the other Bots. `show_view` draws a card in a Bot's own chat — text, metrics, tables, charts, inputs with local formulas, progress, choices, confirmations, short forms and sandboxed HTML; an interactive card waits for your answer. `/side` (or **Side chat** in the panel's `···` menu) opens a side chat in the right panel that answers from a snapshot of the Bot's chat without running tools or interrupting its work. A Bot can also be marked **Private** in its settings: other Bots cannot read its working folder, memory or chat, and its outbound sharing needs your approval.
+- **Inbox and order**: `list_bots` reports pending inputs in available private Sessions and in groups visible to the caller, and says when a Session cannot be read. Private requests keep separate identities and replies. `when: "queue"` waits for the current work; `when: "now"` delivers a correction at the next step.
 - **Group chats**: in admin-first mode the admin answers first and calls in other members with `@Name`; in all-members mode members speak in order. Members `@`-mentioned in the same message start work in parallel. Type `@` to pick a member from a list, or use **+ → Reference a chat** to attach another Bot's chat as context. A member with nothing new to add stays quiet (`[PASS]`). For multi-stage work, the admin can align on and run a group **Goal** (`group_goal`), assigning tasks per stage and checking evidence before advancing. Each member has its own hidden Session per group, so a group never reads a Bot's private chat.
 - **Roles and permissions**:
 
@@ -25,10 +26,9 @@ Tested with dsh `0.2.2-rc.1` (Web and Desktop).
 - **Web search**: see [Web search](#web-search).
 - **Bot browser (dsh Desktop and the desktop app)**: see [Bot browser](#bot-browser).
 - **Images**: for a model that cannot read images, a vision model first turns the image into text.
-- **DeepSeek services**: an official API key can give any model independent OCR, DeepSeek TTS and DeepSeek dictation, each turned on explicitly in Settings → DeepSeek services. The key stays in Settings → Models. See [DeepSeek services](#deepseek-services).
 - **Secrets**: a Bot asks for an API key or token with a card in its own chat and never sees the value. See [Secrets](#secrets).
 - **Usage**: Settings → Usage shows token usage by time (24 hours to 12 months, or days picked on a calendar), by Bot and by model, with a page for each Bot and each model. Calls that a Session logs are read from the logs, so older chats count too. Calls that leave no log (checkpoints, handoff notes, the steward, image readings, dsh titles and compaction) are counted while they stream, from the time the plugin runs. Tokens only, no cost.
-- **Make it yours**: name, role, instructions, model and look (20 characters and 12 colors, or your own photo from the reusable avatar library) for each Bot; a theme, an accent color, a message layout (bubble or flat) with width sliders, and an avatar animation level (quiet, normal or lively) for the team. A pinned Bot or group chat shows a small pushpin in the sidebar. Settings has these pages: General (look, default model for new Bots, Enter key preference, mode and locations), Models, Bots (Main Bots, each Bot's settings and retained private-Bot folders), Group chats (each group's settings), Connectors, Capabilities, DeepSeek services, Browser, Scheduled tasks, Usage, Secrets, Feedback and About DS Bot (versions, updates and links).
+- **Make it yours**: name, role, instructions, model and look (20 characters and 12 colors, or your own photo from the reusable avatar library) for each Bot; a theme, an accent color, a message layout (bubble or flat) with width sliders, and an avatar animation level (quiet, normal or lively) for the team. A pinned Bot or group chat shows a small pushpin in the sidebar. Settings has these pages: General (look, default model for new Bots, Enter key preference, mode and locations), Models, Bots (Main Bots, each Bot's settings and retained private-Bot folders), Group chats (each group's settings), Connectors, Capabilities, Browser, Scheduled tasks, Usage, Secrets, Feedback and About DS Bot (versions, updates and links).
 
 ## Install
 
@@ -75,16 +75,22 @@ Options go in the profile's `cordis.patch.yml`, under the `bot` entry. All of th
   config:
     workspace: /path/to/workspace   # where the Bots work; default <home>/workspace
     home: /path/to/bot-data         # where the team is saved; default $DSH_HOME/bot
+    # operatorInstructions: "..."    # optional deployment rules supplied to every Bot
+    # operatorInstructionsFile: /path/to/private-instructions  # alternative to the string above
     checkRatio: 0.8                 # share of the model's usable window where the steward decides
     checkTokens: 380000             # the highest context where it decides, even on a larger window
     browser: true                   # force the Bot browser on or off; default on in Desktop and the desktop app only
     memory: true                    # false turns memory off: no memory tools, section or panel
-    memoryReview: true              # false leaves memory to the Bots' own bot_remember calls
+    memoryReview: true              # false leaves memory to the Bots' own remember calls
     diagnosticsFile: false          # keep the error log in memory only; default <home>/logs/diagnostics.jsonl
     updateCheck: true               # look for a newer DS Bot when a window opens; default true
     updateRegistry: https://registry.example/   # ask only this npm registry for updates
     github: false                   # hide the GitHub connector; default shown in Connectors
 ```
+
+`operatorInstructions` adds deployment-specific instructions to each Bot's identity, including its group sessions. On Linux, `operatorInstructionsFile` is an alternative that loads a private, nonempty file owned by the process user, with no group or other permissions, at startup. It rejects symlinks and untrusted parent directories and fails startup if it cannot read a consistent file securely. Do not set both options. Keep private files outside version control and restart the runtime after changing them. The instructions are sent to the selected model or local agent and may be retained with its session; never put passwords, API keys, or other credentials in them. These are instructions to the model, not technical restrictions on what a process can do.
+
+An optional remote code watch can show GitHub changes on **My task board** without a model turn or message. Add `remoteChangeWatch` under the `bot` config with `repository: owner/name`, `branch: main`, and `ownerBotId: <bot-id>`. Save a `GITHUB_TOKEN` secret with read access to that repository and allow the named Bot to use it; never put the token in the patch file. Optionally set `initialCursor` to a previously observed full 40-character commit SHA. Without it, monitoring starts at the first observed head; in either case the board warns that earlier history was not verified. Only complete changes confined to `team/patrol/` are filtered. The board displays authorization and history errors; a force push, an incomplete response, more than 1,000 commits or a full 5,000-event local store requires operator review. The watch does not notify or dispatch work automatically.
 
 **Updates**: when a window opens, DS Bot asks where it was installed from for a newer release: the npm registry (the one the DSH plugin manager installs from, then its fallbacks), or the latest GitHub release for a `github:…#vX.Y.Z` install. A newer version shows a cloud button at the top right of the sidebar; **Update** reinstalls DS Bot through the DSH plugin manager, and the new version runs from the next DSH start. A linked or local checkout is never offered an update. Settings → About DS Bot shows the same state, with **Check for updates** to ask again at once.
 
@@ -98,29 +104,21 @@ Model providers are set up in DS Bot's **Settings → Models** (or the Main Bot'
 - To send images, the provider needs `defaultInput: [ text, image ]`.
 - Keep API keys out of the repository. Use dsh's own key storage or environment variables.
 
-## DeepSeek services
-
-Settings → DeepSeek services reports the state of the independent DeepSeek capabilities. `actions.deepseekServices()` returns `{ endpoint, key, ocr, tts, speech, preferences }` without any secret, and `setDeepseekServices({ ocr, tts, voice })` saves the three preferences (`ocr` on/off, `tts` `system|deepseek`, `voice` `stella|tide`). Omitted fields keep their value; `null` resets one. They live in `roster.prefs.deepseekServices`. The API key is set through the existing provider-key controls in Settings → Models (`actions.openModels()`); the page never reads or renders it, and shows the real ready/not-ready reason for each capability.
-
-OCR is off by default: only after it is turned on in Settings → DeepSeek services do Bots get `read_document` and upload selected files (`path` or `attachment_id`) for text recognition. Local Office editing is unchanged, but `read_document` can also read Office files, so the page does not promise that Office files are never uploaded. It is read-only: `attachment_id` must name a file or image in the calling Session's own messages (a guessed id reads nothing), workspace paths follow that Session's working directory and privacy rules, and long results are filed so the full text stays readable (a private Bot's copy stays in its own folder, named with its Session id). TTS defaults to the system voice. Dictation is not a DS Bot preference: the host registers `deepseek-asr` with `speechToText`, and the page selects it through the existing speech Remote `configure({ providerId: 'deepseek-asr', language: 'auto' })`; when the Voice Input plugin is off the browser dictation path stays. A configured key alone enables nothing, and voice reads `roster.prefs.deepseekServices` for serial TTS with no new page layout.
-
-Calls go to the official `https://api.deepseek.com` only and are billed to the user's own API key by usage. A gateway the DeepSeek route points at never receives (or provides) the key: when the route's credential happens to be named `DEEPSEEK_API_KEY`, DS Bot refuses rather than guess, and the status says why. See the [design note](../docs/plans/2026-11-14-deepseek-services.md) and `ds-bot/test/deepseek-services.test.js` (mock tests only, no network).
-
 ## Memory
 
 A Bot remembers what should last beyond one conversation: your preferences, decisions, corrections and facts it should not ask again. Memory is plain Markdown in the [Agent Memory Repo](https://github.com/AgentMemoryRepo/agentmemoryrepo) format: one entry per line, ending in `[source: …; added: …]`.
 
-After each turn, a memory review reads what is new in the conversation and keeps, updates or removes entries itself, so memory does not depend on the Bot deciding to call `bot_remember`. A Bot's own chat is reviewed by its model into its own memory; a group chat is reviewed once for the whole group, by the admin's model (or the first member's), into the group memory only. It keeps only what you say, writes entries in your language, and refuses keys, passwords and ID numbers.
+After each turn, a memory review reads what is new in the conversation and keeps, updates or removes entries itself, so memory does not depend on the Bot deciding to call `remember`. A Bot's own chat is reviewed by its model into its own memory; a group chat is reviewed once for the whole group, by the admin's model (or the first member's), into the group memory only. It keeps only what you say, writes entries in your language, and refuses keys, passwords and ID numbers.
 
 - **Three scopes**: each Bot has its own memory; each group chat has a group memory, which its members read in that group only (not in their own chats, and not in other groups); and the team memory is read by every Bot. A Bot writes its own, and any member writes its group's memory from the group. Main Bots and group admins (of any group) also write the team memory; a Main Bot can read and change another Bot's memory when you ask.
-- **Tools**: `bot_remember` saves an entry or replaces one (`replace`), `bot_forget` removes one, and `bot_recall` searches every entry, reads a topic whole, or lists what is saved. In a Bot's own chat they use its own memory by default; in a group chat, the group memory (`scope: "own"` for the Bot's own). The Bot adds the source (a part anchor such as `part 2 #1234`, which `read_own_chat` opens, or the group and the time) and the date; a Bot that writes for others is named with `by:`.
+- **Tools**: `remember` saves an entry or replaces one (`replace`), `forget` removes one, and `recall` searches every entry, reads a topic whole, or lists what is saved. In a Bot's own chat they use its own memory by default; in a group chat, the group memory (`scope: "own"` for the Bot's own). The Bot adds the source (a part anchor such as `part 2 #1234`, which `read_own_chat` opens, or the group and the time) and the date; a Bot that writes for others is named with `by:`.
 - **Files**: `MEMORY.md` holds what every conversation needs, and details go in topic files linked from its `## Index` as `[[topic]]`.
 - **In the prompt**: the Bot's own and the team's `MEMORY.md` go into the Bot's system prompt, frozen for the conversation part; in a group Session the group's `MEMORY.md` goes in as a snapshot message at the start of the Session instead. What others change later comes as a short update message before the next step, and a turn can bring up matching topic entries as a message. Both leave the prompt as it was, so the provider's prefix cache holds.
 - **Sizes**: only entry text counts. A `MEMORY.md` holds 12,000 characters in a group, 8,000 for a Bot and 4,000 for the team, changeable in Settings, and takes at most 2% of the model's usable window in the prompt. An entry has at most 300 characters and a topic 16,000. A save never fails for room: the oldest entries move to the topic `earlier`, and a full topic continues in a numbered one.
-- **Team memory**: what every Bot always reads takes only what the user says, through `always` on `bot_remember` or the memory panel. Everything else written to the team waits in the topic `shared` for whoever needs it.
+- **Team memory**: what every Bot always reads takes only what the user says, through `always` on `remember` or the memory panel. Everything else written to the team waits in the topic `shared` for whoever needs it.
 - **Entries**: each has a short id, an optional `until` after which it no longer shows, and a pin the user sets, which automatic changes leave alone.
 - **Tidy**: once a day at most, a background pass merges repeats and archives what is over in each memory that changed, at most a fifth of its entries at a time. The memory panel shows each pass and undoes it whole.
-- **Between Bots**: a Bot can read a public Bot's memory with `bot_recall`. Nothing of another Bot's reaches it unless it looks.
+- **Between Bots**: a Bot can read a public Bot's memory with `recall`. Nothing of another Bot's reaches it unless it looks.
 - **Safety**: memory is data, not instructions. An entry that looks like a key or token is refused, and a Bot is told not to save what a web page, file or tool result asks it to remember.
 - **History**: files change in place, and `journal.jsonl` keeps every change with the line before and after (a private Bot keeps its own `journal.jsonl` in its folder). When a Bot or a group chat is deleted, its memory moves to `archive/`.
 
@@ -139,7 +137,7 @@ A read-only dsh (see [Data and backups](#data-and-backups)) shows memory but can
 The package includes a second plugin, `ds-bot/web-search`. It registers the search provider `auto`, and `cordis.patch.yml` makes it the default. Each search goes in this order:
 
 1. If the profile names another `searchProvider`, that one is used.
-2. The current model route's own search, with that route's key and host. The plugin knows the Anthropic Messages, OpenAI Responses and Gemini protocols, and a few search APIs (DeepSeek, Ollama, Kimi, Zhipu, MiMo). A declared API runs only on an `https` base, since it carries the route's key. A provider's own long extract is kept as each source's `summary` beside the display snippet. Add more with `searchApis`.
+2. The current model route's own search, with that route's key and host. The plugin knows the Anthropic Messages, OpenAI Responses and Gemini protocols, and a few search APIs (Ollama, Kimi, Zhipu, MiMo). Add more with `searchApis`.
 3. A fallback without a key: the public result pages of Bing and DuckDuckGo.
 4. If nothing works, the search fails and tells the model not to guess addresses.
 
@@ -240,11 +238,10 @@ The chats themselves are dsh Sessions and are not in `bot/`: they are in `~/.dsh
 
 ## Development
 
-You need Node 24, pnpm and a deepseek-harness checkout with its dependencies installed, next to this repository (`../deepseek-harness`, or set `DSH_HARNESS`). The Desktop test bench also needs `xvfb-run` and `ffmpeg`. Web screenshots need Chrome or Chromium (`CHROME_BIN`; by default `google-chrome` or `chromium`).
+You need Node 24 and npm. `npm run harness` installs the official DeepSeek Harness packages from npm into `dev/harness/`; `npm test`, the linter and the board/lifecycle benches use them, so no checkout is needed for those. The Linux dev benches, the screenshots and the Desktop test bench read a DeepSeek Harness source checkout next to this repository (`../deepseek-harness`, or set `DSH_HARNESS`); use the official `deepseek-ai/deepseek-harness` repository, not a personal fork. The Desktop test bench also needs `xvfb-run` and `ffmpeg`. Web screenshots need Chrome or Chromium (`CHROME_BIN`; by default `google-chrome` or `chromium`).
 
 ```sh
-npm ci                                   # the plugin's packages and esbuild, for the client build
-npm ci --prefix ../link                  # the phone link's packages, for link.js and its test
+npm ci                                   # esbuild, for the client build
 npm run build                            # src/client → client.js
 npm test                                 # unit tests
 npm run lint                             # oxlint from the dsh repository (.oxlintrc.json)

@@ -46,10 +46,7 @@ export function optimistic(team: TeamState | null, endpoint: string, payload: Re
       if (index === -1) return team
       const { id: _id, ...patch } = payload
       const next: Room[] = [...rooms]
-      const room: Room = { ...rooms[index], ...patch }
-      // As for a Bot: the computer reads `''` as "clear" and the state omits the key.
-      if (patch.workDir === '') delete room.workDir
-      next[index] = room
+      next[index] = { ...rooms[index], ...patch }
       return { ...team, rooms: next }
     }
     default:

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -83,6 +83,54 @@ test('dropping a book removes its file after the writes before it', async (t) =>
   assert.deepEqual(rt.ledger.records('group-r1'), [])
 })
 
+test('failed writes are reported and later records never skip over the missing record', async (t) => {
+  const { rt, home, file, warnings } = host(t)
+  // A regular file in place of the ledger directory makes mkdir fail without
+  // depending on permissions, even when the test runner is root.
+  rt.ledger.open('group-r1')
+  writeFileSync(join(home, 'ledger'), 'not a directory')
+  rt.ledger.append('group-r1', { seq: 1, text: 'first' })
+  rt.ledger.append('group-r1', { seq: 2, text: 'second' })
+  await assert.rejects(rt.ledger.flush('group-r1'))
+  assert.equal(warnings.length, 1)
+
+  rmSync(join(home, 'ledger'))
+  mkdirSync(join(home, 'ledger'))
+  rt.ledger.append('group-r1', { seq: 3, text: 'third' })
+  await assert.rejects(rt.ledger.flush('group-r1'))
+  assert.equal(existsSync(file('group-r1')), false)
+
+  // An unrelated book still writes, while a global flush reports the failure.
+  rt.ledger.append('group-r2', { seq: 1, text: 'independent' })
+  await rt.ledger.flush('group-r2')
+  assert.deepEqual(parseBook(readFileSync(file('group-r2'), 'utf8')).map(record => record.text), ['independent'])
+  await assert.rejects(rt.ledger.flush(), AggregateError)
+
+  // Explicitly dropping a book discards its failed sequence and permits a new one.
+  rt.ledger.drop('group-r1')
+  await rt.ledger.flush('group-r1')
+  rt.ledger.append('group-r1', { seq: 1, text: 'new book' })
+  await rt.ledger.flush('group-r1')
+  assert.deepEqual(parseBook(readFileSync(file('group-r1'), 'utf8')).map(record => record.text), ['new book'])
+})
+
+test('required flush refuses read-only writes even after the host becomes writable', async (t) => {
+  let readOnly = 'another host owns the team'
+  const { rt, file } = host(t, { readOnly: () => readOnly })
+  rt.ledger.append('group-r1', { seq: 1, text: 'memory only' })
+  await rt.ledger.flush('group-r1')
+  await assert.rejects(rt.ledger.flushRequired('group-r1'), /read-only/)
+  readOnly = undefined
+  rt.ledger.append('group-r1', { seq: 2, text: 'must not skip the first' })
+  await assert.rejects(rt.ledger.flushRequired('group-r1'), /not persisted/)
+  assert.equal(existsSync(file('group-r1')), false)
+  rt.ledger.drop('group-r1')
+  await rt.ledger.flushRequired('group-r1')
+  rt.ledger.append('group-r1', { seq: 1, text: 'new book' })
+  await rt.ledger.flushRequired('group-r1')
+  assert.deepEqual(parseBook(readFileSync(file('group-r1'), 'utf8')).map(record => record.text), ['new book'])
+})
+
 test('a book with an id that is not a plain name gets a file name of its own', () => {
   assert.equal(bookFile('group-r1'), 'group-r1.jsonl')
   assert.match(bookFile('group-../x'), /^[0-9a-f]{32}\.jsonl$/)
@@ -113,42 +161,120 @@ test('a reader that takes over writing reads the book again first', async (t) =>
   assert.deepEqual(parseBook(readFileSync(writer.file('group-r1'), 'utf8')).map(record => record.seq), [1, 2, 3])
 })
 
-test('a write that does not reach the disk is reported to whoever waits for it', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, async (t) => {
+test('a failed ledger write blocks later deliveries and removes unwritten records from memory', async (t) => {
   const { rt, home } = host(t)
-  mkdirSync(join(home, 'ledger'), { recursive: true })
-  chmodSync(join(home, 'ledger'), 0o500)
-  try {
-    rt.ledger.append('pair-a-b', { id: 'x', text: 'hello' })
-    await assert.rejects(rt.ledger.written('pair-a-b'))
-    // The queue goes on for the next record, and memory holds only what landed.
-    await rt.ledger.flush('pair-a-b')
-    assert.deepEqual(rt.ledger.records('pair-a-b'), [])
-  } finally {
-    chmodSync(join(home, 'ledger'), 0o700)
-  }
-  // Sent again, it is written again.
+  rt.ledger.open('pair-a-b')
+  writeFileSync(join(home, 'ledger'), 'not a directory')
   rt.ledger.append('pair-a-b', { id: 'x', text: 'hello' })
-  await rt.ledger.written('pair-a-b')
-  assert.deepEqual(parseBook(readFileSync(join(home, 'ledger', 'pair-a-b.jsonl'), 'utf8')).map(record => record.id), ['x'])
+  rt.ledger.append('pair-a-b', { id: 'y', text: 'later' })
+  await assert.rejects(rt.ledger.written('pair-a-b'))
+  assert.deepEqual(rt.ledger.records('pair-a-b'), [])
+  rmSync(join(home, 'ledger'))
+  mkdirSync(join(home, 'ledger'))
+  rt.ledger.append('pair-a-b', { id: 'z', text: 'retry' })
+  await assert.rejects(rt.ledger.written('pair-a-b'))
+  assert.deepEqual(rt.ledger.records('pair-a-b'), [])
+  assert.equal(existsSync(join(home, 'ledger', 'pair-a-b.jsonl')), false)
 })
 
-test('prepend puts recovered records before existing ones and keeps concurrent appends in order', async (t) => {
-  const writer = host(t)
-  writer.rt.ledger.append('group-r1', { seq: 3, text: 'three' })
-  writer.rt.ledger.append('group-r1', { seq: 4, text: 'four' })
-  await writer.rt.ledger.flush('group-r1')
+test('written refuses an in-memory-only append even if the host becomes writable', async (t) => {
+  let readOnly = 'another host owns the team'
+  const { rt } = host(t, { readOnly: () => readOnly })
+  rt.ledger.append('pair-a-b', { id: 'x', text: 'hello' })
+  await assert.rejects(rt.ledger.written('pair-a-b'), /read-only/)
+  readOnly = undefined
+  await assert.rejects(rt.ledger.written('pair-a-b'), /not persisted/)
+})
 
-  const reader = host(t, { home: writer.home, readOnly: () => 'read only' })
-  assert.deepEqual(reader.rt.ledger.records('group-r1').map(record => record.seq), [3, 4])
+test('a failed import is not accepted as a persisted delivery record', async (t) => {
+  const { rt, home } = host(t)
+  rt.ledger.importer('pair-', () => {
+    writeFileSync(join(home, 'ledger'), 'not a directory')
+    return [{ id: 'x', text: 'old' }]
+  })
+  assert.equal(rt.ledger.records('pair-a-b')[0].id, 'x')
+  await assert.rejects(rt.ledger.written('pair-a-b'))
+})
 
-  // Prepend 1..2 and append 5 without awaiting between them.
-  const added = writer.rt.ledger.prepend('group-r1', [{ seq: 2, text: 'two' }, { seq: 1, text: 'one' }, { seq: 3, text: 'dup' }])
-  assert.equal(added, 2)
-  writer.rt.ledger.append('group-r1', { seq: 5, text: 'five' })
-  await writer.rt.ledger.flush('group-r1')
+test('an unreadable book is not replaced by an importer', async (t) => {
+  const { rt, home } = host(t)
+  mkdirSync(join(home, 'ledger'))
+  mkdirSync(join(home, 'ledger', `${bookFile('pair-a-b')}`))
+  let imported = false
+  rt.ledger.importer('pair-', () => { imported = true; return [{ id: 'x' }] })
+  assert.deepEqual(rt.ledger.records('pair-a-b'), [])
+  assert.equal(imported, false)
+  await assert.rejects(rt.ledger.written('pair-a-b'))
+  assert.equal(existsSync(join(home, 'ledger', bookFile('pair-a-b'))), true)
+})
 
-  assert.deepEqual(parseBook(readFileSync(writer.file('group-r1'), 'utf8')).map(record => [record.seq, record.text]), [
-    [1, 'one'], [2, 'two'], [3, 'three'], [4, 'four'], [5, 'five'],
-  ])
-  assert.deepEqual(reader.rt.ledger.records('group-r1').map(record => record.seq), [1, 2, 3, 4, 5])
+test('range and next-anchor indexes preserve file order, equal seqs and decreasing anchor starts', async t => {
+  const { rt } = host(t)
+  const book = 'group-index'
+  const records = [
+    { event: 'anchor', id: 'a', from: 7 }, { seq: 7, text: 'first' },
+    { event: 'anchor', id: 'b', from: 7 }, { seq: 2 }, { seq: 7, text: 'later' },
+    { event: 'anchor', id: 'a', from: 3 }, { seq: 3 }, { seq: 9 },
+  ]
+  for (const record of records) rt.ledger.append(book, record)
+  await rt.ledger.flush(book)
+  assert.deepEqual(rt.ledger.range(book, 3, 7), [records[1], records[4], records[6]])
+  assert.deepEqual(rt.ledger.after(book, 6), [records[1], records[4], records[7]])
+  assert.deepEqual(rt.ledger.range(book, 7, 3), [])
+  assert.deepEqual(rt.ledger.range(book, undefined), [])
+  assert.equal(rt.ledger.record(book, 7), records[4])
+  assert.equal(rt.ledger.lastSeq(book), 9)
+  assert.equal(rt.ledger.nextAnchor(book, 7, 'a'), 7)
+  assert.equal(rt.ledger.nextAnchor(book, 7, 'b'), 3)
+  assert.equal(rt.ledger.nextAnchor(book, 2, 'unknown'), 3)
+  assert.equal(rt.ledger.nextAnchor(book, 7), undefined)
+})
+
+test('cursor lookup never imports and failed appends invalidate closed ranges and both indexes', async t => {
+  const { rt, home } = host(t)
+  const book = 'group-failure'
+  let imports = 0
+  rt.ledger.importer('group-', () => { imports++; return [] })
+  const initial = rt.ledger.cursor(book)
+  assert.equal(imports, 0)
+  rt.ledger.open(book)
+  writeFileSync(join(home, 'ledger'), 'not a directory')
+  rt.ledger.append(book, { event: 'anchor', id: 'a', from: 1 })
+  rt.ledger.append(book, { event: 'anchor', id: 'b', from: 2 })
+  rt.ledger.append(book, { seq: 2 })
+  assert.equal(rt.ledger.nextAnchor(book, 1, 'a'), 2)
+  const pending = rt.ledger.cursor(book)
+  assert.notDeepEqual(pending, initial)
+  await assert.rejects(rt.ledger.flush(book))
+  assert.notEqual(rt.ledger.cursor(book).epoch, pending.epoch)
+  assert.deepEqual(rt.ledger.range(book, 1), [])
+  assert.equal(rt.ledger.nextAnchor(book, 1, 'a'), undefined)
+})
+
+test('a read-only window follows same-sized ledger replacements', async t => {
+  const { rt, home, file } = host(t, { readOnly: () => 'reader' })
+  const book = 'group-external'
+  mkdirSync(join(home, 'ledger'))
+  writeFileSync(file(book), '{"seq":1}\n')
+  const initial = rt.ledger.cursor(book)
+  assert.equal(rt.ledger.lastSeq(book), 1)
+  const temp = file(book) + '.replacement'
+  writeFileSync(temp, '{"seq":2}\n')
+  const { rename } = await import('node:fs/promises')
+  await rename(temp, file(book))
+  assert.notEqual(rt.ledger.cursor(book).epoch, initial.epoch)
+  assert.equal(rt.ledger.lastSeq(book), 2)
+})
+
+test('publishing a missed terminal row invalidates cached closed ranges only for its room', async t => {
+  const { rt } = host(t)
+  rt.ledger.append('group-a', { seq:1, text:'In progress' })
+  const before = rt.ledger.cursor('group-a').epoch
+  const other = rt.ledger.cursor('group-b')
+  rt.ledger.append('group-a', { seq:2, text:'Working' })
+  assert.equal(rt.ledger.cursor('group-a').epoch, before)
+  rt.ledger.append('group-a', { seq:3, text:'Result', completedRoomReply:{ after:2 } })
+  assert.notEqual(rt.ledger.cursor('group-a').epoch, before)
+  assert.deepEqual(rt.ledger.cursor('group-b'), other)
+  await rt.ledger.flushRequired('group-a')
 })

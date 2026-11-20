@@ -103,91 +103,6 @@ test('packs expand only to MCP and skill items', () => {
   assert.throws(() => expandCapabilityNames(['bad'], { ...items, bad: { kind: 'pack', items: ['team'] } }), /unavailable capability/)
 })
 
-test('status cache follows install, approval, config edits, detach and removal', async t => {
-  const env = await setup({ beforeLoad({ rt, mounts, skills }) {
-    const agents = new Map()
-    rt.resolveAgent = async id => {
-      if (!agents.has(id)) agents.set(id, testAgent(id, mounts, skills))
-      return agents.get(id)
-    }
-  } })
-  t.after(() => env.dispose())
-  const { rt } = env
-  const view = () => rt.capabilityStatusesView()
-  const empty = view()
-  assert.equal(view(), empty)
-  await rt.capabilitySave(mcp('echo'), { botId: 'chief' })
-  await rt.capabilityEndpoint('bot-capability', { botId: 'chief', name: 'echo', attached: true })
-  await rt.reconcileCapabilities()
-  assert.equal(view().chief.echo.state, 'needs-approval')
-  const blocked = view()
-  assert.equal(view(), blocked)
-  await rt.capabilityEndpoint('capability-approve', { name: 'echo' })
-  await rt.reconcileCapabilities()
-  assert.equal(view().chief.echo.state, 'ready')
-  await rt.capabilitySave(mcp('echo', 'changed-command'), { botId: 'chief' })
-  await rt.reconcileCapabilities()
-  assert.equal(view().chief.echo.state, 'needs-approval')
-  await rt.capabilitySave({ name: 'bundle', kind: 'pack', items: ['echo'] }, { ui: true })
-  rt.state.bots.chief.capabilities = ['bundle']
-  assert.equal(view().chief.bundle.state, 'needs-approval')
-  rt.state.capabilities.items.bundle.items = []
-  assert.deepEqual(view().chief, {})
-  rt.state.capabilities.items.bundle.items = ['echo']
-  assert.equal(view().chief.bundle.state, 'needs-approval')
-  rt.state.bots.chief.capabilities = []
-  assert.deepEqual(view().chief, {})
-  rt.state.bots.chief.capabilities = ['echo']
-  assert.equal(view().chief.echo.state, 'needs-approval')
-  await rt.capabilityDelete('echo', { ui: true })
-  assert.deepEqual(view().chief, {})
-  const removed = view()
-  await assert.rejects(rt.capabilityDelete('missing', { ui: true }), /No capability/)
-  assert.equal(view(), removed)
-  delete rt.state.bots.worker
-  assert.equal(view().worker, undefined)
-})
-
-for (const operation of ['install', 'approve', 'removal']) test(`cached status updates after ${operation}`, async t => {
-  const state = team()
-  state.capabilities = { items: { echo: { ...mcp('echo'), approved: operation !== 'approve' } } }
-  state.bots.chief.capabilities = ['echo']
-  const env = await setup({ state })
-  t.after(() => env.dispose())
-  const agent = testAgent('chief', env.mounts, env.skills)
-  if (operation !== 'install') await created(env)({ agent })
-  const before = env.rt.capabilityStatusesView()
-  assert.equal(env.rt.capabilityStatusesView(), before)
-  if (operation === 'install') {
-    assert.deepEqual(before.chief, {})
-    await created(env)({ agent })
-    assert.equal(env.rt.capabilityStatusesView().chief.echo.state, 'ready')
-  } else if (operation === 'approve') {
-    assert.equal(before.chief.echo.state, 'needs-approval')
-    await env.rt.capabilityEndpoint('capability-approve', { name: 'echo' })
-    await env.rt.reconcileCapabilities()
-    assert.equal(env.rt.capabilityStatusesView().chief.echo.state, 'ready')
-  } else {
-    await env.rt.capabilityDelete('echo', { ui: true })
-    assert.deepEqual(env.rt.capabilityStatusesView().chief, {})
-  }
-})
-
-test('status cache clears on Agent disposal and store replacement', async t => {
-  const state = team()
-  state.capabilities = { items: { echo: { ...mcp('echo'), approved: true } } }
-  state.bots.chief.capabilities = ['echo']
-  const env = await setup({ state })
-  t.after(() => env.dispose())
-  const agent = testAgent('chief', env.mounts, env.skills)
-  await created(env)({ agent })
-  assert.equal(env.rt.capabilityStatusesView().chief.echo.state, 'ready')
-  agent.ctx.dispose()
-  assert.deepEqual(env.rt.capabilityStatusesView().chief, {})
-  env.rt.state.bots = {}
-  assert.deepEqual(env.rt.capabilityStatusesView(), {})
-})
-
 test('state migration adds an empty library and Bot attachment lists', async t => {
   const old = team()
   delete old.capabilities
@@ -358,6 +273,41 @@ test('startup and empty-to-nonempty attachments track existing Bot Agents', asyn
   assert.deepEqual(resolved, ['chief', 'room-chief', 'worker', 'helper'])
   assert.deepEqual(env.mounts.filter(mount => !mount.disposed).map(mount => mount.sessionId), ['chief', 'room-chief', 'worker', 'helper'])
 })
+
+for (const outcome of ['resolved', 'rejected']) {
+  test(`startup stops resolving Bot Agents after unload when an in-flight resolve is ${outcome}`, async t => {
+    const state = team()
+    state.rooms = {}
+    state.bots.chief.capabilities = ['guide']
+    state.bots.worker.capabilities = ['guide']
+    state.capabilities = { items: { guide: { name: 'guide', kind: 'skill', content: 'Work.' } } }
+    const resolved = []
+    const warnings = []
+    let release
+    let reject
+    let tracked = 0
+    const pending = new Promise((ok, fail) => { release = ok; reject = fail })
+    const env = await setup({
+      state,
+      beforeLoad: ({ rt }) => {
+        rt.warn = (...args) => warnings.push(args)
+        rt.chatOf = botId => botId
+        rt.groupSessionsOf = () => []
+        rt.resolveAgent = async sessionId => { resolved.push(sessionId); return pending }
+      },
+    })
+    t.after(() => env.dispose())
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(resolved, ['chief'])
+    await env.ctx.dispose()
+    if (outcome === 'resolved') release({ session: { id: 'chief' }, ctx: { effect: () => { tracked += 1 } } })
+    else reject(new Error('cannot get required service "sessionController" in inactive context'))
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(resolved, ['chief'])
+    assert.equal(tracked, 0)
+    assert.equal(warnings.some(args => String(args[0]).includes('capability Agent')), false)
+  })
+}
 
 test('one-item attach changes keep the other attachments', async t => {
   const env = await setup()
