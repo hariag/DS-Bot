@@ -1312,7 +1312,7 @@ function SideSection({ title, action, children, className = '' }) {
     children)
 }
 
-function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand, notice, onOpenMore }) {
+function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand, notice }) {
   const progress = PERSONAL_COLUMNS.find(([id]) => id === task.personalProgress)
   const canSubmit = commandOf(commands, 'submit') && task.status === 'draft'
   const canCancel = commandOf(commands, 'cancel') && !['done','cancelled'].includes(task.status)
@@ -1329,9 +1329,7 @@ function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand
       h('strong', null, progress ? t(progress[1]) : stageLabelOf(task))),
     task.status === 'draft' ? h('p', { className: 'bt-card-note' }, t('Draft cards are not scheduled.')) : null,
     task.status === 'draft' && !canSubmit && task.parentTaskId && (!task.owner || !task.reviewer)
-      ? h('div', { className: 'bt-card-note' },
-        h('p', null, t('This task item needs an owner and an independent reviewer before it can be submitted.')),
-        onOpenMore ? h('button', { type:'button', className:'bt-card-mini', disabled, onClick:onOpenMore }, t('Set owner and reviewer')) : null) : null,
+      ? h('p', { className: 'bt-card-note' }, t('This task item needs an owner and an independent reviewer before it can be submitted.')) : null,
     task.status === 'cancelled' ? h('p', { className: 'bt-card-note' }, t('Cancelled cards are not scheduled and can be restored.')) : null,
     task.dispatchState === 'uncertain' ? h('p', { className: 'bt-card-warning', role: 'status' }, t('The Bot message may or may not have reached its Session. Check the delivery before scheduling again.')) : null,
     canMove ? h('label', { className: 'bt-field' }, h('span', null, t('Personal progress')), h('select', { value: task.personalProgress, disabled, 'aria-label': t('Move personal task'), onChange: event => void onCommand(task, { type: 'personal-progress' }, { progress: event.target.value }) }, PERSONAL_COLUMNS.map(([id, label]) => h('option', { key: id, value: id }, t(label))))) : null,
@@ -1378,9 +1376,45 @@ function TypeBlock({ task, editable, disabled, onSave }) {
     error ? h('p', { className: 'bt-form-error', role: 'alert' }, error) : null)
 }
 
-function PeopleBlock({ task, actors }) {
+function PeopleBlock({ task, actors, canEdit = false, disabled = false, onAssign }) {
+  const [editing, setEditing] = useState(false)
+  const [owner, setOwner] = useState(task.owner ?? '')
+  const [reviewer, setReviewer] = useState(task.reviewer ?? '')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => { setOwner(task.owner ?? ''); setReviewer(task.reviewer ?? ''); setError('') }, [task.owner, task.reviewer])
+  const candidates = (Array.isArray(actors) ? actors : []).filter(actor => actor && typeof actor.id === 'string')
   const rows = [['Owner', task.owner], ['Reviewer', task.reviewer]]
-  if (task.parentTaskId && !task.owner && !task.reviewer) return h(SideSection,{title:t('People')},t('Unassigned'))
+  const unassignedItem = Boolean(task.parentTaskId && (!task.owner || !task.reviewer))
+  if (unassignedItem) {
+    const save = async event => {
+      event.preventDefault()
+      if (!canEdit || disabled || busy || !owner || !reviewer || owner === reviewer) return
+      setBusy(true); setError('')
+      try {
+        const result = await onAssign?.(owner, reviewer)
+        if (result === 'committed') setEditing(false)
+        else if (result !== 'cancelled') setError(t('The owner and reviewer could not be saved.'))
+      } catch { setError(t('The owner and reviewer could not be saved.')) }
+      finally { setBusy(false) }
+    }
+    const choose = (label, value, onChange, list) => h('label', { className: 'bt-field' }, h('span', null, t(label)),
+      h('select', { value, disabled: disabled || busy, 'aria-label': t(label), onChange: event => onChange(event.target.value) },
+        h('option', { value: '' }, t('Choose a Bot')),
+        list.map(actor => h('option', { key: actor.id, value: actor.id }, actor.name || actor.id))))
+    const form = h('form', { className: 'bt-card-form', onSubmit: save },
+      choose('Owner', owner, value => { setOwner(value); if (value === reviewer) setReviewer('') }, candidates),
+      choose('Independent reviewer', reviewer, setReviewer, candidates.filter(actor => actor.id !== owner)),
+      owner && reviewer && owner === reviewer ? h('p', { className: 'bt-form-error', role: 'alert' }, t('The reviewer must be a different Bot.')) : null,
+      error ? h('p', { className: 'bt-form-error', role: 'alert' }, error) : null,
+      h('div', { className: 'bt-card-editor-actions' },
+        h('button', { type: 'button', className: 'bt-btn bt-btn-ghost', disabled: busy, onClick: () => { setEditing(false); setOwner(task.owner ?? ''); setReviewer(task.reviewer ?? '') } }, t('Cancel')),
+        h('button', { type: 'submit', className: 'bt-btn bt-btn-primary', disabled: disabled || busy || !owner || !reviewer || owner === reviewer }, t('Save'))))
+    const body = canEdit ? (editing ? form : h('button', { type: 'button', className: 'bt-btn bt-btn-ghost', disabled, onClick: () => setEditing(true) }, t('Set owner and reviewer'))) : null
+    return h(SideSection, { title: t('People') },
+      h('p', { className: 'bt-card-note' }, t('This task item is unassigned. Choose an owner and an independent reviewer.')),
+      body)
+  }
   return h(SideSection, { title: t('People') }, h('div', { className: 'bt-card-people' },
     rows.filter(([, id]) => id).map(([role, id]) => h('div', { key: role, className: 'bt-card-person' },
       h(MemberAvatar, { name: actorName(id, actors), size: 28 }), h('span', null, h('strong', null, actorName(id, actors)), h('small', null, t(role)))))))
@@ -1704,14 +1738,8 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
     else if (result !== 'cancelled') setTitleError(t('The title could not be saved.'))
   }
   const detailsSave = (target, value) => confirmCommand(target, { type: detailsType }, value)
-  const openTaskEditor = () => {
-    const more = modal.current?.querySelector('.bt-card-more')
-    if (!more) return
-    more.open = true
-    const edit = more.querySelector('.bt-card-more-body button')
-    edit?.click()
-    more.scrollIntoView({ block:'center', behavior:'smooth' })
-  }
+  const assignPeople = (owner, reviewer) => confirmCommand(task, { type: 'edit' },
+    { title: textValue(task.title), owner, reviewer, acceptance: textValue(task.acceptance), dependencies: dependenciesOf(task) })
   const relatedTasks = h(RelatedTasks, { task, tasks, actors, onOpen:onOpenRelated, onCreateItem,
     onMove: !uncertain && !busy && commandOf(commands, legacy ? 'move-goal-item' : 'move-item')
       ? (parent, parentTaskId) => onCommand(legacy ? parent : task, { type: legacy ? 'move-goal-item' : 'move-item' },
@@ -1773,8 +1801,8 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
           h(CommentsEditor, { task, actors, canPost: canComment, canEdit: canEditComment, canDelete: canDeleteComment, disabled: uncertain || busy, postType: commentType, onCommand }),
           h(ActivitySection, { task })),
         h('aside', { className: 'bt-card-side' },
-          h(StatusBlock, { task, commands, canMove, canSchedule, disabled: uncertain || busy, onCommand, onOpenMore: canEdit ? openTaskEditor : undefined }),
-          h(PeopleBlock, { task, actors }),
+          h(StatusBlock, { task, commands, canMove, canSchedule, disabled: uncertain || busy, onCommand }),
+          h(PeopleBlock, { task, actors, canEdit, disabled: uncertain || busy, onAssign: assignPeople }),
           !legacy ? h(CardTextEditor, { task, field:'stage', editable:canDetails, disabled:uncertain || busy, onSave:detailsSave }) : null,
           h(TypeBlock, { task, editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }),
           h(DueEditor, { task, editable: canDetails, disabled: uncertain || busy, legacy, onSave: detailsSave }),
