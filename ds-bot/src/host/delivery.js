@@ -15,7 +15,7 @@ export function install(rt) {
     return resolved.agent
   }
 
-  const headerFor = (role, fromName, roomName, audience, note = 'new message', deferred = false, { resumed = false, retried = false, resent = false, abandoned = false, asker } = {}) => {
+  const headerFor = (role, fromName, roomName, audience, note = 'new message', deferred = false, { resumed = false, retried = false, resent = false, abandoned = false, asker, botRequest = false } = {}) => {
     // What came back for work another Bot gave this one says where its answer goes.
     const goesOn = asker === undefined ? '' : ` · for the work ${asker} asked you for; your answer goes to ${asker} once everything you handed on is back`
     // A wait the user gave up reads as its own thing: the other Bot never answered.
@@ -39,6 +39,7 @@ export function install(rt) {
     if (role === 'update') return '[Your profile was updated — follow the latest version]'
     if (role === 'secret') return '[Secret card]'
     if (audience === 'user') return `[Message from ${fromName} · the user sees your reply here]`
+    if (botRequest) return `[Message from ${fromName} · this request's turn returns your final reply]`
     return `[Message from ${fromName}]`
   }
 
@@ -102,7 +103,8 @@ export function install(rt) {
   // which DSH projects for the recipient's model and tools. `length`: the whole message's
   // length when it went as a file (attachLong). `work`: the work (handoffs.js) a
   // result that came back goes on with. `merged`: a request that takes in an earlier
-  // one its recipient had not read, under that one's exchange.
+  // one its recipient had not read, under that one's exchange. `fromPart`: the Session
+  // of the sending Bot, which a reply comes back to when that is a background part.
   async function deliver(args, observation) {
     let admissionStarted = false
     try {
@@ -132,7 +134,7 @@ export function install(rt) {
     }
   }
 
-  async function deliverToAgent({ fromId, fromName: senderName, toId, sessionId, text, role, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false, merged = false, abandoned = false, recordExchange = true, askedBy, fromRoomId, images = [], files = [], length, work, recoveryIds, recoveryKey, reviewId, reviewInspect, groupKickoff, taskAction, preparedMessage }, onAdmission, onAdmitted) {
+  async function deliverToAgent({ fromId, fromName: senderName, toId, sessionId, text, role, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false, merged = false, abandoned = false, recordExchange = true, askedBy, fromRoomId, fromPart, images = [], files = [], length, work, recoveryIds, recoveryKey, reviewId, reviewInspect, reviewReceipt, groupKickoff, taskAction, preparedMessage }, onAdmission, onAdmitted) {
     const from = rt.botOf(fromId)
     const to = rt.botOf(toId)
     if (to === undefined) throw new Error(`Unknown Bot ${toId}`)
@@ -148,10 +150,12 @@ export function install(rt) {
       senderName: fromName,
       ...(work ? { work } : {}),
       ...(fromId ? { senderSessionId: fromId } : {}),
+      ...(fromPart ? { senderPart: fromPart } : {}),
       ...(replyTo ? { replyTo } : {}),
       ...(roomId ? { roomId } : {}),
       ...(reviewId ? { reviewId } : {}),
       ...(reviewInspect ? { reviewInspect: true } : {}),
+      ...(reviewReceipt ? { reviewReceipt: true } : {}),
       ...(groupKickoff === true ? { groupKickoff: true } : {}),
       ...(audience === 'user' ? { audience } : {}),
       ...(deferred ? { deferred: true } : {}),
@@ -183,7 +187,7 @@ export function install(rt) {
     // queues for the next turn (see turns.js for how each is routed).
     const generated = createUserMessage({
       content: [
-        { type: 'text', text: `${headerFor(role, fromName, room?.name, audience, note, deferred, { resumed, retried, resent, abandoned, asker })}\n${text}` },
+        { type: 'text', text: `${headerFor(role, fromName, room?.name, audience, note, deferred, { resumed, retried, resent, abandoned, asker, botRequest: from !== undefined && role === 'request' })}\n${text}` },
         ...images.map(attachment => ({ type: 'image', attachment })),
         ...files.map(attachment => ({ type: 'file', attachment })),
       ],

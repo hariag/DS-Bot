@@ -20,6 +20,7 @@ import { textOf } from './text.js'
 import { heldTurnsView, queuedDeliveriesView } from './recovery-held.js'
 import { collectRecoveryCandidates, collectRecoveryOrigins, observeRecoveryRecords } from './recovery-observation.mjs'
 import { syncDirectory } from './directory-sync.mjs'
+import { threadCurrentOfPart } from './threads.js'
 
 // Long enough for DSH to finish opening its workspaces after a start.
 export const RESUME_DELAY_MS = 3000
@@ -113,6 +114,7 @@ const triggerOf = info => ({
   role: info.role,
   ...(info.exchangeId ? { exchangeId: info.exchangeId } : {}),
   ...(info.senderSessionId ? { senderSessionId: info.senderSessionId } : {}),
+  ...(info.senderPart ? { senderPart: info.senderPart } : {}),
   ...(info.roomId ? { roomId: info.roomId } : {}),
   ...(info.work ? { work: info.work } : {}),
   ...(info.audience ? { audience: info.audience } : {}),
@@ -120,19 +122,23 @@ const triggerOf = info => ({
   ...(info.senderRoomId ? { senderRoomId: info.senderRoomId } : {}),
   ...(info.reviewId ? { reviewId: info.reviewId } : {}),
   ...(info.reviewInspect === true ? { reviewInspect: true } : {}),
+  ...(info.reviewReceipt === true ? { reviewReceipt: true } : {}),
   ...(info.groupKickoff === true ? { groupKickoff: true } : {}),
 })
+
+// Keep the last committed bytes for comparison under the home lock. Decode only to parse JSON.
+const sameBytes = (a, b) => a === b || (a !== undefined && b !== undefined && a.equals(b))
 
 const readNotes = (file) => {
   let raw
   try {
-    raw = readFileSync(file, 'utf8')
+    raw = readFileSync(file)
   } catch (error) {
     return error?.code === 'ENOENT' ? { turns: {}, queued: {}, heldTurns: {}, raw: undefined }
       : { turns: {}, queued: {}, heldTurns: {}, blocked: error?.code ?? error?.name ?? 'read error' }
   }
   try {
-    const parsed = JSON.parse(raw)
+    const parsed = JSON.parse(raw.toString('utf8'))
     const object = value => value !== null && typeof value === 'object' && !Array.isArray(value)
     if (!object(parsed) || (parsed.turns !== undefined && !object(parsed.turns)) || (parsed.queued !== undefined && !object(parsed.queued)) || (parsed.heldTurns !== undefined && !object(parsed.heldTurns))) throw new Error('invalid notes')
     return { turns: parsed.turns ?? {}, queued: parsed.queued ?? {}, heldTurns: parsed.heldTurns ?? {}, raw }
@@ -174,19 +180,41 @@ export function install(rt) {
   // A later turn in the same session must not overwrite an older uncertain
   // interruption. Preserve it separately before the first possible snapshot.
   const heldTurns = { ...interrupted.heldTurns }
+  // Linking the original turn or exchange also prevents ordinary Retry and
+  // automatic pre-step continuation from bypassing an interrupted-work hold.
+  const heldInputs = new Map()
+  const indexHeldInput = (sessionId, record) => {
+    if (!record || typeof sessionId !== 'string') return
+    const identities = heldInputs.get(sessionId) ?? new Set()
+    if (Number.isSafeInteger(record.turn)) identities.add(record.turn)
+    if (typeof record.trigger?.exchangeId === 'string') identities.add(record.trigger.exchangeId)
+    heldInputs.set(sessionId, identities)
+  }
+  for (const held of Object.values(heldTurns)) indexHeldInput(held?.sessionId, held?.record)
+  rt.isHeldRecoveryInput = (sessionId, item) => {
+    const identities = heldInputs.get(sessionId)
+    return blocked !== undefined || identities?.has(item.turn) === true || identities?.has(item.exchangeId) === true
+  }
+  const heldReason = 'interrupted outcome unknown'
+  const retainedAtStartup = new WeakSet()
   const holdTurn = (sessionId, value) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid interrupted turn; inspect recovery notes')
     const { recoveryHold: _, ...record } = value
     const id = createHash('sha256').update(JSON.stringify([sessionId, record])).digest('hex')
-    if (heldTurns[id] === undefined) {
+    const saved = heldTurns[id]
+    if (saved === undefined) {
       // A newly held turn can invalidate checks for any room until its exact
       // provenance has been matched to the current roster.
       unknownQueueGeneration += 1n
-      heldTurns[id] = { sessionId, record, reason: 'interrupted outcome unknown' }
+      heldTurns[id] = { sessionId, record, reason: heldReason }
+      indexHeldInput(sessionId, record)
+      return false
     }
+    return value.recoveryHold === heldReason && saved?.reason === heldReason
+      && saved.sessionId === sessionId && JSON.stringify(saved.record) === JSON.stringify(record)
   }
   for (const [sessionId, value] of Object.entries(interrupted.turns)) {
-    try { holdTurn(sessionId, value) } catch {
+    try { if (holdTurn(sessionId, value)) retainedAtStartup.add(value) } catch {
       blocked = 'invalid interrupted turn'
       rt.warn('ds-bot: invalid interrupted turn for %s; the original recovery notes are preserved for inspection', sessionId)
     }
@@ -256,7 +284,7 @@ export function install(rt) {
       for (const key of ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs']) {
         if (before[key] !== after[key] || after[key] !== entry[key]) return { ok:false }
       }
-      return { ok:true, raw:buffer.subarray(0, length).toString('utf8') }
+      return { ok:true, raw:buffer.subarray(0, length) }
     } catch (error) {
       return error?.code === 'ENOENT' && !handle ? { ok:true, raw:undefined } : { ok:false }
     } finally { await handle?.close().catch(() => {}) }
@@ -268,11 +296,11 @@ export function install(rt) {
     if (writing !== pendingWrite || ownsRecoveryView() !== true) return unavailableHeld()
     const saved = expected
     const disk = await readRecoveryForView()
-    if (!disk.ok || disk.raw !== saved || expected !== saved || writing !== pendingWrite || ownsRecoveryView() !== true) return unavailableHeld()
+    if (!disk.ok || !sameBytes(disk.raw, saved) || expected !== saved || writing !== pendingWrite || ownsRecoveryView() !== true) return unavailableHeld()
     // Startup copies interrupted turns into memory before the first file
     // replacement. Do not show those new holds as a saved snapshot until
     // the visible recovery file contains exactly the same held records.
-    const parsed = disk.raw === undefined ? {} : JSON.parse(disk.raw)
+    const parsed = disk.raw === undefined ? {} : JSON.parse(disk.raw.toString('utf8'))
     const savedHolds = parsed?.heldTurns ?? {}
     const savedQueued = parsed?.queued ?? {}
     if (!savedHolds || typeof savedHolds !== 'object' || Array.isArray(savedHolds)
@@ -296,6 +324,23 @@ export function install(rt) {
       () => { if (recoverySample === work) recoverySample = undefined })
     return boundedRecoveryView(work)
   }
+  const hasSingleOrigin = sessionId => {
+    // A stale or corrupt roster can assign one Session to several places;
+    // the convenience indexes silently choose one and cannot prove origin.
+    let origins = 0
+    for (const candidate of Object.values(rt.state.bots ?? {})) {
+      if (rt.chatOf(candidate.id) === sessionId) origins += 1
+      origins += (candidate.segments ?? []).filter(part => part?.sessionId === sessionId).length
+    }
+    for (const agent of Object.values(rt.state.agents ?? {})) origins += (agent.sessions ?? []).filter(id => id === sessionId).length
+    for (const room of Object.values(rt.state.rooms ?? {})) {
+      if (rt.sessionOfRoom(room) === sessionId) origins += 1
+      origins += (room.parts ?? []).filter(part => part?.sessionId === sessionId).length
+      origins += Object.values(room.sessions ?? {}).filter(id => id === sessionId).length
+      for (const segments of Object.values(room.segments ?? {})) origins += segments.filter(part => part?.sessionId === sessionId).length
+    }
+    return origins === 1
+  }
   // Internal evidence for an explicit user redo. This is not a public view:
   // it contains the original trigger. Callers must first authenticate the user
   // and authorize the board scope, and recheck isCurrent across every await.
@@ -315,21 +360,7 @@ export function install(rt) {
     if (!bot || (record.roomId !== undefined && record.trigger?.roomId !== undefined && record.roomId !== record.trigger.roomId)) return undefined
     const validScope = () => {
       if (rt.botOf(record.botId) !== bot) return false
-      // A stale or corrupt roster can assign one Session to several places;
-      // the convenience indexes silently choose one and cannot prove origin.
-      let origins = 0
-      for (const candidate of Object.values(rt.state.bots ?? {})) {
-        if (rt.chatOf(candidate.id) === sessionId) origins += 1
-        origins += (candidate.segments ?? []).filter(part => part?.sessionId === sessionId).length
-      }
-      for (const agent of Object.values(rt.state.agents ?? {})) origins += (agent.sessions ?? []).filter(id => id === sessionId).length
-      for (const room of Object.values(rt.state.rooms ?? {})) {
-        if (rt.sessionOfRoom(room) === sessionId) origins += 1
-        origins += (room.parts ?? []).filter(part => part?.sessionId === sessionId).length
-        origins += Object.values(room.sessions ?? {}).filter(id => id === sessionId).length
-        for (const segments of Object.values(room.segments ?? {})) origins += segments.filter(part => part?.sessionId === sessionId).length
-      }
-      if (origins !== 1) return false
+      if (!hasSingleOrigin(sessionId)) return false
       const owner = rt.groupOwners.get(sessionId) ?? rt.pastOwners.get(sessionId)
       if (scope.kind === 'room') {
         const room = rt.roomOf(scope.id)
@@ -347,9 +378,9 @@ export function install(rt) {
       && writing === pending && expected === saved && JSON.stringify(heldTurns[recoveryId]) === snapshot && validScope()
     let handle
     try {
-      handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+      handle = await open(file, (process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | (constants.O_NOFOLLOW ?? 0))
       const before = await handle.stat({ bigint:true })
-      if (!before.isFile() || before.size > BigInt(RECOVERY_VIEW_MAX_BYTES) || await handle.readFile('utf8') !== saved || !validMemory()) return undefined
+      if (!before.isFile() || before.size > BigInt(RECOVERY_VIEW_MAX_BYTES) || !sameBytes(await handle.readFile(), saved) || !validMemory()) return undefined
       await handle.sync()
       await syncDirectory(dirname(file))
       const after = await handle.stat({ bigint:true }), path = await lstat(file, { bigint:true })
@@ -390,8 +421,8 @@ export function install(rt) {
       await pendingWrite
       if (writing !== pendingWrite || ownsRecoveryView() !== true) return undefined
       const saved = expected, disk = await readRecoveryForView()
-      if (!disk.ok || disk.raw !== saved || expected !== saved || writing !== pendingWrite || ownsRecoveryView() !== true) return undefined
-      const raw = disk.raw === undefined ? {} : JSON.parse(disk.raw)
+      if (!disk.ok || !sameBytes(disk.raw, saved) || expected !== saved || writing !== pendingWrite || ownsRecoveryView() !== true) return undefined
+      const raw = disk.raw === undefined ? {} : JSON.parse(disk.raw.toString('utf8'))
       const parsed = { queued: raw.queued ?? {}, turns: raw.turns ?? {}, heldTurns: raw.heldTurns ?? {} }
       const observed = observeRecoveryRecords({ workId, inflight: parsed })
       const ids = collectRecoveryOrigins({ workId, inflight: parsed })
@@ -410,8 +441,8 @@ export function install(rt) {
       await pendingWrite
       if (writing !== pendingWrite || ownsRecoveryView() !== true) return undefined
       const saved=expected,disk=await readRecoveryForView()
-      if(!disk.ok || disk.raw!==saved || expected!==saved || writing!==pendingWrite || ownsRecoveryView()!==true)return undefined
-      const raw=disk.raw===undefined?{}:JSON.parse(disk.raw)
+      if(!disk.ok || !sameBytes(disk.raw, saved) || expected!==saved || writing!==pendingWrite || ownsRecoveryView()!==true)return undefined
+      const raw=disk.raw===undefined?{}:JSON.parse(disk.raw.toString('utf8'))
       const result=collectRecoveryCandidates({queued:raw.queued??{},turns:raw.turns??{},heldTurns:raw.heldTurns??{}})
       if(expected!==saved || writing!==pendingWrite || ownsRecoveryView()!==true)return undefined
       return result
@@ -420,7 +451,6 @@ export function install(rt) {
     void sample.finally(()=>{if(recoverySample===sample)recoverySample=undefined}).catch(()=>{})
     return boundedRecoveryView(sample)
   }
-  let latest
   let due = false
   let pending
   rt.onHomeDrain(() => writing)
@@ -429,22 +459,24 @@ export function install(rt) {
     if (stopped || blocked !== undefined || rt.readOnly() !== undefined) {
       return required ? Promise.reject(new Error('Recovery notes cannot be saved by this host.')) : writing
     }
-    latest = JSON.stringify({ turns, queued, ...(Object.keys(heldTurns).length ? { heldTurns } : {}) })
-    // One write waits at a time and takes the latest notes, so a busy round does not
-    // write the file once per change.
+    // Serialize after coalescing so a burst of deliveries does not repeatedly
+    // encode the entire recovery journal before the pending write starts.
     if (due) return pending
     due = true
     const run = writing.then(async () => {
       due = false
       if (blocked !== undefined) throw new Error(`Recovery notes are unavailable (${blocked}).`)
-      const snapshot = latest
-      await mkdir(home, { recursive: true })
+      const snapshot = Buffer.from(JSON.stringify({ turns, queued, ...(Object.keys(heldTurns).length ? { heldTurns } : {}) }), 'utf8')
       const check = () => {
         rt.requireHomeLock()
         let actual
-        try { actual = readFileSync(file, 'utf8') } catch (error) { if (error?.code !== 'ENOENT') throw error }
-        if (actual !== expected) throw Object.assign(new Error('Recovery notes changed outside this host.'), { code: 'ECONFLICT' })
+        try { actual = readFileSync(file) } catch (error) { if (error?.code !== 'ENOENT') throw error }
+        if (!sameBytes(actual, expected)) throw Object.assign(new Error('Recovery notes changed outside this host.'), { code: 'ECONFLICT' })
       }
+      // An already committed snapshot still needs its ownership and disk proof:
+      // a retry must observe an outside edit even when its desired bytes match.
+      if (sameBytes(snapshot, expected)) { check(); return }
+      await mkdir(home, { recursive: true })
       await writeNotesAtomically(file, snapshot, check)
       expected = snapshot
     })
@@ -459,7 +491,7 @@ export function install(rt) {
   // the inbox, or establish whether an external effect occurred.
   const syncHeldDecision = async (recoveryId, entry) => {
     rt.requireHomeLock()
-    const lease = rt.homeLockVersion(), handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const lease = rt.homeLockVersion(), handle = await open(file, (process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | (constants.O_NOFOLLOW ?? 0))
     try {
       const before = await handle.stat()
       if (!before.isFile()) throw new Error('Decision journal unavailable')
@@ -487,7 +519,7 @@ export function install(rt) {
   }
   const syncQueuedDecision = async (recoveryId, entry) => {
     rt.requireHomeLock()
-    const lease = rt.homeLockVersion(), handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const lease = rt.homeLockVersion(), handle = await open(file, (process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY) | (constants.O_NOFOLLOW ?? 0))
     try {
       const before = await handle.stat()
       if (!before.isFile()) throw new Error('Decision journal unavailable')
@@ -556,6 +588,7 @@ export function install(rt) {
   const roomNotesForTurn = (sessionId, record) => {
     if (!record || typeof record !== 'object') return []
     const trigger = record?.trigger
+    if (trigger?.reviewReceipt === true) return []
     const explicit = record?.roomId ?? trigger?.roomId
     if (typeof explicit === 'string' && explicit !== '') return [{role:'room',roomId:explicit,toId:record?.botId}]
     const rooms = Object.values(rt.state?.rooms ?? {})
@@ -656,6 +689,7 @@ export function install(rt) {
       if (!Array.isArray(list)) { notes.push({role:'room'}); continue }
       for (const item of list) {
         const args = item?.args
+        if (args?.reviewReceipt === true) continue
         if (!args || typeof args !== 'object' || typeof args.role !== 'string') {
           for (const unknown of roomNotesForTurn(sessionId, {}))
             if (!unknown.roomId || unknown.roomId === roomId) notes.push(unknown)
@@ -691,33 +725,39 @@ export function install(rt) {
       if (counts.size === 0) retained.delete(sessionId)
     }
   }
-  rt.moveQueued = (target, messages) => {
-    const ids = new Set(messages.filter(message => message.source?.kind === SOURCE_KIND).map(message => message.source.exchangeId).filter(Boolean))
-    if (ids.size === 0) return
-    const next = { ...queued }
-    if (next[target] !== undefined && !Array.isArray(next[target])) return
-    const incoming = [...(next[target] ?? [])]
-    const present = new Set(incoming.map(item => item?.args?.exchangeId))
-    let changed = false
-    for (const [sessionId, list] of Object.entries(queued)) {
-      if (sessionId === target) continue
-      if (!Array.isArray(list)) continue
-      const rest = []
-      for (const item of list) {
-        if (!ids.has(item?.args?.exchangeId)) { rest.push(item); continue }
-        queueChanged(item.args,sessionId)
-        if (!present.has(item.args.exchangeId)) {
-          incoming.push({ ...item, resumeOrigins: [...new Set([...(Array.isArray(item.resumeOrigins) ? item.resumeOrigins : []), sessionId])] })
-          present.add(item.args.exchangeId)
-        }
-        changed = true
+  rt.moveQueued = (sourceSession, target, messages) => {
+    if (sourceSession === target || !Array.isArray(queued[sourceSession])) return
+    if (queued[target] !== undefined && !Array.isArray(queued[target])) return
+    const forwarded = new Set(messages.flatMap(({ source }) => source?.kind === SOURCE_KIND && source.exchangeId
+      ? [JSON.stringify([source.exchangeId, source.role, source.roomId, source.senderSessionId,
+        source.senderPart, source.senderRoomId, source.reviewId, source.replyTo])] : []))
+    if (forwarded.size === 0) return
+    const route = args => JSON.stringify([args?.exchangeId, args?.role, args?.roomId, args?.fromId,
+      args?.fromPart, args?.fromRoomId, args?.reviewId, args?.replyTo])
+    const incoming = [...(queued[target] ?? [])]
+    const present = new Map(incoming.map((item, index) => [JSON.stringify([item?.args?.toId, route(item?.args)]), index]))
+    const rest = []
+    for (const item of queued[sourceSession]) {
+      const args = item?.args
+      const messageRoute = route(args)
+      if (!args || !forwarded.has(messageRoute)) {
+        rest.push(item)
+        continue
       }
-      if (rest.length === 0) delete next[sessionId]
-      else if (rest.length !== list.length) next[sessionId] = rest
+      queueChanged(args, sourceSession)
+      const identity = JSON.stringify([args.toId, messageRoute])
+      const index = present.get(identity)
+      if (index === undefined) {
+        present.set(identity, incoming.length)
+        incoming.push({ ...item, resumeOrigins:[...new Set([...(Array.isArray(item.resumeOrigins) ? item.resumeOrigins : []), sourceSession])] })
+      } else if (item.recoveryHold === 'history-seen' && incoming[index].recoveryHold !== 'history-seen') {
+        incoming[index] = { ...incoming[index], recoveryHold:'history-seen' }
+        queueChanged(incoming[index].args, target)
+      }
     }
-    if (!changed) return
-    next[target] = incoming
-    queued = next
+    if (rest.length === queued[sourceSession].length) return
+    queued = { ...queued, [target]:incoming, [sourceSession]:rest }
+    if (rest.length === 0) delete queued[sourceSession]
     persist()
   }
 
@@ -782,42 +822,63 @@ export function install(rt) {
   async function resumeTurn(sessionId, record) {
     // A restart does not prove whether an external effect happened. Keep the
     // original trigger and do not generate a second, unrelated exchange ID.
-    holdTurn(sessionId, record)
-    update(sessionId, current => current === undefined || current === record
-      ? { ...record, recoveryHold: 'interrupted outcome unknown' } : current)
+    const retained = retainedAtStartup.has(record)
+    // Both the marker and the matching archive were already on disk. The
+    // startup summary covers this hold. A review may still need reconciliation.
+    if (retained && (!record.trigger?.reviewId || record.trigger.reviewReceipt === true)) return
+    if (!retained) {
+      holdTurn(sessionId, record)
+      update(sessionId, current => current === undefined || current === record
+        ? { ...record, recoveryHold: heldReason } : current)
+    }
     await persist({ required: true })
-    if (record.trigger?.reviewId) {
+    if (record.trigger?.reviewId && record.trigger.reviewReceipt !== true) {
       await rt.goalReviewFailed?.(rt.roomOf(record.roomId), sessionId, record.trigger.reviewId)
     }
-    rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_UNCERTAIN_HOLD', text: `Interrupted work in ${sessionId} was retained without replay; inspect its original result before recovery.`, sessionId })
+    if (!retained) rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_UNCERTAIN_HOLD', text: `Interrupted work in ${sessionId} was retained without replay; inspect its original result before recovery.`, sessionId })
   }
   rt.holdInterruptedTurn = resumeTurn
 
   // Where a queued note goes now: its Session if it still is one, else the
   // current Session of its Bot, or of its group when the message went to one.
-  const sessionFor = (sessionId, args) => (rt.isBotSession(sessionId) ? sessionId
-    : args?.roomId === undefined ? rt.chatOf(args?.toId) : rt.roomOf(args.roomId)?.sessions?.[args.toId])
-
-  const setQueuedRecoveryHold = async (sessionId, exchangeId, recoveryHold) => {
-    const list = queued[sessionId]
-    if (!Array.isArray(list)) return
-    const matches = list.flatMap((item, index) => item?.args?.exchangeId === exchangeId ? [index] : [])
-    if (matches.length === 0) return
-    if (recoveryHold !== undefined && matches.length > 1) throw new Error('Queued exchange is ambiguous')
-    const next = [...list]
-    let changed = false
-    for (const index of matches) {
-      const current = list[index]
-      if (current.recoveryHold === recoveryHold) continue
-      const updated = { ...current }
-      if (recoveryHold === undefined) delete updated.recoveryHold
-      else updated.recoveryHold = recoveryHold
-      next[index] = updated
-      changed = true
+  const sessionFor = (sessionId, args) => {
+    if (typeof args?.toId !== 'string') return
+    const currentGroup = rt.groupOwners.get(sessionId)
+    const group = currentGroup ?? rt.pastOwners.get(sessionId)
+    if (group?.botId && group.botId !== args.toId) return
+    // A report's roomId identifies the group being reported on. Its original
+    // private recipient, like any other non-room delivery, keeps its own thread.
+    if (rt.chatOwners.has(sessionId)) {
+      return !currentGroup && rt.chatOwners.get(sessionId) === args.toId && args.role !== 'room' ? sessionId : undefined
     }
-    if (!changed) return
-    queued = { ...queued, [sessionId]:next }
-    queueChanged(next[matches[0]].args, sessionId)
+    const roomId = group?.roomId ?? (args.role === 'room' ? args.roomId : undefined)
+    if (roomId) {
+      if (args.role === 'room' && args.roomId !== undefined && args.roomId !== roomId) return
+      const room = rt.roomOf(roomId), target = room?.sessions?.[args.toId]
+      const owner = rt.groupOwners.get(target)
+      return room?.members?.includes(args.toId) && owner?.botId === args.toId && owner.roomId === roomId ? target : undefined
+    }
+    if (args.role === 'room' || group?.botId !== args.toId) return
+    return threadCurrentOfPart(rt.botOf(args.toId), sessionId)
+  }
+
+  const setQueuedRecoveryHold = async (sessionId, args, recoveryHold) => {
+    // A part can move while its history is being read. Locate the original note
+    // by its shared args object rather than changing another delivery with the same ID.
+    const containsNote = id => Array.isArray(queued[id]) && queued[id].some(item => item?.args === args)
+    if (!containsNote(sessionId)) sessionId = Object.keys(queued).find(containsNote)
+    if (sessionId === undefined) return
+    const list = queued[sessionId]
+    const index = list.findIndex(item => item?.args === args)
+    const current = list[index]
+    // Positive evidence of receipt survives a later stop, inbox check, or
+    // truncated history. Only actual uptake or explicit withdrawal retires it.
+    if (current.recoveryHold === 'history-seen' || current.recoveryHold === recoveryHold) return
+    const updated = { ...current }
+    if (recoveryHold === undefined) delete updated.recoveryHold
+    else updated.recoveryHold = recoveryHold
+    queued = { ...queued, [sessionId]:list.toSpliced(index, 1, updated) }
+    queueChanged(args, sessionId)
     await persist({ required:true })
   }
 
@@ -825,7 +886,7 @@ export function install(rt) {
   // cancelled is sent again. The notes stay queued until a turn takes the messages
   // up, so a send that fails here, or a Session that cannot be opened, leaves them
   // for the next start instead of losing them.
-  async function resendQueued(sessionId, list, held) {
+  async function resendQueued(sessionId, list, held, seenBeforeRestart) {
     for (const item of list) if (taken?.has(item?.args?.exchangeId) === true) held.add(item.args.exchangeId)
     const fresh = list.filter(item => rt.botOf(item.args?.toId) !== undefined
       && sessionFor(sessionId, item.args) !== undefined && taken?.has(item.args.exchangeId) !== true)
@@ -836,41 +897,59 @@ export function install(rt) {
       if (!logs.has(id)) logs.set(id, logOf(id))
       return logs.get(id)
     }
+    const heldCounts = { seen:0, unreadable:0 }
     for (const { args, resumeOrigins, recoveryHold, decisions } of fresh) {
       if (decisions?.at(-1)?.choice === 'ignored') { held.add(args.exchangeId); continue }
       const target = sessionFor(sessionId, args)
-      const room = args.roomId && args.role === 'room' ? rt.roomOf(args.roomId) : undefined
+      const room = args.role === 'room' ? rt.roomOf(args.roomId ?? rt.groupOwners.get(target)?.roomId) : undefined
       const blocked = () => room !== undefined && rt.goalRecoveryBlocked?.(room, args.toId) === true
+      const previouslySeen = recoveryHold === 'history-seen' || seenBeforeRestart.has(args)
+      if (previouslySeen) {
+        held.add(args.exchangeId)
+        if (!args.reviewId && !blocked()) continue
+      }
       if (!agents.has(target)) agents.set(target, await rt.resolveAgent(target))
       const agent = agents.get(target)
+      if (args.reviewReceipt === true) {
+        held.add(args.exchangeId)
+        const waiting = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
+          .filter(message => message.source?.exchangeId === args.exchangeId)
+        rt.keepQueued(target, waiting, () => { for (const message of waiting) agent.inbox?.remove?.(message.id) })
+        continue
+      }
       if (args.reviewId && args.role === 'room') {
         const room = rt.roomOf(args.roomId)
         const stillAllowed = rt.goalReviewAllowed?.(room, args.reviewId) === true
         const waiting = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
           .filter(message => message.source?.exchangeId === args.exchangeId)
-        if (!stillAllowed) for (const message of waiting) agent.inbox?.remove?.(message.id)
+        if (!stillAllowed) {
+          const remove = () => { for (const message of waiting) agent.inbox?.remove?.(message.id) }
+          if (previouslySeen) rt.keepQueued(target, waiting, remove)
+          else remove()
+        }
         held.add(args.exchangeId)
         if (waiting.length === 0) {
-          await setQueuedRecoveryHold(sessionId, args.exchangeId, 'review-uncertain')
+          await setQueuedRecoveryHold(target, args, 'review-uncertain')
           await rt.goalReviewFailed?.(room, target, args.reviewId)
           rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GOAL_REVIEW_UNCERTAIN', text: `Goal review ${args.reviewId} was not resent after restart; inspect the original delivery before recovery.` })
-        } else await setQueuedRecoveryHold(sessionId, args.exchangeId, undefined)
+        } else await setQueuedRecoveryHold(target, args, undefined)
         continue
       }
       if (blocked()) {
         held.add(args.exchangeId)
-        await setQueuedRecoveryHold(sessionId, args.exchangeId, 'work-stopped')
+        await setQueuedRecoveryHold(target, args, 'work-stopped')
         const waiting = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
           .filter(message => message.source?.exchangeId === args.exchangeId)
         rt.keepQueued(target, waiting, () => { for (const message of waiting) agent.inbox?.remove?.(message.id) })
         rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_STOPPED_HOLD', text: `Queued group delivery ${args.exchangeId} is held because its work is stopped or its stop state is unknown.`, sessionId: target })
         continue
       }
+      if (previouslySeen) continue
       const waiting = () => [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])]
         .some(message => message.source?.exchangeId === args.exchangeId)
       if (waiting()) {
         held.add(args.exchangeId)
-        if (recoveryHold !== undefined) await setQueuedRecoveryHold(sessionId, args.exchangeId, undefined)
+        if (recoveryHold !== undefined) await setQueuedRecoveryHold(target, args, undefined)
         continue
       }
       if (recoveryHold === 'prepared') {
@@ -892,9 +971,9 @@ export function install(rt) {
       const unreadable = histories.some(events => events === undefined)
       if (seen || unreadable) {
         held.add(args.exchangeId)
-        await setQueuedRecoveryHold(sessionId, args.exchangeId, seen ? 'history-seen' : 'history-unavailable')
+        await setQueuedRecoveryHold(target, args, seen ? 'history-seen' : 'history-unavailable')
         const why = seen ? 'it appeared in a previous turn; its outcome is not established' : 'a relevant Session history could not be read'
-        rt.warn('ds-bot: queued exchange %s for %s was not resent: %s; its recovery note is retained for review', args.exchangeId, target, why)
+        heldCounts[seen ? 'seen' : 'unreadable']++
         rt.noteFailure?.({ level: 'warn', source: 'turn', code: 'RESUME_DELIVERY_UNCERTAIN', text: `Queued exchange ${args.exchangeId} was not resent: ${why}. Its recovery note is retained for review.`, sessionId: target })
         continue
       }
@@ -905,11 +984,15 @@ export function install(rt) {
       // A request that waited through a restart reaches its target late: the work
       // it is for is marked, so the answer that comes back says so.
       if (args.role === 'request' || args.role === 'stopped') rt.lateWork?.(args.exchangeId)
-      await deliver({ ...args, sessionId: sessionFor(sessionId, args), steer: false, resent: true }, { beforeAdmission: () => {
-        if (blocked()) throw new Error('Queued group work was stopped before recovery admission')
+      await deliver({ ...args, ...(room ? { roomId:room.id } : {}), sessionId:target, steer:false, resent:true }, { beforeAdmission: () => {
+        if (sessionFor(sessionId,args) !== target || blocked()) throw new Error('Queued work changed destination or was stopped before recovery admission')
       } })
-        .then(() => setQueuedRecoveryHold(sessionId, args.exchangeId, undefined))
+        .then(() => setQueuedRecoveryHold(target, args, undefined))
         .catch(error => rt.warn('ds-bot: sending again what %s was sent failed: %s', sessionId, error))
+    }
+    if (heldCounts.seen || heldCounts.unreadable) {
+      rt.warn('ds-bot: %d queued exchange(s) for %s were not resent: %d appeared in history and %d whose history could not be read; individual recovery notes are retained for review',
+        heldCounts.seen + heldCounts.unreadable, sessionId, heldCounts.seen, heldCounts.unreadable)
     }
   }
 
@@ -997,7 +1080,10 @@ export function install(rt) {
     // The answer went up in another run: the work closes with what it said, and
     // nothing is sent twice.
     const back = rt.roomOf(asker.senderRoomId)?.sessions?.[sender]
-    const sent = await logOf(back ?? rt.chatOf(sender))
+    // The answer would have gone to the part of the asking Bot's chat the request came
+    // from, which is not its foreground chat when that part is a background one.
+    const where = back ?? (asker.senderPart === undefined ? undefined : threadCurrentOfPart(rt.botOf(sender), asker.senderPart)) ?? rt.chatOf(sender)
+    const sent = await logOf(where)
     if (sent !== undefined && answeredIn(sent, workId)) {
       rt.closeWork?.(workId, name, rt.answerText(workId, said, name))
       return
@@ -1056,6 +1142,31 @@ export function install(rt) {
     answerSender(rt, sessionId, asker, text, long)
   }
 
+  async function publishCompletedRoomReply(sessionId, record) {
+    if (!record?.roomId || !rt.restoreMissedRoomReply) return false
+    const { recoveryHold: _marker, ...original } = record
+    const key = createHash('sha256').update(JSON.stringify([sessionId, original])).digest('hex')
+    const held = heldTurns[key]
+    const current = () => ownsRecoveryView() && hasSingleOrigin(sessionId) && held && heldTurns[key] === held && !held.decisions?.length
+      && (turns[sessionId] === record || turns[sessionId] === undefined)
+    if (!current()) return false
+    if (!await rt.restoreMissedRoomReply(sessionId, record, current) || !current()) return false
+    // The group ledger now contains the terminal exchange receipt. If the
+    // process stops before this save, the next read accepts that same row.
+    const previous = turns[sessionId]
+    delete heldTurns[key]
+    unknownQueueGeneration += 1n
+    update(sessionId, value => value === record ? undefined : value)
+    try {
+      await persist({ required:true })
+    } catch (error) {
+      heldTurns[key] ??= held
+      if (previous && !turns[sessionId]) turns = { ...turns, [sessionId]:previous }
+      throw error
+    }
+    return true
+  }
+
   async function resumeAll() {
     await rt.load()
     if (rt.readOnly() !== undefined) return
@@ -1066,6 +1177,7 @@ export function install(rt) {
     // A Bot that is gone takes its notes with it; what a turn already read here
     // is done with.
     const pending = queued
+    const seenBeforeRestart = new WeakSet()
     for (const [sessionId,list] of Object.entries(pending)) if (Array.isArray(list)) for (const item of list) queueChanged(item?.args,sessionId)
     queued = {}
     for (const [oldId, list] of Object.entries(pending)) {
@@ -1078,6 +1190,7 @@ export function install(rt) {
           queued = { ...queued, [oldId]: [...(queued[oldId] ?? []), item] }
           continue
         }
+        if (item.recoveryHold === 'history-seen') seenBeforeRestart.add(item.args)
         const key = sessionFor(oldId, item.args) ?? oldId
         const resumeOrigins = [...new Set([...(Array.isArray(item.resumeOrigins) ? item.resumeOrigins : []), oldId])]
         queued = { ...queued, [key]: [...(queued[key] ?? []), { ...item, resumeOrigins }] }
@@ -1091,6 +1204,7 @@ export function install(rt) {
       if (first?.type === 'turn/end') {
         // The turn ended while DS Bot was not watching it: what it did is settled from
         // the Session's durable log.
+        if (await publishCompletedRoomReply(sessionId, record).catch(() => false)) continue
         await reconcileEnded(sessionId, record, first).catch(error => rt.warn('ds-bot: settling the work of %s failed: %s', sessionId, error))
         continue
       }
@@ -1102,7 +1216,7 @@ export function install(rt) {
     const held = new Set()
     for (const [sessionId, list] of Object.entries(dropped)) {
       if (!Array.isArray(list)) continue
-      await resendQueued(sessionId, list, held).catch(error => {
+      await resendQueued(sessionId, list, held, seenBeforeRestart).catch(error => {
         for (const item of list) if (typeof item?.args?.exchangeId === 'string') held.add(item.args.exchangeId)
         rt.warn('ds-bot: sending again what %s was sent failed: %s', sessionId, error)
       })
@@ -1115,6 +1229,7 @@ export function install(rt) {
         update(sessionId, current => current ?? record)
         continue
       }
+      if (await publishCompletedRoomReply(sessionId, record).catch(() => false)) continue
       await resumeTurn(sessionId, record).catch(error => rt.warn('ds-bot: picking up the turn of %s failed: %s', sessionId, error))
     }
     // What a group's members were asked for and will not pick up is settled now.
