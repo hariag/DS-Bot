@@ -158,6 +158,10 @@ test('board guard allows the ordinary workspace and rejects explicit board alias
   // written script must not read as a dynamic cd of this command.
   assert.deepEqual(await run('bash', { command: "cat > /tmp/ordinary.sh <<'EOF'\ncd \"$WT/Ground/web\" || exit 90\nEOF", workdir: team }, 'b'), { ran: true })
   const namedAlias = await run('bash', { command: "cat > /tmp/ordinary.txt <<'EOF'\nsee board-v1 for details\nEOF", workdir: team }, 'b')
+  // A multi-line single-quoted bash -c body is a real quote pair. The old
+  // tokenizer reset quotes at every newline once a heredoc appeared, so a script
+  // mixing both was misread as an unterminated quote and refused.
+  assert.deepEqual(await run('bash', { command: "cat > /tmp/fake-ssh <<'EOF'\n#!/bin/bash\necho hi\nEOF\nbash -c '\necho \"multi line\"\n$target true\n' 2>&1", workdir: team }, 'b'), { ran: true })
   assert.equal(namedAlias.ran, false)
   // A description is free text, not shell: an apostrophe there must not read as an
   // unterminated quote. Live data 20:35: two calls were refused only for this.
