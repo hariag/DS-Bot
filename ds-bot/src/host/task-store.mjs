@@ -633,6 +633,40 @@ const releaseIsDone = release => {
         return changed
       })
     },
+    // A Bot that accepted a card and then went silent used to leave the card
+    // working for ever (observed 28 h on T-VER-02). Return such a card to ready
+    // with a fresh execute action once no live turn exists for its delivery.
+    recoverStalledExecute({ now = Date.now(), maxAgeMs = 2 * 3600e3, liveSession = () => false } = {}) {
+      return tx(() => {
+        const recovered = []
+        for (const task of getAll()) {
+          if (task.status !== 'working' || task.blocked || task.stale || task.archivedAt) continue
+          const accepted = db.prepare("SELECT id,task_id AS taskId,revision,kind,actor,state,receipt FROM actions WHERE task_id=? AND kind='execute' AND state='accepted'").get(task.id)
+          if (!accepted) continue
+          const intent = db.prepare('SELECT target_session_id FROM admission_intents WHERE action_id=?').get(accepted.id)
+          if (intent?.target_session_id && liveSession(intent.target_session_id)) continue
+          const last = Math.max(0,
+            ...(task.comments ?? []).filter(item => Number.isFinite(item.at)).map(item => item.at),
+            ...(task.boardActivity ?? []).filter(entry => Number.isFinite(entry.at)).map(entry => entry.at))
+          if (!last || now - last < maxAgeMs) continue
+          const operationId = `stalled-execute:${task.id}:${task.revision}`
+          const receipt = 'stalled: no progress'
+          const changed = db.prepare("UPDATE actions SET state='cancelled',receipt=? WHERE id=? AND state='accepted'").run(receipt, accepted.id).changes
+          if (changed !== 1) throw new Error('stalled action recovery conflict')
+          addHistory.run(operationId, 'scheduler', task.id, JSON.stringify(accepted), JSON.stringify({ ...accepted, state:'cancelled', receipt }))
+          audit = { operationId, actor:'scheduler' }
+          try {
+            const next = { ...task, revision: task.revision + 1, actionRevision: task.revision + 1, status:'ready' }
+            next.comments = [...(task.comments ?? []), { id:operationId, author:'scheduler', at:now, workflowAction:'progress',
+              text:`The accepted execution made no progress for ${Math.round((now - last) / 3600e3)} hours with no live turn; the card returned to ready for dispatch.` }].slice(-50)
+            save(task, next)
+            action(next, 'execute', next.owner)
+            recovered.push(task.id)
+          } finally { audit = undefined }
+        }
+        return recovered
+      })
+    },
     // Internal refresh cursor only; callers must not expose global changes to
     // actors who cannot view every task in this database.
     version() {
