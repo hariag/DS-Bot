@@ -779,7 +779,12 @@ export function install(rt) {
     return !Array.isArray(notes) || notes.length > 0
   }
   const pendingBatches = room => Object.values(rt.state.roomBatches ?? {}).filter(batch => batch.roomId === room.id && batch.pending?.length)
-  const inspectionRequired = room => inspectionOnlyIdle(room.goal) || hasUnreadRoomDeliveries(room) || rt.roomBatchPending?.(room.id) === true
+  // The scheduled review must drive the board, not just look at it. Only a real stop
+  // (unknown legacy idle or a member stop) may turn it into a read-only inspection;
+  // unread room queue and pending call batches do not: the opening is already gated by
+  // quiet(), and a permanently fenced review used to leave reported stages and ready
+  // cards untouched for hours (2026-11-21).
+  const inspectionRequired = room => inspectionOnlyIdle(room.goal)
 
   // Old delivery notes do not reliably identify a task, but their recipient
   // can bound the uncertainty to that owner. Never infer an owner from text.
@@ -1669,7 +1674,7 @@ export function install(rt) {
       const attempt = { id, at:now, state:'admitting', adminId:admin.id, rootSessionId:agent.session.id,
         adminSessionId:room.sessions?.[admin.id],
         ...(typeof verifiedPrompt === 'string' && verifiedPrompt.trim() ? { scheduledPrompt:verifiedPrompt } : {}),
-        ...(inspectionRequired(room) ? { inspectOnly:true } : {}) }
+        ...(inspectionOnlyIdle(room.goal) ? { inspectOnly:true } : {}) }
       const options = { agent, reviewId:id, inspectOnly:attempt.inspectOnly === true }
       const message = nativeOpening && Object.freeze({ ...goalRelayMessage(room, 'nudge', '[Scheduled group board review]', 'DS Bot', options), id:openingMessageId })
       if (message && attempt.inspectOnly) attempt.nativeOpening = { id:openingMessageId,
