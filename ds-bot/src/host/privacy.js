@@ -369,12 +369,25 @@ export function install(rt) {
         .filter(key => typeof args[key] === 'string').map(key => args[key]).join('\n')
       const flat = fold(text.replace(/\\/g, '/'))
       blocked = flat.includes('board-v1') || flat.includes('tasks.sqlite')
+        // The Bot's private home stays closed even when nested quoting hides the
+        // word from the tokenizer ($HOME may appear inside an awk program).
+        || /\$(?:HOME|\{HOME\})[^\s"\'`]*\.dsh\b/.test(flat) || /(?:^|[\s"\'`(=])\.dsh\/bot\b/.test(flat)
       // A path to the ordinary workspace may share rt.home with board-v1.
       // Resolve individual shell words (including symlinks) instead of blocking
       // every command that mentions that home. Check directory arguments too.
       if (!blocked) {
         const words = shellWords(withoutHereDocuments(text))
-        if (words === undefined) blocked = true
+        // Bash's nested quoting (e.g. awk -F'"' inside a double-quoted string)
+        // can defeat this tokenizer even in ordinary, valid commands. Do not fail
+        // closed wholesale: block when the raw text can still hide a dynamic cd or
+        // a protected path, and otherwise keep the literal checks above.
+        if (words === undefined) {
+          const suspicious = /(^|[\s;&|(){}])cd\s+(?:["']?\s*)?[$`]/.test(text)
+            || /(?:~|\$HOME|\$\{HOME\}|\$DSH|\$\{DSH\}|\.dsh\/bot|board-v1|tasks\.sqlite)/.test(text)
+          const candidates = text.match(/(?:~|\/)[^\s"'`;|&<>()]*/g) ?? []
+          if (suspicious) blocked = true
+          else for (const candidate of candidates) if (await matches(candidate)) { blocked = true; break }
+        }
         else if (words.length > 4096) { blocked = true; tooComplex = true }
         else {
           const expand = (word, folder) => {
