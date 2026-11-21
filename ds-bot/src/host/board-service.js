@@ -52,7 +52,7 @@ export function install(rt) {
   const { ctx } = rt
   const active = new Set(), readers = new Set(), workers = new Set(), imageWaiters = [], uploadWaiters = []
   let imageReads = 0, uploads = 0
-  let closing = false, closePromise, instance, releaseTimer
+  let closing = false, closePromise, instance, releaseTimer, stalledTimer
   const writable = () => {
     if (closing || rt.stopping) throw new Error('Board service is closing')
     if (rt.readOnly() !== undefined) throw new Error('Board is read-only')
@@ -400,6 +400,22 @@ export function install(rt) {
       if (reportedParents) rt.warn?.('ds-bot: reported %d parent card(s) whose items are all done', reportedParents)
     } catch (error) {
       rt.warn?.('ds-bot: parent card reconciliation failed: %s', error?.message || error)
+    }
+    // A Bot that accepted a card and then went silent left the card working for
+    // ever (T-VER-02 stayed working 28 h with an accepted action and no turn).
+    // Return it to ready so the scheduler can dispatch it again.
+    const recoverStalled = () => {
+      try {
+        const recovered = store.recoverStalledExecute?.({ liveSession: sessionId => rt.live?.get(sessionId)?.turn !== undefined }) ?? []
+        if (recovered.length) rt.warn?.('ds-bot: returned %d stalled card(s) to ready: %s', recovered.length, recovered.join(', '))
+      } catch (error) {
+        rt.warn?.('ds-bot: stalled card recovery failed: %s', error?.message || error)
+      }
+    }
+    recoverStalled()
+    if (!stalledTimer) {
+      stalledTimer = setInterval(recoverStalled, 15 * 60_000)
+      stalledTimer.unref?.()
     }
     // A blocked or stale card cannot use its turn. The accepted action it still
     // carries must not keep the Bot's session busy: otherwise one parked card starves
@@ -1001,6 +1017,7 @@ export function install(rt) {
   const stop = () => closePromise ??= (async () => {
     closing = true
     if (releaseTimer) { clearInterval(releaseTimer); releaseTimer = undefined }
+    if (stalledTimer) { clearInterval(stalledTimer); stalledTimer = undefined }
     for (const waiter of imageWaiters.splice(0)) waiter.reject(new Error('Board service is closing'))
     for (const waiter of uploadWaiters.splice(0)) waiter.reject(new Error('Board service is closing'))
     for (const reader of readers) void reader.cancel().catch(() => {})
