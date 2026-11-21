@@ -286,6 +286,19 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
         replies:goal.comments.filter(comment=>comment.source!=='retained-goal-event').slice(-12)}}
     }
     if (!task) throw refused()
+    if (args.action === 'comment') {
+      const allowed = caller.actor === task.owner || caller.actor === task.reviewer || (task.participants ?? []).includes(caller.actor)
+      if (!direct(task, caller) || !allowed) throw refused()
+      if (!id(args.operationId)) throw new Error('comment requires a stable operation_id')
+      if (!Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 1) throw new Error('comment requires expected_revision from the current card')
+      const text = typeof args.note === 'string' ? args.note : ''
+      if (!text.trim() || Buffer.byteLength(text) > 2048) throw new Error('comment requires note text')
+      const command = { operationId:args.operationId, taskId:task.id, expectedRevision:args.expectedRevision, actor:caller.actor, type:'card-comment', value:{ text } }
+      const context = { exec, caller, roomId:args.roomId, taskId:task.id, revision:args.expectedRevision, action:'comment' }
+      const result = scope.run(context, () => store.command(command))
+      await rt.notifyBoardMentions?.(result.id, text, args.operationId, caller.actor)
+      return { task: projectDirect(result, caller) }
+    }
     if (args.action === 'show') {
       if (direct(task, caller)) {
         const openChanges = store.list().filter(other => other.change?.sourceTaskId === task.id && direct(other, caller)
