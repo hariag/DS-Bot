@@ -1247,7 +1247,7 @@ export function install(rt) {
     // With nothing to pick up, the group batches a restart left are settled at once.
     const timer = pending
       ? setTimeout(() => { reportHolds(); void resumeAll().catch(error => rt.warn('ds-bot: picking up interrupted work failed: %s', error)) }, RESUME_DELAY_MS)
-      : setTimeout(() => { reportHolds(); void rt.load().then(() => rt.settleRoomBatches?.()).catch(error => rt.warn('ds-bot: settling group batches failed: %s', error)) }, 0)
+      : setTimeout(() => { reportHolds(); void rt.load().then(() => rt.reconcileTasksAfterRestart?.(new Set())).then(() => rt.settleRoomBatches?.()).catch(error => rt.warn('ds-bot: settling group batches failed: %s', error)) }, 0)
     timer?.unref?.()
     // What the turns stopped by this shutdown left stays as last noted.
     return () => {
