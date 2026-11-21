@@ -1548,6 +1548,22 @@ export function install(rt) {
       reviewNotified.add(attempt.id)
       rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GOAL_REVIEW_UNCERTAIN', text: `Periodic goal review ${attempt.id} for ${room.name} is still unresolved; inspect its original work before recovery.` })
     }
+    // An uncertain full review whose nudge never reached the admin has no terminal
+    // proof and used to stay fenced for ever, blocking every later review (R&D
+    // fc624356, 2026-11-21 16:35). After the review interval, release it so the
+    // next sweep opens a fresh one. Active admin work is never released here.
+    if (attempt && ['admitting', 'uncertain'].includes(attempt.state) && attempt.inspectOnly !== true
+      && !attempt.terminalFailure && attempt.adminCompleted !== true && !reviewInputs.get(attempt)?.admin
+      && reviewEligible(goal) && !stopsPending.has(room.id) && !reviewing.has(room.id)
+      && Number.isFinite(attempt.at) && now - attempt.at >= GOAL_REVIEW_INTERVAL_MS
+      && (rt.workingInRoom?.(room) ?? []).length === 0) {
+      try {
+        finishReview(room, 'nudge-limit', now)
+        await rt.save({ required: true })
+        rt.warn('ds-bot: released an unanswered goal review %s in %s after the review interval', attempt.id, room.name)
+      } catch (error) { rt.warn('ds-bot: releasing goal review %s failed: %s', attempt.id, error?.message || error) }
+      return
+    }
     if (attempt?.inspectOnly === true && attempt.state === 'uncertain' && reviewEligible(goal)
       && !stopsPending.has(room.id) && Number.isFinite(attempt.at) && now - attempt.at >= GOAL_REVIEW_INTERVAL_MS) {
       const previous = blockedReviewReads.get(attempt)
