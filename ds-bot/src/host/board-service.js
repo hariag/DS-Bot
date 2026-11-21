@@ -401,10 +401,16 @@ export function install(rt) {
     } catch (error) {
       rt.warn?.('ds-bot: parent card reconciliation failed: %s', error?.message || error)
     }
-    const busySession = (sessionId, actionId) => store.list().some(task => store.listActions(task.id).some(action => {
-      if (action.id === actionId || !['claimed','accepted','uncertain'].includes(action.state)) return false
-      return store.admission(action.id)?.targetSessionId === sessionId
-    }))
+    // A blocked or stale card cannot use its turn. The accepted action it still
+    // carries must not keep the Bot's session busy: otherwise one parked card starves
+    // every other card queued for that Bot (39 hours observed on one ready card).
+    const busySession = (sessionId, actionId) => store.list().some(task => {
+      if (task.blocked || task.stale) return false
+      return store.listActions(task.id).some(action => {
+        if (action.id === actionId || !['claimed','accepted','uncertain'].includes(action.state)) return false
+        return store.admission(action.id)?.targetSessionId === sessionId
+      })
+    })
     const admission = {
       available: async () => {
         if (closing || rt.stopping || typeof rt.deliver !== 'function' || typeof rt.prepareBoardTaskMessage !== 'function') return false
