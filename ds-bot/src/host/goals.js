@@ -1736,7 +1736,10 @@ export function install(rt) {
       if (reviewDisposed || rt.readOnly() !== undefined || typeof rt.resolveAgent !== 'function') return
       for (const room of Object.values(rt.state.rooms ?? {})) {
         const goal = room.goal
-        if (!goal || goal.status !== 'active' || goal.idle !== true || goal.reviewAttempt) continue
+        // An attempt may be stuck in admitting/uncertain after a failed delivery;
+        // runScheduledRoomReview's reconcile path is what recovers it, so do not
+        // skip the room just because an attempt exists.
+        if (!goal || goal.status !== 'active' || goal.idle !== true) continue
         if (inspectionOnlyIdle(goal) || !reviewEligible(goal) || !reviewIsDue(goal)) continue
         if (Date.now() - (room.scheduledReviewOccurrence?.at ?? 0) < 10 * 60e3) continue
         const sessionId = rt.sessionOfRoom(room)
