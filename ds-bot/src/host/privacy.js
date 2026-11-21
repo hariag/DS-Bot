@@ -50,15 +50,11 @@ function withoutHereDocuments(text) {
 
 function shellWords(text) {
   const words = []
-  const hasHereDocument = /<<-?\s*['"]?[A-Za-z_][\w]*/.test(text)
   let word = '', quote, escape = false
   const add = () => { if (word !== '') words.push(word); word = '' }
   for (const char of text) {
     if (escape) { word += char; escape = false; continue }
     if (char === '\\' && quote !== "'") { escape = true; continue }
-    // Quotes in a here-document body are plain data, not necessarily pairs.
-    // Keep scanning subsequent lines for explicit protected paths.
-    if (char === '\n' && quote && hasHereDocument) { quote = undefined; add(); continue }
     if (quote) { if (char === quote) quote = undefined; else word += char; continue }
     if (char === "'" || char === '"') { quote = char; continue }
     if (/\s|[|;&()<>]/.test(char)) { add(); continue }
