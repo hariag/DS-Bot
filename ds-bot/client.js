@@ -41545,6 +41545,39 @@ function TypeBlock({ task, editable, disabled, onSave }) {
     error ? (0, import_react55.createElement)("p", { className: "bt-form-error", role: "alert" }, error) : null
   );
 }
+function ParticipantsBlock({ task, actors, commands, disabled = false, onCommand }) {
+  const current2 = Array.isArray(task.participants) ? task.participants : [];
+  const canManage = commandOf(commands, "participants") && !task.archivedAt && !disabled && typeof onCommand === "function";
+  const candidates = (Array.isArray(actors) ? actors : []).filter((actor) => actor && typeof actor.id === "string" && actor.id !== "user" && actor.id !== task.owner && actor.id !== task.reviewer && !current2.includes(actor.id));
+  const [pick2, setPick] = (0, import_react55.useState)("");
+  if (!canManage && !current2.length) return null;
+  return (0, import_react55.createElement)(
+    SideSection,
+    { title: t("Participants") },
+    current2.length ? (0, import_react55.createElement)("div", { className: "bt-card-people" }, current2.map((id) => (0, import_react55.createElement)(
+      "div",
+      { key: id, className: "bt-card-person" },
+      (0, import_react55.createElement)(MemberAvatar, { name: actorName(id, actors), size: 24 }),
+      (0, import_react55.createElement)("span", null, (0, import_react55.createElement)("strong", null, actorName(id, actors))),
+      canManage ? (0, import_react55.createElement)("button", { type: "button", className: "bt-card-mini", onClick: () => void onCommand(task, { type: "participants" }, { remove: [id] }) }, t("Remove")) : null
+    ))) : (0, import_react55.createElement)("p", { className: "bt-card-note" }, t("Mention a teammate in a comment, or add one here.")),
+    canManage ? (0, import_react55.createElement)(
+      "div",
+      { className: "bt-card-form" },
+      (0, import_react55.createElement)("label", { className: "bt-field" }, (0, import_react55.createElement)("span", null, t("Add a participant")), (0, import_react55.createElement)(
+        "select",
+        { value: pick2, "aria-label": t("Add a participant"), onChange: (event) => setPick(event.target.value) },
+        (0, import_react55.createElement)("option", { value: "" }, t("Choose a Bot")),
+        candidates.map((actor) => (0, import_react55.createElement)("option", { key: actor.id, value: actor.id }, actor.name || actor.id))
+      )),
+      (0, import_react55.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled: !pick2, onClick: () => {
+        const id = pick2;
+        setPick("");
+        void onCommand(task, { type: "participants" }, { add: [id] });
+      } }, t("Add"))
+    ) : null
+  );
+}
 function PeopleBlock({ task, actors, canEdit = false, disabled = false, onAssign }) {
   const [editing, setEditing] = (0, import_react55.useState)(false);
   const [owner, setOwner] = (0, import_react55.useState)(task.owner ?? "");
@@ -42296,6 +42329,7 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
           { className: "bt-card-side" },
           (0, import_react55.createElement)(StatusBlock, { task, commands, canMove, canSchedule, disabled: uncertain || busy, onCommand }),
           (0, import_react55.createElement)(PeopleBlock, { task, actors, canEdit, disabled: uncertain || busy, onAssign: assignPeople }),
+          (0, import_react55.createElement)(ParticipantsBlock, { task, actors, commands, disabled: uncertain || busy, onCommand }),
           !legacy ? (0, import_react55.createElement)(CardTextEditor, { task, field: "stage", editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }) : null,
           (0, import_react55.createElement)(TypeBlock, { task, editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }),
           (0, import_react55.createElement)(DueEditor, { task, editable: canDetails, disabled: uncertain || busy, legacy, onSave: detailsSave }),
