@@ -154,6 +154,11 @@ test('board guard allows the ordinary workspace and rejects explicit board alias
   // report tables like "200 / 1,499,007 B" and were refused as board reads.
   assert.deepEqual(await run('bash', { command: "cat <<'EOF'\nentry: 200 / 1,499,007 B\ndisk /: 355,862,488 used\nEOF", workdir: team }, 'b'), { ran: true })
   assert.deepEqual(await run('bash', { command: "echo '200 / 421 B'", workdir: team }, 'b'), { ran: true })
+  // A here-document body is data, not the shell being run: a dynamic cd inside the
+  // written script must not read as a dynamic cd of this command.
+  assert.deepEqual(await run('bash', { command: "cat > /tmp/ordinary.sh <<'EOF'\ncd \"$WT/Ground/web\" || exit 90\nEOF", workdir: team }, 'b'), { ran: true })
+  const namedAlias = await run('bash', { command: "cat > /tmp/ordinary.txt <<'EOF'\nsee board-v1 for details\nEOF", workdir: team }, 'b')
+  assert.equal(namedAlias.ran, false)
   // A description is free text, not shell: an apostrophe there must not read as an
   // unterminated quote. Live data 20:35: two calls were refused only for this.
   assert.deepEqual(await run('bash', { command: 'cat ordinary.txt', description: "check the other session's state", workdir: team }, 'b'), { ran: true })
