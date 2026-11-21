@@ -166,6 +166,9 @@ test('board guard allows the ordinary workspace and rejects explicit board alias
   // Nested awk quoting inside a double-quoted string defeats the tokenizer in an
   // ordinary gate script; that must not be read as a board read.
   assert.deepEqual(await run('bash', { command: "set -u\ncd /tmp/worktrees/qa-gate\nLOCK=/data2t/working/aios/team/gates/LOAD-LOCK.json\nst=$(awk -F'\"' '/\"state\"/ {print $4; exit}' \"$LOCK\")\necho \"STILL_HELD owner=$(awk -F'\"' '/\"owner\"/ {print $4; exit}' \"$LOCK\")\"", workdir: team }, 'b'), { ran: true })
+  // A worktree script resolves its own literal cd target; only unexplained
+  // variables keep failing closed.
+  assert.deepEqual(await run('bash', { command: 'set +e\nWT=/tmp/worktrees/fe-lazy01\necho "exists=$(test -d "$WT" && echo yes || echo no)"\ncd "$WT" 2>/dev/null && pwd\n', workdir: team }, 'b'), { ran: true })
   // The same unparsable quoting must not open the private Bot home.
   const weirdHome = await run('bash', { command: "set -u\nX=$(awk -F'\"' '/\"x\"/ {print $2; exit}' \"$HOME/.dsh/bot/state.json\")\necho \"$X\"", workdir: team }, 'b')
   assert.equal(weirdHome.ran, false)
