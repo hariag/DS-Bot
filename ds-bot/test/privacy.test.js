@@ -163,6 +163,12 @@ test('board guard allows the ordinary workspace and rejects explicit board alias
   // mixing both was misread as an unterminated quote and refused.
   assert.deepEqual(await run('bash', { command: "cat > /tmp/fake-ssh <<'EOF'\n#!/bin/bash\necho hi\nEOF\nbash -c '\necho \"multi line\"\n$target true\n' 2>&1", workdir: team }, 'b'), { ran: true })
   assert.equal(namedAlias.ran, false)
+  // Nested awk quoting inside a double-quoted string defeats the tokenizer in an
+  // ordinary gate script; that must not be read as a board read.
+  assert.deepEqual(await run('bash', { command: "set -u\ncd /tmp/worktrees/qa-gate\nLOCK=/data2t/working/aios/team/gates/LOAD-LOCK.json\nst=$(awk -F'\"' '/\"state\"/ {print $4; exit}' \"$LOCK\")\necho \"STILL_HELD owner=$(awk -F'\"' '/\"owner\"/ {print $4; exit}' \"$LOCK\")\"", workdir: team }, 'b'), { ran: true })
+  // The same unparsable quoting must not open the private Bot home.
+  const weirdHome = await run('bash', { command: "set -u\nX=$(awk -F'\"' '/\"x\"/ {print $2; exit}' \"$HOME/.dsh/bot/state.json\")\necho \"$X\"", workdir: team }, 'b')
+  assert.equal(weirdHome.ran, false)
   // A description is free text, not shell: an apostrophe there must not read as an
   // unterminated quote. Live data 20:35: two calls were refused only for this.
   assert.deepEqual(await run('bash', { command: 'cat ordinary.txt', description: "check the other session's state", workdir: team }, 'b'), { ran: true })
