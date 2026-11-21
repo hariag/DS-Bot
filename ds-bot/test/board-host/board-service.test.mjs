@@ -1363,3 +1363,16 @@ test('human goal comments remain available when the task has many workflow repli
   assert.equal(comments.length,101)
   assert.equal(comments.filter(comment=>comment.author==='user').length,1)
 })
+
+test('the board summary counts the same root cards the status lanes render', async t => {
+  const { rt } = fixture(t)
+  const make = (id, value) => rt.boardCall('board-command', { scope, operationId:`create-${id}`, taskId:id, type:'create', value })
+  await make('root-summary', { title:'root card', owner:'one', reviewer:'two', acceptance:'a', dependencies:[], type:'feature' })
+  await make('child-summary', { title:'child item', owner:'one', reviewer:'two', acceptance:'a', dependencies:[], parentTaskId:'root-summary', type:'development' })
+  const view = await rt.boardCall('board-list', { scope })
+  assert.equal(view.tasks.length, 2)
+  assert.equal(view.summary.lanes, 1, 'only the root card occupies a lane')
+  const total = Object.values(view.summary.statuses).reduce((sum, n) => sum + n, 0)
+  assert.equal(total, 1, 'status counts add up to the lane population')
+  assert.equal(view.summary.statuses.proposed, 1)
+})

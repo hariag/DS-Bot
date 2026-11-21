@@ -96,14 +96,19 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
           .map(bot => ({ id:bot.id, name:bot.name, role:bot.role ?? '' }))]))
       const now = Date.now()
       const activeTasks = board.tasks.filter(task => !task.archivedAt)
+      // The status lanes render root cards only; items hang under their parent in the
+      // same lane, and goal cards (legacy) and personal reminders have their own
+      // sections. The summary line must count the same population as the lanes, or it
+      // reports work (and done cards) that no lane shows.
+      const laneTasks = activeTasks.filter(task => !task.legacy && !task.parentTaskId && !task.personalProgress)
       board.summary = {
         total: activeTasks.length,
-        archived: board.tasks.length - activeTasks.length,
-        statuses: Object.fromEntries(['draft','proposed','waiting','ready','working','reported','done','cancelled'].map(status => [status, activeTasks.filter(task => task.status === status).length])),
-        types: Object.fromEntries((activeTasks.reduce((map, task) => { const type = task.type ?? 'other'; map.set(type, (map.get(type) ?? 0) + 1); return map }, new Map()))),
-        overdue: activeTasks.filter(task => task.dueDate && task.dueComplete !== true && new Date(task.dueDate).getTime() < now).length,
-        blocked: activeTasks.filter(task => task.blocked || task.stale).length,
-        unassigned: activeTasks.filter(task => !task.owner || task.owner === 'user').length,
+        lanes: laneTasks.length,
+        statuses: Object.fromEntries(['draft','proposed','waiting','ready','working','reported','done','cancelled'].map(status => [status, laneTasks.filter(task => task.status === status).length])),
+        types: Object.fromEntries((laneTasks.reduce((map, task) => { const type = task.type ?? 'other'; map.set(type, (map.get(type) ?? 0) + 1); return map }, new Map()))),
+        overdue: laneTasks.filter(task => task.dueDate && task.dueComplete !== true && new Date(task.dueDate).getTime() < now).length,
+        blocked: laneTasks.filter(task => task.blocked || task.stale).length,
+        unassigned: laneTasks.filter(task => !task.owner || task.owner === 'user').length,
         releases: releases.length,
       }
       board.activity = board.tasks.flatMap(task => (Array.isArray(task.boardActivity) ? task.boardActivity : [])
