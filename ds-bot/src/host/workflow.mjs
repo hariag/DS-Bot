@@ -199,8 +199,20 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       if (!id(args.operationId)) required.push('a stable operation_id')
       if (!args.change?.value) required.push('change.value with the card fields')
       if (required.length) throw new Error(`board_task register requires ${required.join(', ')}`)
+      // Bots know each other by display name, not by session id. Resolve the two
+      // people fields against this room's members before intake authorizes them;
+      // otherwise a perfectly normal `owner: "前端开发"` is refused as unauthorized.
+      const room = rt.roomOf?.(caller.roomId)
+      const resolveMember = name => {
+        if (typeof name !== 'string' || !name || rt.botOf?.(name)) return name
+        const bot = (room?.members ?? []).map(id => rt.botOf?.(id)).find(candidate => candidate?.name === name)
+        return bot?.id ?? name
+      }
+      const fields = { ...args.change.value }
+      if (Object.hasOwn(fields, 'owner')) fields.owner = resolveMember(fields.owner)
+      if (Object.hasOwn(fields, 'reviewer')) fields.reviewer = resolveMember(fields.reviewer)
       const request = prepareBoardIntake({actor:caller.actor, scope:`room:${caller.roomId}`, taskId:args.taskId,
-        operationId:args.operationId, parentTaskId:args.parentTaskId, releaseId:args.releaseId, value:args.change.value})
+        operationId:args.operationId, parentTaskId:args.parentTaskId, releaseId:args.releaseId, value:fields})
       if (!intakeAllowed(caller, request.task)) throw refused()
       const existing = store.get(args.taskId)
       if (existing && !direct(existing, caller)) {
