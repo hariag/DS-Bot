@@ -1536,6 +1536,12 @@ export function install(rt) {
     await rt.save({ required: true })
   }
 
+  // Work can outlive its round, so settlement checks an otherwise quiet room.
+  // A settlement event is not evidence of progress: turn/end and subagent/end
+  // also fire after an admin [PASS] or a failed turn. Keep the slot non-empty
+  // to allow the check, but do not reset the idle check budget.
+  const SETTLE_ROUND = Object.freeze({ stoppedOnly: false, slots: Object.freeze([{ id: '', worked: false }]) })
+
   async function reconcileOriginalReview(room, now) {
     if (reviewDisposed) return
     await rt.load()
@@ -1933,7 +1939,7 @@ export function install(rt) {
       const member = rt.botOf(self)
       if (member === undefined) return 'Only Bots on the team can use group_goal.'
       const action = String(args.action ?? '')
-      const origin = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
+      const origin = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId ?? rt.taskOwners?.get(sessionId)?.roomId)
       if (rt.pastOwners.has(sessionId) || (origin && !origin.members.includes(self))) return 'This group session is no longer current. Open the target group again.'
       const group = args.group?.trim(), roomId = args.room_id?.trim()
       if ((args.group !== undefined && !group) || (args.room_id !== undefined && !roomId)) return 'The supplied group or room_id is empty. Use an exact group or omit it inside that group.'
