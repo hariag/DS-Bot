@@ -1208,10 +1208,25 @@ const releaseIsDone = release => {
           }
           case 'card-comment': {
             keysOnly(value,['text'])
-            if(actor!=='user'||typeof value.text!=='string'||!value.text.trim()||Buffer.byteLength(value.text)>2048)throw new Error('invalid card comment')
+            if(!actor||actor==='scheduler'||typeof value.text!=='string'||!value.text.trim()||Buffer.byteLength(value.text)>2048)throw new Error('invalid card comment')
+            // The instance user writes from the board UI; a Bot participates from
+            // the card it owns, reviews, or was explicitly added to.
+            if(actor!=='user'&&actor!==old.owner&&actor!==old.reviewer&&!(old.participants??[]).includes(actor))throw new Error('not a card participant')
             const comments=Array.isArray(old.comments)?old.comments:[]
             if(comments.filter(comment => !comment.workflowAction).length>=100)throw new Error('card comment limit reached')
-            next.comments=[...comments,{id:operationId,author:'user',text:value.text.trim(),at:Date.now()}]
+            next.comments=[...comments,{id:operationId,author:actor,text:value.text.trim(),at:Date.now()}]
+            break
+          }
+          case 'participants': {
+            keysOnly(value,['add','remove'])
+            if(actor!=='user'&&actor!==old.owner&&actor!==old.reviewer)throw new Error('not a card participant')
+            const list = current => Array.isArray(value[current]) ? value[current] : []
+            for (const id of [...list('add'), ...list('remove')]) requireId(id, 'participant id')
+            const people = new Set(old.participants ?? [])
+            for (const id of list('remove')) people.delete(id)
+            for (const id of list('add')) if (id !== old.owner && id !== old.reviewer) people.add(id)
+            if (people.size > 20) throw new Error('too many participants')
+            next.participants = [...people]
             break
           }
           case 'card-comment-edit': {

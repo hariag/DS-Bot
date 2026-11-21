@@ -1376,3 +1376,31 @@ test('the board summary counts the same root cards the status lanes render', asy
   assert.equal(total, 1, 'status counts add up to the lane population')
   assert.equal(view.summary.statuses.proposed, 1)
 })
+
+test('a board comment mention joins the member and notifies it', async t => {
+  const { rt } = fixture(t)
+  rt.state.bots.three = { name:'Three' }
+  rt.state.rooms.group.members.push('three')
+  rt.state.rooms.group.sessions = { one:'group-one', two:'group-two', three:'group-three' }
+  const created = await rt.boardCall('board-command', create)
+  const commented = await rt.boardCall('board-command', { scope, operationId:'comment-mention-1', taskId:created.id,
+    expectedRevision:created.revision, type:'card-comment', value:{ text:'@Three please check the acceptance evidence' } })
+  assert.equal(commented.status, 'proposed')
+  await new Promise(resolve => setTimeout(resolve, 50))
+  const task = (await rt.boardCall('board-list', { scope })).tasks.find(item => item.id === created.id)
+  assert.deepEqual(task.participants, ['three'])
+  assert.ok(rt.state.rooms.group.sessions.three)
+})
+
+test('participants can be added and removed on a card in any status', async t => {
+  const { rt } = fixture(t)
+  rt.state.bots.three = { name:'Three' }
+  rt.state.rooms.group.members.push('three')
+  const created = await rt.boardCall('board-command', create)
+  const added = await rt.boardCall('board-command', { scope, operationId:'participants-1', taskId:created.id,
+    expectedRevision:created.revision, type:'participants', value:{ add:['three'] } })
+  assert.deepEqual(added.participants, ['three'])
+  const removed = await rt.boardCall('board-command', { scope, operationId:'participants-2', taskId:created.id,
+    expectedRevision:added.revision, type:'participants', value:{ remove:['three'] } })
+  assert.deepEqual(removed.participants, [])
+})
