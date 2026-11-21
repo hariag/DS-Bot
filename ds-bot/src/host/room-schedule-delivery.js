@@ -92,6 +92,26 @@ export function installRoomScheduleDelivery(rt) {
     })
   }
 
+  // A managed reminder that lands together with ordinary room traffic is stripped
+  // from that turn. Silently dropping it loses the whole cycle (the room is busy
+  // nearly all day), so ask for the review again as a normal nudge once the room is
+  // quiet. The occurrence key keeps retries idempotent; the next ten-minute tick is
+  // still the fallback if every retry finds the room busy.
+  const retriggers = new Map()
+  function retryScheduledReview(room, binding, agent, key, tries = 0) {
+    if (retriggers.has(key) || tries >= 6) return
+    const timer = setTimeout(() => {
+      retriggers.delete(key)
+      void rt.runScheduledRoomReview(room, key, agent, undefined, binding.prompt, undefined)
+        .then(outcome => {
+          if (outcome === 'busy' || outcome === 'pending') retryScheduledReview(room, binding, agent, key, tries + 1)
+        })
+        .catch(error => rt.warn?.('ds-bot: deferred group check in %s failed: %s', room.id, error))
+    }, 15000 + tries * 15000)
+    timer.unref?.()
+    retriggers.set(key, timer)
+  }
+
   rt.ctx.on('agent/pre-step', async ({ agent, messages, step, turn }, next) => {
     if (!messages?.some(message => message.source?.kind === 'schedule')) return next()
     await rt.load()
@@ -120,7 +140,13 @@ export function installRoomScheduleDelivery(rt) {
       const id = scheduleChangeId(message)
       return id && rt.managedRoomSchedule?.(id, agent.id)
     }
-    if (step !== 1 || retained.some(message => !contextOnly(message) && !ownChange(message))) return { ...decision, messages: retained }
+    if (step !== 1 || retained.some(message => !contextOnly(message) && !ownChange(message))) {
+      for (const { entry, binding } of work) {
+        const room = rt.roomOf(binding.roomId)
+        if (room) retryScheduledReview(room, binding, agent, JSON.stringify([entry.schedule_id, entry.occurrence_at]))
+      }
+      return { ...decision, messages: retained }
+    }
     // All managed reminders in this turn are consumed. Even a recovered batch
     // of ticks for the same room may open at most one administrative check.
     const latest = work.sort((a,b) => Date.parse(b.entry.occurrence_at) - Date.parse(a.entry.occurrence_at))[0]
