@@ -395,6 +395,12 @@ export function install(rt) {
     })
     const interrupted = store.holdInterruptedAdmissions()
     if (interrupted) rt.warn?.('ds-bot: board scheduler: held %s interrupted admission(s) for review', interrupted)
+    try {
+      const reportedParents = store.reconcileItemParents?.() ?? 0
+      if (reportedParents) rt.warn?.('ds-bot: reported %d parent card(s) whose items are all done', reportedParents)
+    } catch (error) {
+      rt.warn?.('ds-bot: parent card reconciliation failed: %s', error?.message || error)
+    }
     const busySession = (sessionId, actionId) => store.list().some(task => store.listActions(task.id).some(action => {
       if (action.id === actionId || !['claimed','accepted','uncertain'].includes(action.state)) return false
       return store.admission(action.id)?.targetSessionId === sessionId
