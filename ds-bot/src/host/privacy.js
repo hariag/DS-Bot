@@ -28,6 +28,26 @@ const asShell = (path) => {
 
 // This is a conservative inspection of explicit shell words, not a shell parser
 // or an OS sandbox. Preserve quoted path fragments so aliases can be resolved.
+
+// Here-document bodies are data, not commands. The word-level checks below (a
+// dynamic `cd`, an ancestor path) must not run on them: a script that merely
+// contains `cd "$WT/..."` was refused as a board read. The literal alias check
+// above still scans the whole text.
+function withoutHereDocuments(text) {
+  const lines = text.split('\n'), kept = []
+  let delimiter
+  for (const line of lines) {
+    if (delimiter !== undefined) {
+      if (line.trimEnd() === delimiter) delimiter = undefined
+      continue
+    }
+    kept.push(line)
+    const found = /<<-?\s*(['"]?)([A-Za-z_][\w]*)\1/.exec(line)
+    if (found) delimiter = found[2]
+  }
+  return kept.join('\n')
+}
+
 function shellWords(text) {
   const words = []
   const hasHereDocument = /<<-?\s*['"]?[A-Za-z_][\w]*/.test(text)
@@ -357,7 +377,7 @@ export function install(rt) {
       // Resolve individual shell words (including symlinks) instead of blocking
       // every command that mentions that home. Check directory arguments too.
       if (!blocked) {
-        const words = shellWords(text)
+        const words = shellWords(withoutHereDocuments(text))
         if (words === undefined) blocked = true
         else if (words.length > 4096) { blocked = true; tooComplex = true }
         else {

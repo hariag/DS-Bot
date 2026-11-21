@@ -47,3 +47,13 @@ test('a later allow policy cannot bypass the real inspection tool guard', async 
     await ctx.fiber.dispose()
   }
 })
+
+test('inspection allows the evidence reads its prompt names and still refuses writes', () => {
+  const live = new Map([['review-admin', { info: { reviewInspect: true, reviewId: 'review-1' } }]])
+  const guard = goalReviewGuard(live, () => undefined, () => undefined, () => false)
+  const call = name => guard({ agent: { id: 'review-admin' }, name, arguments: {} })
+  assert.equal(call('read'), undefined)
+  assert.equal(call('glob'), undefined)
+  assert.equal(call('grep'), undefined)
+  assert.match(call('write'), /delivery inspection/)
+})
