@@ -1423,6 +1423,15 @@ export function install(rt) {
       return goalReviewGuard(rt.live, rt.roomOf, (name, agentId) => rt.pickRoom(name, rt.selfOf(agentId)))(exec)
     }
     if (info?.reviewId && !goalReviewAllowed(rt.roomOf(info.roomId), info.reviewId)) {
+      const room = rt.roomOf(info.roomId)
+      // The admin posts its verdict first and calls the owners it named right after.
+      // Once the verdict finishes the review those calls no longer match a live
+      // attempt, and refusing them left the named owners uncalled ("review was
+      // stopped or its identity changed"). The same admin session may still send the
+      // verdict's own follow-ups while this occurrence is current.
+      const verdictCurrent = room?.scheduledReviewOccurrence?.reviewId === info.reviewId
+        && room?.goal?.reviewAttempt?.id !== info.reviewId && room?.sessions?.[room.admin] === exec.agent?.id
+      if (verdictCurrent && (exec.name === 'message_bot' || (exec.name === 'group_goal' && exec.arguments?.action === 'review-follow-up'))) return undefined
       if (exec.name === 'list_bots' || (exec.name === 'group_goal' && exec.arguments?.action === 'show')) return undefined
       return 'The goal review was stopped or its identity changed; no further action is allowed.'
     }
