@@ -79,7 +79,7 @@ export function boardList({ scope, principal, rooms = {}, bots = {}, tasks = [],
       ...(task.archivedAt ? { archivedAt: task.archivedAt } : {}),
       coverImageId: task.coverImageId ?? null,
       labels: task.labels ?? [], checklist: task.checklist ?? [],
-      comments: task.comments ?? [], boardActivity: task.boardActivity ?? [],
+      comments: task.comments ?? [], participants: task.participants ?? [], boardActivity: task.boardActivity ?? [],
       ...(principal.kind === 'user' && task.scope === 'personal:user' && task.owner === 'user' && task.status === 'proposed'
         && (task.personalProgress === undefined || ['todo', 'doing', 'finished'].includes(task.personalProgress))
         ? { personalProgress: task.personalProgress ?? 'todo' } : {}),
