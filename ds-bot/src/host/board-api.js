@@ -74,7 +74,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
         ...(scope.kind === 'room' && source?.parentTaskId && !source.archivedAt && !source.authority && ['draft','proposed'].includes(source.status) ? [{type:'move-item',label:'Move to card'}] : []),
         ...(editableReleases.length && !source?.parentTaskId && !source?.change && !['done','cancelled'].includes(source?.status) ? [{type:'release-assign',label:'Assign release'}] : []),
         ...(canSchedule ? [{type:'schedule',label:'Schedule Bot'}] : []),
-        ...(canUnschedule ? [{type:'unschedule',label:'Unschedule'}] : []), {type:'card-comment',label:'Add comment'},
+        ...(canUnschedule ? [{type:'unschedule',label:'Unschedule'}] : []), {type:'card-comment',label:'Add comment'},{type:'participants',label:'Manage participants'},
         ...(Array.isArray(source?.comments) && source.comments.length ? [{type:'card-comment-edit',label:'Edit comment'},{type:'card-comment-delete',label:'Delete comment'}] : []),
         ...(images ? [{ type: 'upload', label: 'Add images' }, { type: 'remove-image', label: 'Remove image' }] : []),
         ...(scope.kind === 'personal' && scope.id === 'user' && source?.scope === 'personal:user' && source.owner === 'user'
@@ -271,6 +271,12 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
           || (value.releaseId !== null && !nonempty(value.releaseId))
           || (value.releasePosition !== undefined && value.releasePosition !== null && !nonempty(value.releasePosition))) throw fail('Invalid release assignment')
         value = { releaseId:value.releaseId, ...(Object.hasOwn(value, 'releasePosition') ? { releasePosition:value.releasePosition } : {}) }
+      } else if (input.type === 'participants') {
+        if (!value || typeof value !== 'object' || Array.isArray(value)
+          || Object.keys(value).some(key => !['add','remove'].includes(key))
+          || (value.add !== undefined && (!Array.isArray(value.add) || value.add.some(id => !nonempty(id))))
+          || (value.remove !== undefined && (!Array.isArray(value.remove) || value.remove.some(id => !nonempty(id))))
+          || !((value.add?.length ?? 0) + (value.remove?.length ?? 0))) throw fail('Invalid participant change')
       } else if (input.type === 'card-comment-edit' || input.type === 'card-comment-delete') {
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw fail('Invalid card comment')
       } else if (input.type === 'reorder') {

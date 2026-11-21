@@ -1387,6 +1387,23 @@ function TypeBlock({ task, editable, disabled, onSave }) {
     error ? h('p', { className: 'bt-form-error', role: 'alert' }, error) : null)
 }
 
+function ParticipantsBlock({ task, actors, commands, disabled = false, onCommand }) {
+  const current = Array.isArray(task.participants) ? task.participants : []
+  const canManage = commandOf(commands, 'participants') && !task.archivedAt && !disabled && typeof onCommand === 'function'
+  const candidates = (Array.isArray(actors) ? actors : []).filter(actor => actor && typeof actor.id === 'string'
+    && actor.id !== 'user' && actor.id !== task.owner && actor.id !== task.reviewer && !current.includes(actor.id))
+  const [pick, setPick] = useState('')
+  if (!canManage && !current.length) return null
+  return h(SideSection, { title: t('Participants') },
+    current.length ? h('div', { className: 'bt-card-people' }, current.map(id => h('div', { key: id, className: 'bt-card-person' },
+      h(MemberAvatar, { name: actorName(id, actors), size: 24 }), h('span', null, h('strong', null, actorName(id, actors))),
+      canManage ? h('button', { type:'button', className:'bt-card-mini', onClick: () => void onCommand(task, { type:'participants' }, { remove:[id] }) }, t('Remove')) : null))) : h('p', { className:'bt-card-note' }, t('Mention a teammate in a comment, or add one here.')),
+    canManage ? h('div', { className: 'bt-card-form' },
+      h('label', { className:'bt-field' }, h('span', null, t('Add a participant')), h('select', { value:pick, 'aria-label':t('Add a participant'), onChange:event => setPick(event.target.value) },
+        h('option', { value:'' }, t('Choose a Bot')), candidates.map(actor => h('option', { key:actor.id, value:actor.id }, actor.name || actor.id)))),
+      h('button', { type:'button', className:'bt-btn bt-btn-ghost', disabled:!pick, onClick:() => { const id = pick; setPick(''); void onCommand(task, { type:'participants' }, { add:[id] }) } }, t('Add'))) : null)
+}
+
 function PeopleBlock({ task, actors, canEdit = false, disabled = false, onAssign }) {
   const [editing, setEditing] = useState(false)
   const [owner, setOwner] = useState(task.owner ?? '')
@@ -1814,6 +1831,7 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
         h('aside', { className: 'bt-card-side' },
           h(StatusBlock, { task, commands, canMove, canSchedule, disabled: uncertain || busy, onCommand }),
           h(PeopleBlock, { task, actors, canEdit, disabled: uncertain || busy, onAssign: assignPeople }),
+          h(ParticipantsBlock, { task, actors, commands, disabled: uncertain || busy, onCommand }),
           !legacy ? h(CardTextEditor, { task, field:'stage', editable:canDetails, disabled:uncertain || busy, onSave:detailsSave }) : null,
           h(TypeBlock, { task, editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }),
           h(DueEditor, { task, editable: canDetails, disabled: uncertain || busy, legacy, onSave: detailsSave }),

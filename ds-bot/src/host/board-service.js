@@ -5,6 +5,7 @@ import { legacyGoalCards } from './legacy-goal.js'
 import { mkdirSync, lstatSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { link, rm } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
+import { mentionSpans } from '../shared/mentions.js'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
@@ -341,7 +342,7 @@ export function install(rt) {
     const store = openTaskStore(join(root, 'tasks.sqlite'), {
       assertWriteLock: writable, conversationKind:actor=>botWorkflow.conversationKind(actor),
       onProjectEvent:projectChanged,
-      authorize: input => (input.actor === 'user' && ['create', 'link-goal-items', 'move-item', 'move-goal-item', 'edit', 'card-details', 'card-comment', 'card-comment-edit', 'card-comment-delete', 'reorder', 'attach', 'remove-image', 'cancel', 'submit', 'restore', 'archive', 'unarchive', 'release-assign', 'release', 'proposal', 'share', 'unshare', 'personal-progress', 'schedule', 'unschedule'].includes(input.type))
+      authorize: input => (input.actor === 'user' && ['create', 'link-goal-items', 'move-item', 'move-goal-item', 'edit', 'card-details', 'card-comment', 'card-comment-edit', 'card-comment-delete', 'participants', 'reorder', 'attach', 'remove-image', 'cancel', 'submit', 'restore', 'archive', 'unarchive', 'release-assign', 'release', 'proposal', 'share', 'unshare', 'personal-progress', 'schedule', 'unschedule'].includes(input.type))
         || (input.actor === 'scheduler' && (input.type === 'claim' ? allowedAction(input.task, input.action) : input.type === 'receipt'))
         || (input.actor !== 'user' && input.type === 'proposal' && botWorkflow.authorize(input))
         || botWorkflow.authorize(input),
@@ -555,6 +556,34 @@ export function install(rt) {
       }
     }
   }
+  // A board comment may call people the same way a group post does. Mentioned
+  // room members are added to the card and receive the comment as a durable
+  // message in their group Session; the user's own comment stays the record.
+  const notifyCardMentions = async (taskId, text, operationId, author = 'user') => {
+    const { store } = service()
+    const task = store.get(taskId)
+    if (!task || !String(task.scope).startsWith('room:')) return
+    const room = rt.roomOf(task.scope.slice(5))
+    if (!room) return
+    const members = (room.members ?? []).map(id => rt.botOf(id)).filter(bot => bot && bot.private !== true)
+    const ids = [...new Set([...mentionSpans(text, members)].filter(span => span.bot && span.bot.id !== author).map(span => span.bot.id))]
+    for (const id of ids) {
+      const sessionId = room.sessions?.[id]
+      if (!sessionId) continue
+      if (!(task.participants ?? []).includes(id)) {
+        try {
+          const latest = store.get(taskId)
+          store.command({ operationId:`${operationId}:join:${id}`, actor:'user', taskId, expectedRevision:latest.revision, type:'participants', value:{ add:[id] } })
+        } catch (error) { rt.warn?.('ds-bot: board mention join failed: %s', error?.message || error) }
+      }
+      try {
+        await rt.deliver({ roomId:room.id, toId:id, sessionId, role:'room', fromName:'DS Bot',
+          text:`[Board card ${task.id}] ${author === 'user' ? 'The user' : author} mentioned you in a comment:\n${text}\n\nOpen this card in the group task board (board_task show) to read the discussion; you can reply with board_task comment.`,
+          exchangeId:createHash('sha256').update(`${operationId}:mention:${id}`).digest('hex') })
+      } catch (error) { rt.warn?.('ds-bot: board mention delivery failed: %s', error?.message || error) }
+    }
+  }
+  rt.notifyBoardMentions = notifyCardMentions
   const notifyWorkingBot = async (taskId, change, operationId) => {
     const task = service().store.get(taskId)
     if (!task || !['working','reported','cancelled'].includes(task.status)) return
@@ -589,6 +618,9 @@ export function install(rt) {
       : payload
     if (committedHere && ['edit','card-details','card-comment','card-comment-edit','card-comment-delete','cancel','unschedule'].includes(payload.type)) {
       void notifyWorkingBot(payload.taskId, change, payload.operationId).catch(error => rt.warn?.('ds-bot: board update delivery: %s', error))
+    }
+    if (committedHere && ['card-comment','card-comment-edit'].includes(payload.type)) {
+      void notifyCardMentions(payload.taskId, payload.value?.text ?? '', payload.operationId).catch(error => rt.warn?.('ds-bot: board mention dispatch: %s', error))
     }
     if (committedHere && releaseSyncTypes.has(payload.type)) void notifyBoardChange(payload.taskId, change).catch(error => rt.warn?.('ds-bot: board change not synced to release group: %s', error))
     return result
