@@ -388,9 +388,11 @@ export function install(rt) {
             // A cd through a variable is ordinary in worktree scripts. Accept it
             // only when the same command assigns that variable exactly once to a
             // literal path; an unassigned or rebuilt variable still fails closed.
-            for (const match of text.matchAll(/(?:^|[\s;&|(){}])cd\s+(?:-\S+\s+)*["']?\$([A-Za-z_][\w]*)/g)) {
+            for (const match of text.matchAll(/(?:^|[\s;&|(){}])cd\s+(?:-\S+\s+)*["']?\$([A-Za-z_][\w]*)([^\s;&|()]*)/g)) {
               const literal = assignedLiteral(match[1])
-              if (!literal || await matches(literal)) { blocked = true; break }
+              if (!literal) { blocked = true; break }
+              const suffix = (match[2] ?? '').replace(/["']$/, '')
+              if (suffix.includes('..') || await matches(literal + suffix)) { blocked = true; break }
             }
             if (!blocked) for (const candidate of text.match(/(?:~|\/)[^\s"'`;|&<>()]*/g) ?? []) {
               if (await matches(candidate)) { blocked = true; break }
@@ -418,7 +420,12 @@ export function install(rt) {
           const assignedLiteral = name => {
             const values = [...text.matchAll(new RegExp(`(?:^|[\\s;&|(){}])${name}=([^\\s;&|()]+)`, 'g'))]
               .map(found => found[1].replace(/^["']|["']$/g, ''))
-            return values.length === 1 && !/[$`]/.test(values[0]) && values[0].startsWith('/') ? values[0] : undefined
+            if (values.length !== 1) return undefined
+            // A literal absolute prefix is enough: OUT=/tmp/run-$(date) still cd's
+            // below /tmp. Anything under the private Bot home stays refused.
+            const prefix = /^[^$`]*/.exec(values[0])?.[0] ?? ''
+            if (!prefix.startsWith('/') || prefix.startsWith(homedir() + '/.dsh')) return undefined
+            return prefix
           }
           const firstBase = requestedPath ? resolve(base ?? process.cwd(), requestedPath) : base
           if (!blocked && firstBase && await matches(firstBase, true)) blocked = true
@@ -433,12 +440,13 @@ export function install(rt) {
             for (const folder of [...bases]) {
               let next = words[j] === undefined ? homedir() : expand(words[j], folder)
               if (next && /[$`]/.test(next)) {
-                const variable = /^\$([A-Za-z_][\w]*)$/.exec(next)
+                const variable = /^\$([A-Za-z_][\w]*)(\/.*)?$/.exec(next)
                 const literal = variable && assignedLiteral(variable[1])
-                if (literal) next = literal
+                if (literal) next = literal + (variable[2] ?? '')
               }
               if (!next || /[$`]/.test(next)) { blocked = true; break }
               const target = resolve(folder, next)
+              if (await matches(target)) { blocked = true; break }
               if (!bases.includes(target)) bases.push(target)
               if (bases.length > 64) { blocked = true; tooComplex = true; break }
             }
