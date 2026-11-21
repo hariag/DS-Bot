@@ -527,6 +527,8 @@ const releaseIsDone = release => {
       next.actionRevision = next.revision
       save(parent, next)
       action(next, 'review', next.reviewer)
+    } else if (next.status === 'working' && !unfinishedItems.get(parent.id)) {
+      reportParentForItems(next)
     } else {
       save(parent, next)
       ready(next)
@@ -535,6 +537,24 @@ const releaseIsDone = release => {
   const finishAction = (id, kind) => {
     const changes = db.prepare("UPDATE actions SET state='done' WHERE task_id=? AND kind=? AND state='accepted'").run(id, kind).changes
     if (changes !== 1) throw new Error('verified action receipt required')
+  }
+  // A feature card whose items are all done has no work of its own left; leaving it
+  // in Working forever hides it from its reviewer. The item set becomes the report
+  // evidence and the reviewer still checks it independently.
+  const itemEvidence = parent => {
+    const items = getAll().filter(task => task.parentTaskId === parent.id)
+    return { kind:'personal', environment:'group task board: every item is done',
+      evidence:`All ${items.length} item(s) are done: ${items.map(task => `${task.id} (revision ${task.revision})`).join(', ')}` }
+  }
+  const reportParentForItems = parent => {
+    if (!parent || parent.archivedAt || parent.stale || parent.blocked) return parent
+    if (parent.status !== 'working' || !hasItems.get(parent.id) || unfinishedItems.get(parent.id)) return parent
+    const next = { ...parent, revision:parent.revision + 1, status:'reported', actionRevision:parent.revision + 1,
+      blocked:null, stale:false, evidence:itemEvidence(parent) }
+    if (db.prepare("SELECT 1 FROM actions WHERE task_id=? AND kind='execute' AND state='accepted'").get(parent.id)) finishAction(parent.id, 'execute')
+    save(parent, next)
+    action(next, 'review', next.reviewer)
+    return next
   }
   // A committed owner start acknowledges this execution even if DSH has since rotated
   // the Session. Preserve the current card and its workflow gates; never re-admit input.
@@ -601,6 +621,18 @@ const releaseIsDone = release => {
       })
     },
     limits() { return { tasks:MAX_TASKS, dependencies:100 } },
+    reconcileItemParents() {
+      return tx(() => {
+        let changed = 0
+        for (const task of getAll()) {
+          if (task.parentTaskId || task.status !== 'working' || task.blocked || task.stale
+            || !hasItems.get(task.id) || unfinishedItems.get(task.id)) continue
+          audit = { operationId:`auto-report-parent:${task.id}:${task.revision}`, actor:'scheduler' }
+          try { if (reportParentForItems(task)) changed += 1 } finally { audit = undefined }
+        }
+        return changed
+      })
+    },
     // Internal refresh cursor only; callers must not expose global changes to
     // actors who cannot view every task in this database.
     version() {
@@ -1453,6 +1485,10 @@ const releaseIsDone = release => {
         if (type === 'unblock' && next.status === 'reported') action(next, 'review', next.reviewer)
         if (type === 'review' && value.result === 'pass') for (const id of dependents(taskId)) { const task = getTask(id); if (task) ready(task) }
         unblockParentAfterItems(next)
+        if (next.parentTaskId) {
+          const parent = getTask(next.parentTaskId)
+          if (parent) reportParentForItems(parent)
+        }
         if (next.status === 'done' && next.releaseId) reconcileRelease(next.releaseId)
         if (type === 'invalidate') {
           db.prepare("UPDATE actions SET state='cancelled' WHERE task_id=? AND state='pending'").run(taskId)
