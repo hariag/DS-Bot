@@ -1638,7 +1638,7 @@ export function install(rt) {
   // each occurrence once per room, including skips and uncertain admissions.
   // The watermark also survives part rotation, restarts and goal replacement.
   const receivingRooms = new Set()
-  async function runScheduledRoomReview(room, occurrenceKey, agent, openingMessageId, verifiedPrompt, nativeOpening) {
+  async function runScheduledRoomReview(room, occurrenceKey, agent, openingMessageId, verifiedPrompt, nativeOpening, forceQuiet = false) {
     let identity
     try { identity = JSON.parse(occurrenceKey) } catch { return 'invalid' }
     if (!Array.isArray(identity) || identity.length !== 2 || typeof identity[0] !== 'string' || !identity[0]
@@ -1667,7 +1667,7 @@ export function install(rt) {
       rt.requireHomeLock()
       room.scheduledReviewOccurrence = occurrence
       if (!activeRoom() || !room.admin || !room.members.includes(room.admin)) return await result('paused')
-      if (!quiet()) return await result('busy')
+      if (!quiet() && !forceQuiet) return await result('busy')
       if (goal?.reviewAttempt) {
         const original = goal.reviewAttempt
         await result('pending')
@@ -1720,7 +1720,7 @@ export function install(rt) {
       occurrence.reviewId = id
       await result(message ? 'admitted' : 'admitting')
       const valid = () => activeRoom() && room.scheduledReviewOccurrence === occurrence && goalReviewAllowed(room, id)
-      if (!valid() || !quiet() || (inspectionRequired(room) && !attempt.inspectOnly)) {
+      if (!valid() || (!quiet() && !forceQuiet) || (inspectionRequired(room) && !attempt.inspectOnly)) {
         if (goal.reviewAttempt === attempt && room.goal === goal) {
           const automatic = automaticIdle(goal)
           delete goal.reviewAttempt
@@ -1762,11 +1762,19 @@ export function install(rt) {
         if (!sessionId) continue
         const agent = await rt.resolveAgent(sessionId)
         const key = JSON.stringify([`sweep-${room.id}`, new Date().toISOString()])
-        const outcome = await runScheduledRoomReview(room, key, agent, undefined, undefined, undefined)
+        // A permanently chatty room keeps quiet() false, so a due review would be
+        // 'busy' every time and the goal panel would freeze again. After two busy
+        // sweeps the nudge is admitted anyway and the admin reads it once its own
+        // queue drains.
+        const streak = (reviewBusyStreak.get(room.id) ?? 0)
+        const outcome = await runScheduledRoomReview(room, key, agent, undefined, undefined, undefined, streak >= 2)
+        if (outcome === 'busy') reviewBusyStreak.set(room.id, streak + 1)
+        else reviewBusyStreak.delete(room.id)
         if (outcome === 'admitted' || outcome === 'no-goal') rt.warn?.('ds-bot: opened a scheduled review for %s without a native reminder (%s)', room.id, outcome)
       }
     } catch (error) { rt.warn?.('ds-bot: scheduled review sweeper: %s', error?.message || error) }
   }
+  const reviewBusyStreak = new Map()
   const reviewSweeper = setInterval(() => { void sweepScheduledReviews() }, 5 * 60_000)
   reviewSweeper.unref?.()
   ctx.effect(() => () => clearInterval(reviewSweeper), 'ds-bot: scheduled review sweeper')
