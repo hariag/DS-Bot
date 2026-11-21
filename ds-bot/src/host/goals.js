@@ -636,6 +636,9 @@ export const goalReviewGuard = (live, roomOf = () => undefined, pickRoom = () =>
   const info = live?.get(exec.agent?.id)?.info
   if (info?.reviewInspect !== true || !info.reviewId) return undefined
   if (exec.name === 'list_bots' || (exec.name === 'group_goal' && exec.arguments?.action === 'show')) return undefined
+  // The inspection duty tells the reviewer to read evidence with these tools; the
+  // refusal message lists them as allowed, so the guard must not refuse them.
+  if (['read', 'glob', 'grep'].includes(exec.name)) return undefined
   const room = roomOf(info.roomId)
   if (exec.name === 'board_task' && room && exec.arguments?.room_id === room.id
     && ['list', 'show'].includes(exec.arguments.action)) return undefined
