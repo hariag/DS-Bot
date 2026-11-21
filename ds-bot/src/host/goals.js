@@ -779,7 +779,14 @@ export function install(rt) {
     return !Array.isArray(notes) || notes.length > 0
   }
   const pendingBatches = room => Object.values(rt.state.roomBatches ?? {}).filter(batch => batch.roomId === room.id && batch.pending?.length)
-  const inspectionRequired = room => inspectionOnlyIdle(room.goal) || hasUnreadRoomDeliveries(room) || rt.roomBatchPending?.(room.id) === true
+  // A stop or an unknown legacy idle always fences the review. Unread room
+  // deliveries and pending call batches only fence it while someone in the room is
+  // actually working: an idle room whose queue never drains otherwise turns every
+  // scheduled review into a read-only inspection forever, and the goal panel never
+  // advances (observed for 6+ hours on 2026-11-21).
+  const roomHasActiveWork = room => (rt.workingInRoom?.(room) ?? []).length > 0
+  const inspectionRequired = room => inspectionOnlyIdle(room.goal)
+    || (roomHasActiveWork(room) && (hasUnreadRoomDeliveries(room) || rt.roomBatchPending?.(room.id) === true))
 
   // Old delivery notes do not reliably identify a task, but their recipient
   // can bound the uncertainty to that owner. Never infer an owner from text.
@@ -1669,7 +1676,16 @@ export function install(rt) {
       const attempt = { id, at:now, state:'admitting', adminId:admin.id, rootSessionId:agent.session.id,
         adminSessionId:room.sessions?.[admin.id],
         ...(typeof verifiedPrompt === 'string' && verifiedPrompt.trim() ? { scheduledPrompt:verifiedPrompt } : {}),
-        ...(inspectionRequired(room) ? { inspectOnly:true } : {}) }
+        ...(() => {
+          // Even a room that keeps working must not stay fenced for ever: after two
+          // consecutive inspections the next scheduled check acts, so an unresolved
+          // delivery is escalated instead of silently looping as a read-only review.
+          const fenced = inspectionRequired(room)
+          const escalated = fenced && (room.inspectionStreak ?? 0) >= 2
+          room.inspectionStreak = fenced && !escalated ? (room.inspectionStreak ?? 0) + 1 : 0
+          if (fenced && escalated) rt.warn?.('ds-bot: room %s inspection escalated after %d read-only checks', room.id, 2)
+          return fenced && !escalated ? { inspectOnly:true } : {}
+        })() }
       const options = { agent, reviewId:id, inspectOnly:attempt.inspectOnly === true }
       const message = nativeOpening && Object.freeze({ ...goalRelayMessage(room, 'nudge', '[Scheduled group board review]', 'DS Bot', options), id:openingMessageId })
       if (message && attempt.inspectOnly) attempt.nativeOpening = { id:openingMessageId,
