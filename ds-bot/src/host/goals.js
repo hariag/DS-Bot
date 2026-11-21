@@ -1727,6 +1727,30 @@ export function install(rt) {
       return 'uncertain'
     } finally { receivingRooms.delete(room.id) }
   }
+  // DSH delivers a native schedule reminder only when the room Session is free
+  // enough to take it; a chatty room can go hours without a reminder arriving,
+  // and the ten-minute heartbeat then advances silently (observed 2026-11-21
+  // 15:55-16:40). A light sweep opens due reviews without waiting for one.
+  async function sweepScheduledReviews() {
+    try {
+      if (reviewDisposed || rt.readOnly() !== undefined || typeof rt.resolveAgent !== 'function') return
+      for (const room of Object.values(rt.state.rooms ?? {})) {
+        const goal = room.goal
+        if (!goal || goal.status !== 'active' || goal.idle !== true || goal.reviewAttempt) continue
+        if (inspectionOnlyIdle(goal) || !reviewEligible(goal) || !reviewIsDue(goal)) continue
+        if (Date.now() - (room.scheduledReviewOccurrence?.at ?? 0) < 10 * 60e3) continue
+        const sessionId = rt.sessionOfRoom(room)
+        if (!sessionId) continue
+        const agent = await rt.resolveAgent(sessionId)
+        const key = JSON.stringify([`sweep-${room.id}`, new Date().toISOString()])
+        const outcome = await runScheduledRoomReview(room, key, agent, undefined, undefined, undefined)
+        if (outcome === 'admitted' || outcome === 'no-goal') rt.warn?.('ds-bot: opened a scheduled review for %s without a native reminder (%s)', room.id, outcome)
+      }
+    } catch (error) { rt.warn?.('ds-bot: scheduled review sweeper: %s', error?.message || error) }
+  }
+  const reviewSweeper = setInterval(() => { void sweepScheduledReviews() }, 5 * 60_000)
+  reviewSweeper.unref?.()
+  ctx.effect(() => () => clearInterval(reviewSweeper), 'ds-bot: scheduled review sweeper')
   ctx.effect(() => () => { reviewDisposed = true }, 'ds-bot: scheduled group checks')
 
   // Finalize a relay that was already admitted, including legacy progress.
