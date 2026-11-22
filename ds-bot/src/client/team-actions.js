@@ -1,4 +1,5 @@
 import { countCards, heldCardKey } from './sources.js'
+import { createGroupRowsReader } from './group-reads.js'
 import { noteClientError } from './diagnostics.js'
 
 // The actions every window that draws the Bot views shares: dialogs and panels (the `ui`
@@ -182,7 +183,7 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     saveProviderModels: body => call('provider-models-save', body),
     removeProvider: provider => after(call('provider-remove', { provider })),
     // After a failed turn: the Bot answers the user's last unanswered message, which is never sent again.
-    resume: botId => after(call('resume', { botId })),
+    resume: (botId, sessionId, turn) => after(call('resume', { botId, sessionId, turn })),
     folders: () => call('folders'),
     folderPick: () => call('folder-pick'),
     folderList: path => call('folder-list', { path: path ?? '' }),
@@ -235,6 +236,7 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     stopRoomWork: roomId => after(call('stop-room-work', { roomId })),
     goalDraft: (roomId, text) => after(call('goal-draft', { roomId, text })),
     goalControl: (roomId, goalId, action, stopWork) => after(call('goal-control', { roomId, goalId, action, ...(stopWork ? { stopWork: true } : {}) })),
+goalReviewResolve: (roomId, goalId, reviewId) => after(call('goal-control', { roomId, goalId, action: 'review-resolve', reviewId, decision:'allow-future', confirmed: true })),
     // The group task board: the user's note is kept on the task and posted to the
     // group as a user message that calls its owner; cancelling is the panel's own.
     taskNote: (roomId, id, text) => after(call('task-note', { roomId, id, text })),
@@ -335,7 +337,7 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     exchangeText: (id, a, b) => call('exchange-text', { id, ...(a !== undefined && b !== undefined ? { a, b } : {}) }).catch(() => undefined),
     fileText: file => call('file-text', { file }).catch(() => undefined),
     roomProgress: roomId => call('room-progress', { roomId }).catch(() => []),
-    groupRows: (roomId, from, to, anchor) => call('group-rows', { roomId, from, ...(to === undefined ? {} : { to }), ...(anchor === undefined ? {} : { anchor }) }).catch(() => null),
+    groupRows: createGroupRowsReader(call, () => roster.getSnapshot().groupRowsBatchSize),
     groupRelayReplies: (sessionId, preview) => call('group-relay-replies', { sessionId, preview }).catch(() => null),
     earlier: (sessionId, cursor) => call('earlier', { sessionId, cursor: cursor ?? null }),
     // Hours come back in this browser's time zone, so days start at local midnight.
@@ -373,6 +375,28 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
         const next = key === 'first' && entry.first !== undefined ? Math.min(entry.first, time) : time
         if (entry[key] === next) return state
         return { ...state, [sessionId]: { ...turns, [turn]: { ...entry, [key]: next } } }
+      })
+    },
+    noteTurnReview: (sessionId, turn) => {
+      if (sessionId === undefined || !Number.isFinite(turn)) return
+      turnClock.set(state => {
+        const turns = state[sessionId] ?? {}, entry = turns[turn] ?? {}
+        return entry.internalReview === true ? state : { ...state, [sessionId]: { ...turns, [turn]: { ...entry, internalReview: true } } }
+      })
+    },
+    noteTurnVisible: (sessionId, turn) => {
+      if (sessionId === undefined || !Number.isFinite(turn)) return
+      turnClock.set(state => {
+        const turns = state[sessionId] ?? {}, entry = turns[turn] ?? {}
+        return entry.visible === true ? state : { ...state, [sessionId]: { ...turns, [turn]: { ...entry, visible: true } } }
+      })
+    },
+    noteTurnTail: (sessionId, turn, delta) => {
+      if (sessionId === undefined || !Number.isFinite(turn) || (delta !== 1 && delta !== -1)) return
+      turnClock.set(state => {
+        const turns = state[sessionId] ?? {}, entry = turns[turn] ?? {}
+        const tails = Math.max(0, (entry.tails ?? 0) + delta)
+        return entry.tails === tails ? state : { ...state, [sessionId]: { ...turns, [turn]: { ...entry, tails } } }
       })
     },
     noteTurnPeer: (sessionId, turn, peerId) => {

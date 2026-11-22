@@ -91,7 +91,9 @@ export function reportMarkdown({ facts, client = {}, entries = [], clientEntries
 
 const ownVersion = () => {
   try {
-    return JSON.parse(readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8')).version
+    const version = JSON.parse(readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8')).version
+    // The local build adds a +aios.<stamp> suffix; the report table keeps the semver.
+    return version.split('+')[0]
   } catch {
     return undefined
   }

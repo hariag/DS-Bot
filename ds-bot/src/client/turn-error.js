@@ -1,4 +1,4 @@
-import { createElement as h, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { createElement as h, useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { currentPart, isHiddenTurn } from './text.js'
 import { CheckIcon, CopyIcon } from './icons.js'
 import { ModelKeyCard, manageModels } from './model-menu.js'
@@ -25,19 +25,23 @@ const KEY_CODES = new Set(['MISSING_CREDENTIAL', 'INVALID_CREDENTIAL', 'AUTH'])
 const CREDENTIAL_CODES = new Set([...KEY_CODES, ...SIGNED_OUT])
 
 // The sentence for one failure. `status` is the HTTP status, when the host has it.
-export function failureText(code, { name, provider, status }) {
+export function failureText(code, { name, provider, status, current = true, externalQuota = false }) {
   switch (code) {
     case 'MISSING_CREDENTIAL': return t("{name}'s model has no API key yet.", { name })
     case 'INVALID_CREDENTIAL': return t('This API key is not in the right format.')
-    case 'AUTH': return status === undefined
-      ? t('{provider} did not accept the current API key.', { provider })
-      : t('{provider} did not accept the current API key ({status}).', { provider, status })
+    case 'AUTH': return status === 401
+      ? t('{provider} rejected the credentials used for this request ({status}).', { provider, status })
+      : t('{provider} denied access for this request.', { provider })
     case 'CONTENT_POLICY': return status === undefined
       ? t('{provider} blocked this request with its content filter. The API key is not the problem; edit the input or start a new chat.', { provider })
       : t('{provider} blocked this request with its content filter ({status}). The API key is not the problem; edit the input or start a new chat.', { provider, status })
-    case 'QUOTA': return status === undefined
-      ? t('{provider} is out of balance or quota.', { provider })
-      : t('{provider} is out of balance or quota ({status}).', { provider, status })
+    case 'QUOTA': {
+      if (!current) return t('{provider} reported insufficient balance or quota for this request.', { provider })
+      const reason = status === undefined
+        ? t('{provider} is out of balance or quota.', { provider })
+        : t('{provider} is out of balance or quota ({status}).', { provider, status })
+      return externalQuota ? reason + ' ' + t('Check your balance and limits with this provider before retrying.') : reason
+    }
     case 'ACCOUNT_QUOTA': return t('The DeepSeek account balance is too low.')
     case 'ACCOUNT_SIGN_IN_REQUIRED':
     case 'ACCOUNT_SIGNED_OUT':
@@ -55,16 +59,16 @@ export function failureText(code, { name, provider, status }) {
 // The fixes one failure offers, the one to try first leading. Each is offered only
 // where this window can carry it out. A Bot moved onto the account route since a key
 // failure has nothing left to fix there.
-export function fixesFor(code, { canSignIn, official, topUp, onAccount = false }) {
+export function fixesFor(code, { canSignIn, official, topUp, onAccount = false, status }) {
   if (onAccount && KEY_CODES.has(code)) return []
   if (SIGNED_OUT.has(code)) return canSignIn ? ['sign-in-again'] : ['model']
   switch (code) {
     case 'MISSING_CREDENTIAL': return ['key', canSignIn ? 'sign-in' : null, 'model'].filter(Boolean)
     case 'INVALID_CREDENTIAL': return ['rekey', 'model']
-    case 'AUTH': return ['rekey', canSignIn ? 'use-account' : null, 'model'].filter(Boolean)
+    case 'AUTH': return status === 401 ? ['rekey', canSignIn ? 'use-account' : null, 'model'].filter(Boolean) : ['model']
     // A content audit is about the input, not the credentials; no key action helps.
     case 'CONTENT_POLICY': return []
-    case 'QUOTA': return official ? ['top-up'] : []
+    case 'QUOTA': return official ? ['top-up'] : ['model']
     case 'ACCOUNT_QUOTA': return topUp ? ['top-up'] : []
     case 'MODEL_SWITCH_COMPACTION_FAILED': return ['model', 'model-settings']
     default: return []
@@ -152,12 +156,16 @@ function TechnicalDetails({ facts }) {
 export function FailureCell({ node, sessionId, useRoster, useTurnClock, actions }) {
   const roster = useRoster(value => value)
   const failRow = node?.data ?? {}
-  const bot = roster.byId?.[sessionId]
+  useLayoutEffect(() => { actions.noteTurnVisible?.(sessionId, failRow.turn) }, [actions, sessionId, failRow.turn])
+  const room = roster.rooms?.find(room => Object.values(room.memberSessions ?? {}).includes(sessionId))
+  const member = room && Object.keys(room.memberSessions).find(id => room.memberSessions[id] === sessionId)
+  const bot = roster.byId?.[member ?? sessionId]
   // The host corrects a failure DSH classified from the status alone (a 403 content
   // audit arrives as AUTH) and keeps the upstream message and request id. Its record
   // for this part and turn wins over the row's for the copy and Technical details.
-  const host = bot?.failures?.[sessionId]
-  const data = host !== undefined && host.turn === failRow.turn ? { ...failRow, ...host } : failRow
+  const latest = bot?.failures?.[sessionId]
+  const host = latest !== undefined && latest.turn === failRow.turn ? latest : undefined
+  const data = host === undefined ? failRow : { ...failRow, ...host }
   // A later turn, or a later part of the Bot's chat, has moved past this failure.
   const later = useTurnClock(state => Object.keys(state[sessionId] ?? {}).some(turn => Number(turn) > data.turn))
   const account = useAccountView(actions)
@@ -168,11 +176,20 @@ export function FailureCell({ node, sessionId, useRoster, useTurnClock, actions 
   const [error, setError] = useState('')
   // A sign-in started here to leave a failing key route, with the model the Bot was on.
   const [joining, setJoining] = useState(null)
-  const blocked = bot?.blocked?.code === data.code ? bot.blocked : undefined
-  const provider = blocked?.provider ?? host?.provider ?? providerOf(bot, roster)
-  const text = failureText(data.code, { name: bot?.name ?? t('This Bot'), provider: providerName(roster, provider), status: data.status ?? blocked?.status })
+  // A Bot may be blocked by another part or group. Older unscoped blocks can only
+  // corroborate a turn when its request ID matches the one remembered for that turn.
+  const block = bot?.blocked
+  const bound = block !== undefined && block.sessionId === sessionId && block.turn === data.turn
+  const legacyMatch = block?.sessionId === undefined && host?.requestId && host.requestId === block?.requestId
+  const blocked = block?.code === data.code && (bound || legacyMatch) ? block : undefined
+  const current = bot !== undefined && (member !== undefined || currentPart(bot) === sessionId) && !later && !(latest?.turn > data.turn)
+  const provider = data.provider ?? blocked?.provider
+  const status = data.status ?? blocked?.status
+  const text = failureText(data.code, {
+    name: bot?.name ?? t('This Bot'), provider: providerName(roster, provider), status, current,
+    externalQuota: provider !== undefined && provider !== OFFICIAL && provider !== ACCOUNT,
+  })
   const facts = failureFacts(data, blocked)
-  const current = bot !== undefined && currentPart(bot) === sessionId && !later
   // The key route never takes the account's credential, so a sign-in alone leaves the Bot
   // failing; it moves onto the account route. With no account model listed yet, the
   // user picks one.
@@ -217,7 +234,7 @@ export function FailureCell({ node, sessionId, useRoster, useTurnClock, actions 
     model: actions.showDetails ? () => actions.showDetails(sessionId) : undefined,
     'model-settings': manageModels(actions),
   }
-  const fixes = fixesFor(data.code, { canSignIn, official, topUp: topUp !== undefined, onAccount: provider === ACCOUNT }).filter(fix => fix === 'top-up' || runs[fix] !== undefined)
+  const fixes = fixesFor(data.code, { canSignIn, official, topUp: topUp !== undefined, onAccount: providerOf(bot, roster) === ACCOUNT, status }).filter(fix => fix === 'top-up' || runs[fix] !== undefined)
   // A turn another Bot asked for answers that Bot, which was already told it failed.
   // Retry would answer the user's last message instead, so it is not offered.
   const asked = isHiddenTurn(roster, sessionId, data.turn)
@@ -227,7 +244,7 @@ export function FailureCell({ node, sessionId, useRoster, useTurnClock, actions 
   const resume = () => {
     setRetry('busy')
     setError('')
-    void Promise.resolve(actions.resume(bot.id))
+    void Promise.resolve(actions.resume(bot.id, sessionId, data.turn))
       .then(() => setRetry('sent'), (failure) => { setRetry('idle'); setError(hostText(failure?.message ?? String(failure))) })
   }
   const button = (fix, primary) => {

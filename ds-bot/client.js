@@ -16415,7 +16415,7 @@ function clientFacts() {
 var FAILURES = {
   MISSING_CREDENTIAL: "The model has no API key",
   INVALID_CREDENTIAL: "The API key is not in the right format",
-  AUTH: "The API key was rejected",
+  AUTH: "The model service denied access to this request",
   CONTENT_POLICY: "The model service blocked the content",
   QUOTA: "The account is out of quota",
   ACCOUNT_QUOTA: "The account is out of quota",
@@ -16454,11 +16454,12 @@ ${REST_NOTE}`);
 
 // src/client/api.js
 var ROUTE = "api/bot";
+var BOARD_UPLOAD_ROUTE = "api/bot-board-upload";
 var REFUSALS = /* @__PURE__ */ new Set(["bot/refused", "bot/invalid", "bot/read-only", "bot/not-found", "bot/browser-off"]);
 var call = async (endpoint, payload, signal) => {
   let response;
   try {
-    response = await fetch(ROUTE, {
+    response = await fetch(endpoint === "board-upload" ? BOARD_UPLOAD_ROUTE : ROUTE, {
       method: "POST",
       credentials: "same-origin",
       headers: { "content-type": "application/json" },
@@ -16655,7 +16656,13 @@ function createSource(initial) {
 }
 var EMPTY_ROSTER = { revision: -1, mainBotId: null, mainBotIds: [], bots: [], rooms: [], agents: [], sections: [], exchangeTurns: {}, questions: {}, btwCards: {}, sideChats: {}, learning: {}, secrets: [], capabilities: [], capabilityStatuses: {}, phone: null, secretRequests: {}, models: [], defaultModel: null, modelsKey: null, prefs: {}, byId: {}, roomsById: {}, agentsById: {}, agentOf: {}, ready: false };
 var isMainOf = (roster, id) => id !== void 0 && (roster.mainBotIds ?? []).includes(id);
-function indexRoster(value) {
+function indexRoster(value, previous) {
+  if (value.instructionsKey !== void 0 && value.instructionsKey === previous?.instructionsKey) {
+    value = { ...value, bots: value.bots.map((bot) => {
+      const prior = previous.byId[bot.id];
+      return prior?.instructions === void 0 ? bot : { ...bot, instructions: prior.instructions };
+    }) };
+  }
   const byId = {};
   for (const bot of value.bots) {
     const open = (bot.openParts ?? []).flatMap((part) => [part.sessionId, ...part.parts ?? []]);
@@ -16688,6 +16695,77 @@ function countCards(state, sessionId, callIds, delta) {
     else delete own[callId];
   }
   return { ...state, [sessionId]: own };
+}
+
+// src/client/group-reads.js
+var clients = /* @__PURE__ */ new WeakMap();
+function groupReads(actions) {
+  if (clients.has(actions)) return clients.get(actions);
+  const pending = /* @__PURE__ */ new Map();
+  const closed = /* @__PURE__ */ new Map();
+  const latest = /* @__PURE__ */ new Map();
+  function read(key, cursor, fetch2) {
+    const current2 = pending.get(key);
+    if (current2) {
+      if (current2.cursor === cursor && !current2.next) return current2.task;
+      if (!current2.next) {
+        current2.next = current2.task.then(() => read(key, current2.latest, fetch2));
+      }
+      current2.latest = cursor;
+      return current2.next;
+    }
+    if (typeof cursor === "string" && latest.get(key)?.cursor === cursor) return Promise.resolve(latest.get(key).value);
+    const entry = { cursor };
+    entry.task = Promise.resolve().then(fetch2).catch(() => null).then((value) => {
+      if (typeof cursor === "string" && value != null) {
+        latest.set(key, { cursor, value });
+        if (latest.size > 16) latest.delete(latest.keys().next().value);
+      }
+      return value;
+    }).finally(() => pending.delete(key));
+    pending.set(key, entry);
+    return entry.task;
+  }
+  const client = {
+    read,
+    closed: (key) => closed.get(key),
+    settle(key, view) {
+      closed.set(key, view);
+      if (closed.size > 128) closed.delete(closed.keys().next().value);
+    }
+  };
+  clients.set(actions, client);
+  return client;
+}
+function createGroupRowsReader(call2, maxRanges) {
+  const rooms = /* @__PURE__ */ new Map();
+  async function flush(roomId, batch) {
+    rooms.delete(roomId);
+    clearTimeout(batch.timer);
+    const entries2 = batch.entries;
+    let result;
+    try {
+      result = await call2("group-rows", { roomId, ranges: entries2.map((entry) => entry.range) });
+    } catch {
+    }
+    const valid = Array.isArray(result) && result.length === entries2.length;
+    entries2.forEach((entry, index) => entry.resolve(valid ? result[index] : null));
+  }
+  return (roomId, from, to, anchor) => {
+    const limit = maxRanges();
+    const range = { from, ...to === void 0 ? {} : { to }, ...anchor === void 0 ? {} : { anchor } };
+    if (!Number.isSafeInteger(limit) || limit < 2) return call2("group-rows", { roomId, ...range }).catch(() => null);
+    let batch = rooms.get(roomId);
+    if (!batch) {
+      batch = { entries: [] };
+      rooms.set(roomId, batch);
+      batch.timer = setTimeout(() => void flush(roomId, batch), 8);
+    }
+    return new Promise((resolve2) => {
+      batch.entries.push({ range, resolve: resolve2 });
+      if (batch.entries.length >= limit) void flush(roomId, batch);
+    });
+  };
 }
 
 // src/client/team-actions.js
@@ -16895,7 +16973,7 @@ function teamActions({ call: call2, after, partFor, roster, ui, live, cards, hel
     saveProviderModels: (body) => call2("provider-models-save", body),
     removeProvider: (provider) => after(call2("provider-remove", { provider })),
     // After a failed turn: the Bot answers the user's last unanswered message, which is never sent again.
-    resume: (botId) => after(call2("resume", { botId })),
+    resume: (botId, sessionId, turn) => after(call2("resume", { botId, sessionId, turn })),
     folders: () => call2("folders"),
     folderPick: () => call2("folder-pick"),
     folderList: (path2) => call2("folder-list", { path: path2 ?? "" }),
@@ -16948,6 +17026,7 @@ function teamActions({ call: call2, after, partFor, roster, ui, live, cards, hel
     stopRoomWork: (roomId) => after(call2("stop-room-work", { roomId })),
     goalDraft: (roomId, text) => after(call2("goal-draft", { roomId, text })),
     goalControl: (roomId, goalId, action, stopWork) => after(call2("goal-control", { roomId, goalId, action, ...stopWork ? { stopWork: true } : {} })),
+    goalReviewResolve: (roomId, goalId, reviewId) => after(call2("goal-control", { roomId, goalId, action: "review-resolve", reviewId, decision: "allow-future", confirmed: true })),
     // The group task board: the user's note is kept on the task and posted to the
     // group as a user message that calls its owner; cancelling is the panel's own.
     taskNote: (roomId, id, text) => after(call2("task-note", { roomId, id, text })),
@@ -17046,7 +17125,7 @@ function teamActions({ call: call2, after, partFor, roster, ui, live, cards, hel
     exchangeText: (id, a, b) => call2("exchange-text", { id, ...a !== void 0 && b !== void 0 ? { a, b } : {} }).catch(() => void 0),
     fileText: (file) => call2("file-text", { file }).catch(() => void 0),
     roomProgress: (roomId) => call2("room-progress", { roomId }).catch(() => []),
-    groupRows: (roomId, from, to, anchor) => call2("group-rows", { roomId, from, ...to === void 0 ? {} : { to }, ...anchor === void 0 ? {} : { anchor } }).catch(() => null),
+    groupRows: createGroupRowsReader(call2, () => roster.getSnapshot().groupRowsBatchSize),
     groupRelayReplies: (sessionId, preview) => call2("group-relay-replies", { sessionId, preview }).catch(() => null),
     earlier: (sessionId, cursor) => call2("earlier", { sessionId, cursor: cursor ?? null }),
     // Hours come back in this browser's time zone, so days start at local midnight.
@@ -17084,6 +17163,28 @@ function teamActions({ call: call2, after, partFor, roster, ui, live, cards, hel
         const next = key === "first" && entry.first !== void 0 ? Math.min(entry.first, time) : time;
         if (entry[key] === next) return state;
         return { ...state, [sessionId]: { ...turns, [turn]: { ...entry, [key]: next } } };
+      });
+    },
+    noteTurnReview: (sessionId, turn) => {
+      if (sessionId === void 0 || !Number.isFinite(turn)) return;
+      turnClock.set((state) => {
+        const turns = state[sessionId] ?? {}, entry = turns[turn] ?? {};
+        return entry.internalReview === true ? state : { ...state, [sessionId]: { ...turns, [turn]: { ...entry, internalReview: true } } };
+      });
+    },
+    noteTurnVisible: (sessionId, turn) => {
+      if (sessionId === void 0 || !Number.isFinite(turn)) return;
+      turnClock.set((state) => {
+        const turns = state[sessionId] ?? {}, entry = turns[turn] ?? {};
+        return entry.visible === true ? state : { ...state, [sessionId]: { ...turns, [turn]: { ...entry, visible: true } } };
+      });
+    },
+    noteTurnTail: (sessionId, turn, delta) => {
+      if (sessionId === void 0 || !Number.isFinite(turn) || delta !== 1 && delta !== -1) return;
+      turnClock.set((state) => {
+        const turns = state[sessionId] ?? {}, entry = turns[turn] ?? {};
+        const tails = Math.max(0, (entry.tails ?? 0) + delta);
+        return entry.tails === tails ? state : { ...state, [sessionId]: { ...turns, [turn]: { ...entry, tails } } };
       });
     },
     noteTurnPeer: (sessionId, turn, peerId) => {
@@ -17269,11 +17370,11 @@ function parseColor(value) {
 var hex2 = (value) => Math.max(0, Math.min(255, Math.round(value))).toString(16).padStart(2, "0");
 var withAlpha = ({ r, g, b }, a) => `#${hex2(r)}${hex2(g)}${hex2(b)}${hex2(a * 255)}`;
 var alphaOf = (value) => parseColor(value)?.a ?? 1;
-function skinSurfaceVars({ main, sidebar, colors }, { minAlpha = MIN_SKIN_ALPHA } = {}) {
+function skinSurfaceVars({ main, sidebar: sidebar2, colors }, { minAlpha = MIN_SKIN_ALPHA } = {}) {
   const vars = {};
   const floor = (alpha) => Math.min(1, Math.max(alpha, minAlpha));
   const mainAlpha = alphaOf(main);
-  const sidebarAlpha = alphaOf(sidebar);
+  const sidebarAlpha = alphaOf(sidebar2);
   if (mainAlpha < 1) {
     const alpha = floor(mainAlpha);
     vars["--bt-skin-main"] = withAlpha(parseColor(colors.main) ?? { r: 252, g: 252, b: 252 }, alpha);
@@ -17335,6 +17436,23 @@ function writeSkinSurfaceVars(doc, read) {
       for (const name of SKIN_VARIABLES) body.style.removeProperty(name);
     }
   };
+}
+
+// src/shared/message-sender.js
+var field = (value) => typeof value === "string" && value.trim() ? value.trim() : void 0;
+function relaySender(source) {
+  const sender = source?.sender;
+  return {
+    id: field(source?.senderSessionId) ?? field(source?.senderId) ?? field(source?.fromId) ?? field(sender?.id) ?? field(sender?.sessionId) ?? field(sender),
+    name: field(source?.senderName) ?? field(sender?.name) ?? field(source?.fromName)
+  };
+}
+function peerRole(source) {
+  if (!source || source.form === "snapshot") return void 0;
+  if (["request", "reply", "stopped"].includes(source.role)) return source.role;
+  if (source.role !== void 0) return void 0;
+  const sender = relaySender(source);
+  if (source.form === "relay" || sender.id || sender.name) return "request";
 }
 
 // src/shared/mentions.js
@@ -17720,12 +17838,11 @@ function toolArgs(root) {
     value: (key) => object()?.[key]
   };
 }
-var RELAY_ROLES = /* @__PURE__ */ new Set(["request", "reply", "stopped"]);
 var isRelayContext = (data) => {
   const source = data?.source;
   if (source === null || typeof source !== "object" || source.kind !== "bot" || source.handoff === true) return false;
   if (source.deferred === true || source.resumed === true || source.retried === true) return false;
-  return RELAY_ROLES.has(source.role) && typeof source.senderSessionId === "string";
+  return !!peerRole(source) && !source.taskAction && !!relaySender(source).id;
 };
 var stepShows = (step) => (step?.blocks ?? []).some((block) => {
   if (block === void 0 || block.kind === "tool-call") return false;
@@ -17931,7 +18048,7 @@ function liveSprings(apply2) {
   };
 }
 var CHOSEN = '[aria-pressed="true"],[aria-selected="true"],[aria-current="page"]';
-function useGlide(key, { axis = "x", selector = CHOSEN, lead = SPRING_LEAD, trail = SPRING_TRAIL, box: given } = {}) {
+function useGlide(key, { axis = "x", selector: selector2 = CHOSEN, lead = SPRING_LEAD, trail = SPRING_TRAIL, box: given } = {}) {
   const ownBox = (0, import_react.useRef)(null);
   const box = given ?? ownBox;
   const thumb = (0, import_react.useRef)(null);
@@ -17956,7 +18073,7 @@ function useGlide(key, { axis = "x", selector = CHOSEN, lead = SPRING_LEAD, trai
     const knob = thumb.current;
     if (!container || !knob) return;
     const currentAxis = own.current.axis;
-    const chosen = container.querySelector(selector);
+    const chosen = container.querySelector(selector2);
     if (!chosen) {
       knob.dataset.hidden = "";
       return;
@@ -18009,14 +18126,14 @@ function Segmented({ label, value, className, children }) {
     children
   );
 }
-function useFlip(list, key, selector, id = (node) => node.dataset.flip) {
+function useFlip(list, key, selector2, id = (node) => node.dataset.flip) {
   const tops = (0, import_react.useRef)(null);
   (0, import_react.useLayoutEffect)(() => {
     const container = list.current;
     if (!container) return;
     const next = /* @__PURE__ */ new Map();
     const moving = tops.current !== null && !reducedMotion();
-    for (const node of container.querySelectorAll(selector)) {
+    for (const node of container.querySelectorAll(selector2)) {
       const name = id(node);
       const top = node.offsetTop;
       next.set(name, top);
@@ -19835,7 +19952,7 @@ body[data-bt-effects=off] :is([data-bt-enter="new"],[data-bt-enter="after-collap
 `;
 var PLUGIN_ID = "ds-bot";
 var ROOT_SELECTOR = /^(?:html\s+)?(?:body|:root)(?:\[[^\]]*\])*$/;
-var ownSelector = (selector) => selector.includes(".bt-") && !/\[class[*^$]?=/.test(selector);
+var ownSelector = (selector2) => selector2.includes(".bt-") && !/\[class[*^$]?=/.test(selector2);
 function splitTopLevel(text, separator) {
   const parts = [];
   let depth = 0;
@@ -19880,7 +19997,7 @@ function botOwnCss(css) {
       continue;
     }
     const selectors = splitTopLevel(head, ",").map((part) => part.trim());
-    if (selectors.every((selector) => ROOT_SELECTOR.test(selector))) {
+    if (selectors.every((selector2) => ROOT_SELECTOR.test(selector2))) {
       const custom = splitTopLevel(body, ";").map((part) => part.trim()).filter((part) => part.startsWith("--"));
       if (custom.length > 0) out += `${head}{${custom.join(";")}}
 `;
@@ -20531,23 +20648,6 @@ function AgentBadge({ engine, size = 15 }) {
   );
 }
 
-// src/shared/message-sender.js
-var field = (value) => typeof value === "string" && value.trim() ? value.trim() : void 0;
-function relaySender(source) {
-  const sender = source?.sender;
-  return {
-    id: field(source?.senderSessionId) ?? field(source?.senderId) ?? field(source?.fromId) ?? field(sender?.id) ?? field(sender?.sessionId) ?? field(sender),
-    name: field(source?.senderName) ?? field(sender?.name) ?? field(source?.fromName)
-  };
-}
-function peerRole(source) {
-  if (!source || source.form === "snapshot") return void 0;
-  if (["request", "reply", "stopped"].includes(source.role)) return source.role;
-  if (source.role !== void 0) return void 0;
-  const sender = relaySender(source);
-  if (source.form === "relay" || sender.id || sender.name) return "request";
-}
-
 // src/client/changes-card.js
 var import_react5 = require("react");
 var NAMES = 3;
@@ -20601,77 +20701,6 @@ var CHANGES_CSS = `
 @media (max-width:640px){.bt-changes{margin-left:0}}
 `;
 
-// src/client/group-reads.js
-var clients = /* @__PURE__ */ new WeakMap();
-function groupReads(actions) {
-  if (clients.has(actions)) return clients.get(actions);
-  const pending = /* @__PURE__ */ new Map();
-  const closed = /* @__PURE__ */ new Map();
-  const latest = /* @__PURE__ */ new Map();
-  function read(key, cursor, fetch2) {
-    const current2 = pending.get(key);
-    if (current2) {
-      if (current2.cursor === cursor && !current2.next) return current2.task;
-      if (!current2.next) {
-        current2.next = current2.task.then(() => read(key, current2.latest, fetch2));
-      }
-      current2.latest = cursor;
-      return current2.next;
-    }
-    if (typeof cursor === "string" && latest.get(key)?.cursor === cursor) return Promise.resolve(latest.get(key).value);
-    const entry = { cursor };
-    entry.task = Promise.resolve().then(fetch2).catch(() => null).then((value) => {
-      if (typeof cursor === "string" && value != null) {
-        latest.set(key, { cursor, value });
-        if (latest.size > 16) latest.delete(latest.keys().next().value);
-      }
-      return value;
-    }).finally(() => pending.delete(key));
-    pending.set(key, entry);
-    return entry.task;
-  }
-  const client = {
-    read,
-    closed: (key) => closed.get(key),
-    settle(key, view) {
-      closed.set(key, view);
-      if (closed.size > 128) closed.delete(closed.keys().next().value);
-    }
-  };
-  clients.set(actions, client);
-  return client;
-}
-function createGroupRowsReader(call2, maxRanges) {
-  const rooms = /* @__PURE__ */ new Map();
-  async function flush(roomId, batch) {
-    rooms.delete(roomId);
-    clearTimeout(batch.timer);
-    const entries2 = batch.entries;
-    let result;
-    try {
-      result = await call2("group-rows", { roomId, ranges: entries2.map((entry) => entry.range) });
-    } catch {
-    }
-    const valid = Array.isArray(result) && result.length === entries2.length;
-    entries2.forEach((entry, index) => entry.resolve(valid ? result[index] : null));
-  }
-  return (roomId, from, to, anchor) => {
-    const limit = maxRanges();
-    const range = { from, ...to === void 0 ? {} : { to }, ...anchor === void 0 ? {} : { anchor } };
-    if (!Number.isSafeInteger(limit) || limit < 2) return call2("group-rows", { roomId, ...range }).catch(() => null);
-    let batch = rooms.get(roomId);
-    if (!batch) {
-      batch = { entries: [] };
-      rooms.set(roomId, batch);
-      batch.timer = setTimeout(() => void flush(roomId, batch), 8);
-    }
-    return new Promise((resolve2) => {
-      batch.entries.push({ range, resolve: resolve2 });
-      if (batch.entries.length >= limit) void flush(roomId, batch);
-    });
-  };
-}
-
 // src/client/overlay-hooks.js
 var import_react6 = require("react");
 var escapeLayers = [];
@@ -20702,23 +20731,6 @@ function useEscape(onClose, active = true, { priority = 0 } = {}) {
   }, [active, priority]);
 }
 
-// src/shared/goal-note.js
-var STATUSES = /* @__PURE__ */ new Set(["pending", "working", "reported", "done"]);
-function validGoalTime(value, now = Date.now()) {
-  return Number.isSafeInteger(value) && value > 0 && value <= now && Number.isFinite(new Date(value).getTime());
-}
-function goalNoteContext(task, now = Date.now()) {
-  const noteTimeKnown = validGoalTime(task.noteAt, now);
-  const hasStatusTime = task.statusUpdatedAt !== void 0;
-  const statusTime = !hasStatusTime ? "missing" : validGoalTime(task.statusUpdatedAt, now) ? "known" : "invalid";
-  const versionsKnown = Number.isSafeInteger(task.statusVersion) && task.statusVersion >= 0 && Number.isSafeInteger(task.noteStatusVersion) && task.noteStatusVersion >= 0;
-  const statusesKnown = STATUSES.has(task.status) && STATUSES.has(task.noteStatus);
-  if (!noteTimeKnown || !versionsKnown || !statusesKnown || statusTime === "invalid" || task.noteStatusVersion > task.statusVersion) return { kind: "unknown", noteTimeKnown, statusTime };
-  if (task.noteStatusVersion === task.statusVersion && task.noteStatus !== task.status) return { kind: "unknown", noteTimeKnown, statusTime };
-  if (statusTime === "known" && (task.noteStatusVersion < task.statusVersion && task.noteAt > task.statusUpdatedAt || task.noteStatusVersion === task.statusVersion && task.noteAt < task.statusUpdatedAt)) return { kind: "conflict", noteTimeKnown, statusTime };
-  return { kind: task.noteStatusVersion === task.statusVersion ? "current" : "historical", noteTimeKnown, statusTime };
-}
-
 // src/client/goal.js
 var import_react7 = require("react");
 var REPORTED = /* @__PURE__ */ new Set(["reported", "done"]);
@@ -20732,11 +20744,9 @@ function goalView(goal, { roster = {}, roomWork = [] } = {}) {
   const count = stages.length;
   const at = goal.current;
   const current2 = RUNNING.has(goal.status) ? stages[at] : void 0;
-  const currentTasks = Array.isArray(current2?.tasks) ? current2.tasks : [];
-  const checking = currentTasks.length > 0 && currentTasks.every((task) => REPORTED.has(task.status));
-  const automaticIdle = goal.idle === true && ["admin-pass", "nudge-limit"].includes(goal.idleReason) && Number.isSafeInteger(goal.idleRevision) && goal.idleRevision === goal.revision;
+  const checking = current2 !== void 0 && (current2.tasks ?? []).every((task) => REPORTED.has(task.status));
   const number = goal.status === "drafting" ? void 0 : goal.status === "stopped" ? stages.filter((stage) => stage.status === "passed").length : current2 !== void 0 ? at + 1 : count;
-  const barLabel = goal.status === "drafting" ? t("Aligning the goal with you") : goal.status === "stopped" ? t("Stopped") : goal.status === "complete" ? t("Goal reached") : goal.status === "paused" ? current2 ? t("Paused · {title}", { title: current2.title }) : t("Paused") : goal.idle === true && !automaticIdle ? current2 ? t("Waiting for you · {title}", { title: current2.title }) : t("Waiting for you") : goal.reviewAttempt?.terminalFailure ? t("Inspection failed before any administrator tool ran") : ["uncertain", "cancelled-uncertain"].includes(goal.reviewAttempt?.state) ? t("Periodic review needs attention") : automaticIdle ? current2 ? t("Periodic review pending · {title}", { title: current2.title }) : t("Periodic review pending") : current2 === void 0 ? t("Final check") : checking ? t("Results reported · stage review pending: {title}", { title: current2.title }) : current2.title;
+  const barLabel = goal.status === "drafting" ? t("Aligning the goal with you") : goal.status === "stopped" ? t("Stopped") : goal.status === "complete" ? t("Goal reached") : goal.status === "paused" ? current2 ? t("Paused · {title}", { title: current2.title }) : t("Paused") : goal.idle === true ? current2 ? t("Waiting for you · {title}", { title: current2.title }) : t("Waiting for you") : current2 === void 0 ? t("Final check") : checking ? t("Checking · {title}", { title: current2.title }) : current2.title;
   const segments = stages.map((stage, i) => stage.status === "passed" ? "done" : i === at && goal.status === "paused" ? "paused" : i === at && goal.status === "active" ? checking ? "checking" : "current" : "todo");
   const working = new Set((roomWork ?? []).map((entry) => entry.botId));
   const seen = /* @__PURE__ */ new Set();
@@ -20751,7 +20761,7 @@ function goalView(goal, { roster = {}, roomWork = [] } = {}) {
     acceptance: stage.acceptance,
     status: stage.status,
     kind: stage.status === "passed" ? "passed" : i === at && RUNNING.has(goal.status) ? "current" : "upcoming",
-    tasks: (stage.tasks ?? []).map((task) => ({ bot: roster.byId?.[task.botId], task: task.task, status: task.status, ...task.statusUpdatedAt !== void 0 ? { statusUpdatedAt: task.statusUpdatedAt } : {}, ...typeof task.note === "string" && task.note !== "" ? { note: task.note, noteStatus: task.noteStatus, noteAt: task.noteAt, statusVersion: task.statusVersion, noteStatusVersion: task.noteStatusVersion } : {} })),
+    tasks: (stage.tasks ?? []).map((task) => ({ bot: roster.byId?.[task.botId], task: task.task, status: task.status })),
     evidence: stage.evidence,
     reworks: stage.reworks ?? 0,
     feedback: stage.feedback
@@ -20759,7 +20769,6 @@ function goalView(goal, { roster = {}, roomWork = [] } = {}) {
   return {
     status: goal.status,
     idle: goal.idle === true,
-    automaticIdle,
     title: goal.title ?? "",
     number,
     count,
@@ -20828,36 +20837,9 @@ function GoalBar({ view, open, room: room2, actions }) {
     (0, import_react7.createElement)("span", { className: "bt-goal-chev", "aria-hidden": true }, (0, import_react7.createElement)(ChevronDownIcon))
   );
 }
-function taskStatusText(status) {
-  switch (status) {
-    case "pending":
-      return t("Task pending");
-    case "working":
-      return t("Task working");
-    case "reported":
-      return t("Task reported");
-    case "done":
-      return t("Task marked done");
-    default:
-      return t("Task status unknown");
-  }
-}
-function goalTime(value) {
-  if (!validGoalTime(value)) return void 0;
-  const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? date.toISOString().replace("T", " ").replace("Z", " UTC") : void 0;
-}
-function taskNoteText(task) {
-  const context = goalNoteContext(task);
-  if (context.kind === "conflict") return t("Note · time conflict; verify");
-  if (context.kind === "historical") return t("Note · earlier status");
-  if (context.kind === "current") return t("Note · recorded in this status");
-  return t("Note · context unknown");
-}
 function TaskRow({ task, working }) {
   const live = working.has(task.bot?.id) || task.status === "working";
-  const noteTime = goalTime(task.noteAt);
-  const statusTime = goalTime(task.statusUpdatedAt);
+  const returned = REPORTED.has(task.status);
   return (0, import_react7.createElement)(
     "div",
     { className: "bt-goal-task", "data-task": task.status === "pending" ? "pending" : void 0 },
@@ -20865,30 +20847,19 @@ function TaskRow({ task, working }) {
       "span",
       { className: "bt-goal-tav" },
       task.bot ? (0, import_react7.createElement)(BotAvatar, { bot: task.bot, size: 20, state: live ? "working" : "idle" }) : null,
-      task.status === "done" ? (0, import_react7.createElement)("span", { className: "bt-goal-tdone", "aria-hidden": true }, (0, import_react7.createElement)(CheckIcon)) : null
+      returned ? (0, import_react7.createElement)("span", { className: "bt-goal-tdone", "aria-hidden": true }, (0, import_react7.createElement)(CheckIcon)) : null
     ),
     (0, import_react7.createElement)(
       "span",
       { className: "bt-goal-ttext" },
       (0, import_react7.createElement)("span", { className: "bt-goal-tname", style: task.bot ? { color: inkText(colorOf(task.bot)) } : void 0 }, task.bot?.name ?? t("a Bot")),
       " ",
-      task.task,
-      (0, import_react7.createElement)("span", { className: "bt-goal-tstatus" }, taskStatusText(task.status)),
-      (0, import_react7.createElement)("span", { className: "bt-goal-tstatus-time" }, statusTime === void 0 ? t("Status change time unknown") : t("Status changed: {time}", { time: statusTime })),
-      task.note ? (0, import_react7.createElement)(
-        "span",
-        { className: "bt-goal-tnote" },
-        (0, import_react7.createElement)("span", { className: "bt-goal-tnote-label" }, taskNoteText(task)),
-        " · ",
-        (0, import_react7.createElement)("span", { className: "bt-goal-tnote-time" }, noteTime === void 0 ? t("Recorded time unknown") : t("Recorded: {time}", { time: noteTime })),
-        ": ",
-        task.note
-      ) : null
+      task.task
     )
   );
 }
 var STOP_ARM_MS = 3e3;
-function GoalPanel({ goal, view, room: room2, roster, actions, working, openReview }) {
+function GoalPanel({ goal, view, room: room2, roster, actions, working }) {
   const at = RUNNING.has(view.status) && goal.current < view.stages.length ? goal.current : -1;
   const [selected, setSelected] = (0, import_react7.useState)(at);
   const [checks, setChecks] = (0, import_react7.useState)(false);
@@ -20921,7 +20892,6 @@ function GoalPanel({ goal, view, room: room2, roster, actions, working, openRevi
   const hasChecks = goal.objective !== void 0 || goal.acceptance !== void 0 || goal.constraints?.length > 0;
   const admin = roster.byId?.[room2.admin]?.name ?? t("a Bot");
   const stopWork = () => void Promise.resolve(actions.stopRoomWork(room2.id)).catch((error) => actions.reportError(error, "stop"));
-  const reviewIssue = goal.reviewAttempt && ["uncertain", "cancelled-uncertain", "admitting"].includes(goal.reviewAttempt.state);
   return (0, import_react7.createElement)(
     "div",
     { className: "bt-goal-panel", role: "region", "aria-label": view.title },
@@ -20979,12 +20949,6 @@ function GoalPanel({ goal, view, room: room2, roster, actions, working, openRevi
         )) : null
       ) : null
     ),
-    reviewIssue ? (0, import_react7.createElement)(
-      "div",
-      { className: "bt-goal-sec" },
-      (0, import_react7.createElement)("div", { className: "bt-goal-text" }, goal.reviewAttempt.terminalFailure ? t("The original inspection has been verified. Future inspections will wait until pending group work has cleared.") : t("This review has an unknown outcome. Check the original work before allowing future reviews.")),
-      (0, import_react7.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: typeof openReview !== "function", onClick: openReview }, t("Open review workspace"))
-    ) : null,
     (0, import_react7.createElement)(
       "div",
       { className: "bt-goal-foot" },
@@ -20999,7 +20963,6 @@ function GoalPanel({ goal, view, room: room2, roster, actions, working, openRevi
         { className: "bt-goal-facts" },
         view.status === "paused" && working.size > 0 ? (0, import_react7.createElement)("button", { type: "button", className: "bt-goal-back", onClick: stopWork }, t("Stop current work too")) : null,
         view.status === "active" ? (0, import_react7.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: () => control("pause") }, t("Pause")) : null,
-        view.status === "active" && view.idle && !view.automaticIdle ? (0, import_react7.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: () => control("resume") }, t("Resume")) : null,
         view.status === "paused" ? (0, import_react7.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: () => control("resume") }, t("Resume")) : null,
         view.status === "active" || view.status === "paused" ? (0, import_react7.createElement)("button", {
           type: "button",
@@ -21141,7 +21104,7 @@ function GoalIsland({ room: room2, goal, view, open, composing, approvalPod = nu
         import_react7.Fragment,
         null,
         (0, import_react7.createElement)(GoalBar, { view, open: goalExpanded, room: room2, actions }),
-        goalExpanded ? (0, import_react7.createElement)(GoalPanel, { goal, view, room: room2, roster, actions, working, openReview }) : null
+        goalExpanded ? (0, import_react7.createElement)(GoalPanel, { goal, view, room: room2, roster, actions, working }) : null
       )
     )
   );
@@ -21256,14 +21219,12 @@ body:is([data-bt-effects=reduced],[data-bt-effects=off]) .bt-island::before{disp
 .bt-goal-evi{margin-top:8px;font-size:12px;line-height:18px;color:var(--bt-ink-2);overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .bt-goal-tasks{display:flex;flex-direction:column;gap:8px;margin-top:12px}
 .bt-goal-task{display:flex;align-items:flex-start;gap:8px;min-width:0}
-.bt-goal-task[data-task=pending] .bt-goal-tav{opacity:.55}
+.bt-goal-task[data-task=pending]{opacity:.55}
 .bt-goal-tav{position:relative;flex:none;display:inline-flex;margin-top:1px}
 .bt-goal-tdone{position:absolute;right:-2px;bottom:-2px;width:12px;height:12px;border-radius:50%;corner-shape:round;background:var(--bt-green);color:var(--bt-main);display:inline-flex;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px var(--bt-main)}
 .bt-goal-tdone svg{width:9px;height:9px}
 .bt-goal-ttext{flex:0 1 auto;min-width:0;overflow-wrap:anywhere}
 .bt-goal-tname{font-weight:500}
-.bt-goal-tstatus,.bt-goal-tstatus-time,.bt-goal-tnote{display:block;color:var(--bt-ink-2);font-size:12px;line-height:17px}
-.bt-goal-tnote{white-space:pre-wrap;overflow-wrap:anywhere}
 .bt-goal-ckbody{display:flex;flex-direction:column;gap:10px;padding:0 14px 10px;font-size:13px;line-height:18px;text-align:left}
 /* The bottom row: disclosure on the left, controls on the right. */
 .bt-goal-foot{display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;min-height:40px;flex:none;padding:6px 8px 6px 14px;box-sizing:border-box;border-top:.5px solid var(--bt-line)}
@@ -22192,8 +22153,8 @@ function ComputerCallRow({ sessionId, call: call2, roster, actions, hooks }) {
   const { value: argValue } = toolArgs(call2);
   const method = argValue("method") ?? String(call2?.name ?? "").replace(/^cua_driver_native__/, "");
   const stepApp = hooks?.useComputer?.((map) => (map.bots?.[roster.byId[sessionId]?.id]?.steps ?? []).find((step) => step.callId === call2?.callId)?.app);
-  const selector = argValue("params")?.selector;
-  const app = stepApp ?? (method === "getApp" && typeof selector === "string" && selector !== "" ? selector : void 0);
+  const selector2 = argValue("params")?.selector;
+  const app = stepApp ?? (method === "getApp" && typeof selector2 === "string" && selector2 !== "" ? selector2 : void 0);
   const shot = (call2?.content ?? []).find((block) => (block?.type === "image" || block?.type === "file") && block.attachment !== void 0)?.attachment;
   const [url, setUrl] = (0, import_react12.useState)(null);
   const [open, setOpen] = (0, import_react12.useState)(false);
@@ -23468,7 +23429,7 @@ function valueAxis(values, zero) {
   const pad2 = (high - low) * 0.1 || Math.abs(high) * 0.1 || 1;
   return niceTicks(low - pad2, high + pad2);
 }
-function columns({ categories, series, unit, kind }, width, active, shown) {
+function columns2({ categories, series, unit, kind }, width, active, shown) {
   const visible = series.filter((_, index) => shown[index]);
   const ticks = valueAxis(visible.flatMap((item) => item.values), kind !== "line");
   const lo = ticks[0];
@@ -23694,7 +23655,7 @@ function WidgetChart({ node, lookup, registerChart, refreshCharts }) {
   const label = typeof node.caption === "string" && node.caption !== "" ? node.caption : ui.t("Chart");
   const isDonut = kind === "donut";
   const legendBeside = isDonut && width >= 360;
-  const drawn = isDonut ? donut(data, legendBeside ? width - 200 : width, active, setActive) : kind === "hbar" ? rows(data, width, active, shown) : columns(data, width, active, shown);
+  const drawn = isDonut ? donut(data, legendBeside ? width - 200 : width, active, setActive) : kind === "hbar" ? rows(data, width, active, shown) : columns2(data, width, active, shown);
   const svgWidth = isDonut ? drawn.size : width;
   const move = (event) => {
     const keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
@@ -24173,9 +24134,9 @@ function SubmitInput({ node, ctx }) {
   );
 }
 function WidgetTable({ node, lookup }) {
-  const columns2 = (Array.isArray(node.columns) ? node.columns : []).filter((column) => column !== null && typeof column === "object");
+  const columns3 = (Array.isArray(node.columns) ? node.columns : []).filter((column) => column !== null && typeof column === "object");
   const rows2 = (Array.isArray(node.rows) ? node.rows : []).map((row) => (Array.isArray(row) ? row : []).map((cell) => resolve(cell, lookup, "")));
-  const numeric2 = columns2.map((_, index) => {
+  const numeric2 = columns3.map((_, index) => {
     const cells = rows2.map((row) => row[index]).filter((cell) => cell !== void 0 && cell !== "");
     return cells.length > 0 && cells.every((cell) => typeof cell === "number" || typeof cell === "string" && NUMERIC_CELL.test(cell.trim()));
   });
@@ -24185,11 +24146,11 @@ function WidgetTable({ node, lookup }) {
     (0, import_react16.createElement)(
       "table",
       null,
-      (0, import_react16.createElement)("thead", null, (0, import_react16.createElement)("tr", null, columns2.map((column, index) => (0, import_react16.createElement)("th", { key: column.key ?? index, scope: "col", className: numeric2[index] ? "dv-num" : void 0 }, column.label)))),
+      (0, import_react16.createElement)("thead", null, (0, import_react16.createElement)("tr", null, columns3.map((column, index) => (0, import_react16.createElement)("th", { key: column.key ?? index, scope: "col", className: numeric2[index] ? "dv-num" : void 0 }, column.label)))),
       (0, import_react16.createElement)("tbody", null, rows2.map((row, rowIndex) => (0, import_react16.createElement)(
         "tr",
         { key: rowIndex },
-        columns2.map((column, columnIndex) => (0, import_react16.createElement)("td", { key: column.key ?? columnIndex, className: numeric2[columnIndex] ? "dv-num" : void 0 }, cellText2(row[columnIndex])))
+        columns3.map((column, columnIndex) => (0, import_react16.createElement)("td", { key: column.key ?? columnIndex, className: numeric2[columnIndex] ? "dv-num" : void 0 }, cellText2(row[columnIndex])))
       )))
     )
   );
@@ -26514,7 +26475,7 @@ function DeepSeekSignIn({ useUi, actions }) {
 function SignInHost({ entry, actions }) {
   const [ops] = (0, import_react20.useState)(() => entry.inject?.() ?? {});
   const close = () => actions.closeSignIn();
-  const useHook = (source) => (selector) => (0, import_react20.useSyncExternalStore)(source.subscribe, () => selector(source.getSnapshot()));
+  const useHook = (source) => (selector2) => (0, import_react20.useSyncExternalStore)(source.subscribe, () => selector2(source.getSnapshot()));
   const [hooks] = (0, import_react20.useState)(() => ({ useAccount: useHook(ops.hooks.account), useTheme: useHook(ops.hooks.theme) }));
   return (0, import_react20.createElement)(entry.component, {
     ...ops,
@@ -33354,13 +33315,13 @@ var roomRule = () => {
   const live = room.rule?.parentStyleSheet?.ownerNode?.isConnected;
   if (live && room.selector) return room.rule;
   const column = document.querySelector('[class*="_centerCol"]');
-  const selector = column ? [...column.classList].filter((name) => name.includes("_centerCol")).map((name) => `.${CSS.escape(name)}`).join(",") : "";
-  if (live && !selector) return room.rule;
+  const selector2 = column ? [...column.classList].filter((name) => name.includes("_centerCol")).map((name) => `.${CSS.escape(name)}`).join(",") : "";
+  if (live && !selector2) return room.rule;
   const declarations2 = room.rule?.style.cssText ?? "";
   room.rule?.parentStyleSheet?.ownerNode?.remove();
-  const style = installStyles(`${selector || '[class*="_centerCol"]'}{${declarations2}}`, "chat-room");
+  const style = installStyles(`${selector2 || '[class*="_centerCol"]'}{${declarations2}}`, "chat-room");
   room.rule = style.sheet.cssRules[0];
-  room.selector = selector;
+  room.selector = selector2;
   return room.rule;
 };
 var margin = (side, width, style) => {
@@ -33401,27 +33362,24 @@ function installFrameWatch(frame2) {
   let raf = 0;
   const watched = /* @__PURE__ */ new WeakSet();
   const observer = typeof ResizeObserver === "function" ? new ResizeObserver(() => schedule()) : null;
-  const read = () => {
-    const column = document.querySelector('[class*="_sidebarCol"]');
-    const animating = column?.closest("[data-animating]") != null;
-    const width = animating ? null : sidebarTrackWidth();
-    const collapsed = dshCollapsed();
-    collapsedWidth = nextCollapsedWidth({ measured: width, collapsed, animating, last: collapsedWidth });
-    frame2.set((state) => {
-      const next = { ...state, viewport: window.innerWidth, collapsedWidth, collapsed: collapsed === true };
-      return state.viewport === next.viewport && state.collapsedWidth === next.collapsedWidth && state.collapsed === next.collapsed ? state : next;
-    });
-  };
   const measure = () => {
-    for (const selector of ['[class*="_sidebarCol"]', '[class*="_centerCol"]']) {
-      for (const column of document.querySelectorAll(selector)) {
-        if (!watched.has(column)) {
-          watched.add(column);
-          observer?.observe(column);
-        }
-      }
+    if (rescan) {
+      rescan = false;
+      const next = [...document.querySelectorAll(selector)];
+      for (const column of columns) if (!next.includes(column)) observer?.unobserve(column);
+      for (const column of next) if (!columns.includes(column)) observer?.observe(column);
+      columns = next;
+      sidebar = columns.find((column) => column.matches('[class*="_sidebarCol"]')) ?? null;
     }
-    read();
+    const animating = sidebar?.closest("[data-animating]") != null;
+    const width = !sidebar || animating ? null : trackRoom(sidebar.getBoundingClientRect());
+    const collapsed = sidebar?.closest("[data-sidebar-collapsed]") != null;
+    collapsedWidth = nextCollapsedWidth({ measured: width, collapsed: sidebar ? collapsed : null, animating, last: collapsedWidth });
+    frame2.set((state) => {
+      const viewport = window.innerWidth;
+      if (state.viewport === viewport && state.collapsedWidth === collapsedWidth && state.collapsed === collapsed) return state;
+      return { ...state, viewport, collapsedWidth, collapsed };
+    });
   };
   const schedule = () => {
     if (raf === 0) raf = requestAnimationFrame(() => {
@@ -34132,8 +34090,8 @@ function TeamSidebar(props) {
     delete column.dataset.folding;
     grip.setPointerCapture?.(event.pointerId);
     chatRoom.hold(true);
-    const columns2 = chatRoom.columns();
-    for (const col of columns2) col.style.setProperty("transition", "none", "important");
+    const columns3 = chatRoom.columns();
+    for (const col of columns3) col.style.setProperty("transition", "none", "important");
     const panes = [...document.querySelectorAll(".bt-pane")];
     const offLeft = frameSnap.collapsedWidth ?? 0;
     let last = null;
@@ -34145,18 +34103,18 @@ function TeamSidebar(props) {
       column.style.setProperty("--bt-lc-w", `${width}px`);
       const occupied = at.left === "open" ? width : RAIL_WIDTH;
       const push = Math.max(0, occupied - offLeft);
-      for (const col of columns2) col.style.setProperty("margin-left", `${push}px`, "important");
+      for (const col of columns3) col.style.setProperty("margin-left", `${push}px`, "important");
       for (const pane of panes) pane.style.left = `${occupied}px`;
     };
     let springUntil = 0;
     const springOff = () => {
       springUntil = 0;
       delete column.dataset.folding;
-      for (const col of columns2) col.style.setProperty("transition", "none", "important");
+      for (const col of columns3) col.style.setProperty("transition", "none", "important");
     };
     const springOn = () => {
       column.dataset.folding = "";
-      for (const col of columns2) col.style.setProperty("transition", `margin-left ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}`, "important");
+      for (const col of columns3) col.style.setProperty("transition", `margin-left ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}`, "important");
       springUntil = performance.now() + SPRING_SHAPE.duration;
       clearTimeout(springTimer.current);
       springTimer.current = setTimeout(springOff, SPRING_SHAPE.duration);
@@ -34174,7 +34132,7 @@ function TeamSidebar(props) {
     const finish = () => {
       clearTimeout(springTimer.current);
       if (column.isConnected && last !== null) chatRoom.setLeft(Math.max(0, (last.left === "open" ? last.width : RAIL_WIDTH) - offLeft));
-      for (const col of columns2) {
+      for (const col of columns3) {
         col.style.removeProperty("margin-left");
         col.style.removeProperty("transition");
       }
@@ -35853,13 +35811,13 @@ function niceTop(max) {
   const step = 10 ** Math.floor(Math.log10(max));
   return [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].map((scale) => scale * step).find((value) => value >= max);
 }
-function Chart({ range, columns: columns2, series, tipSeries, by, onBy, onPick }) {
+function Chart({ range, columns: columns3, series, tipSeries, by, onBy, onPick }) {
   const [hover, setHover] = (0, import_react42.useState)(null);
-  const top = niceTop(Math.max(0, ...columns2.map((column) => column.total)));
-  const count = columns2.length;
+  const top = niceTop(Math.max(0, ...columns3.map((column) => column.total)));
+  const count = columns3.length;
   const fillOf = new Map(series.map((entry) => [entry.key, entry.fill]));
   const tipOf = new Map(tipSeries.map((entry) => [entry.key, entry]));
-  const tip = hover === null ? null : columns2[hover];
+  const tip = hover === null ? null : columns3[hover];
   const tipSide = hover !== null && hover >= count / 2 ? { right: `calc(${(count - hover) / count * 100}% + 8px)` } : { left: `calc(${(hover + 1) / count * 100}% + 8px)` };
   return (0, import_react42.createElement)(
     "section",
@@ -35881,7 +35839,7 @@ function Chart({ range, columns: columns2, series, tipSeries, by, onBy, onPick }
         (0, import_react42.createElement)(
           "div",
           { className: "bt-us-cols" },
-          columns2.map((column, at) => (0, import_react42.createElement)("div", {
+          columns3.map((column, at) => (0, import_react42.createElement)("div", {
             key: `${range.from ? `${range.from}~${range.to}` : range.id}:${column.key}`,
             className: "bt-us-col",
             "data-on": hover === at ? "" : void 0,
@@ -35910,7 +35868,7 @@ function Chart({ range, columns: columns2, series, tipSeries, by, onBy, onPick }
         "div",
         { className: "bt-us-ticks", "aria-hidden": true },
         // A preset counts its labels back from now; a picked span forward from its first day.
-        columns2.map((column, at) => (0, import_react42.createElement)(
+        columns3.map((column, at) => (0, import_react42.createElement)(
           "span",
           { key: column.key, "data-now": at === count - 1 && range.ends !== false ? "" : void 0 },
           (range.from ? at : count - 1 - at) % range.stride === 0 ? column.tick : ""
@@ -36276,12 +36234,12 @@ function UsagePage({ roster, actions, focusId }) {
     const tipSeries2 = face2 ? PARTS.map(([key, strength]) => ({ key, name: partLabel(key), fill: soften(face2.paint, strength) })) : series2;
     const fillOf2 = new Map(series2.map((entry) => [entry.key, entry.fill]));
     const shownKeys = new Set(series2.map((entry) => entry.key));
-    const columns3 = part2.buckets.map((bucket) => {
+    const columns4 = part2.buckets.map((bucket) => {
       const parts = face2 ? [["all", bucket.sum.total]] : series2.map((entry) => [entry.key, entry.key === "more" ? [...bucket.stacks].filter(([key]) => key !== "rest" && !shownKeys.has(key)).reduce((sum, [, value]) => sum + value, 0) : bucket.stacks.get(entry.key) ?? 0]);
       const tip = face2 ? PARTS.map(([key]) => [key, bucket.sum[key]]) : parts;
       return { key: bucket.key, tick: tickOf(range, bucket), title: titleOf2(range, bucket), total: bucket.sum.total, parts, tip };
     });
-    return { faces: faces2, models: models2, ownerAt: ownerAt2, modelAt, face: face2, keep: keep2, all: all2, part: part2, series: series2, tipSeries: tipSeries2, fillOf: fillOf2, columns: columns3, ranked: ranked2, isBot: isBot2, activeDays: activeDays2, oldest: oldest2 };
+    return { faces: faces2, models: models2, ownerAt: ownerAt2, modelAt, face: face2, keep: keep2, all: all2, part: part2, series: series2, tipSeries: tipSeries2, fillOf: fillOf2, columns: columns4, ranked: ranked2, isBot: isBot2, activeDays: activeDays2, oldest: oldest2 };
   }, [view, rangeId, span, by, focusId, roster]);
   const root = (0, import_react42.useRef)(null);
   (0, import_react42.useEffect)(() => {
@@ -36303,7 +36261,7 @@ function UsagePage({ roster, actions, focusId }) {
       )
     );
   }
-  const { faces, models, ownerAt, face, keep, all, part, series, tipSeries, fillOf, columns: columns2, ranked, isBot, activeDays, oldest } = shaped;
+  const { faces, models, ownerAt, face, keep, all, part, series, tipSeries, fillOf, columns: columns3, ranked, isBot, activeDays, oldest } = shaped;
   const pick2 = (next) => actions.openSettings("usage", `${next.kind}:${next.key}`);
   const chooseRange = (id) => {
     if (id !== "custom") {
@@ -36360,7 +36318,7 @@ function UsagePage({ roster, actions, focusId }) {
         "div",
         { key: "sheet", className: "bt-us-sheet" },
         (0, import_react42.createElement)(Stats, { key: "stats", range, total: part.total, previous: part.previous }),
-        (0, import_react42.createElement)(Chart, { key: "chart", range, columns: columns2, series, tipSeries, onPick: pick2 }),
+        (0, import_react42.createElement)(Chart, { key: "chart", range, columns: columns3, series, tipSeries, onPick: pick2 }),
         (0, import_react42.createElement)(
           "div",
           { key: "pair", className: "bt-us-pair" },
@@ -36384,7 +36342,7 @@ function UsagePage({ roster, actions, focusId }) {
         "div",
         { key: "sheet", className: "bt-us-sheet" },
         (0, import_react42.createElement)(Stats, { key: "stats", range, total: all.total, previous: all.previous }),
-        (0, import_react42.createElement)(Chart, { key: "chart", range, columns: columns2, series, tipSeries, by, onBy: setBy, onPick: pick2 }),
+        (0, import_react42.createElement)(Chart, { key: "chart", range, columns: columns3, series, tipSeries, by, onBy: setBy, onPick: pick2 }),
         (0, import_react42.createElement)(
           "div",
           { key: "pair", className: "bt-us-pair" },
@@ -43173,16 +43131,16 @@ var CONFIRM_FIELD_LABELS = {
   reason: "Reason for correction"
 };
 function boardColumns(tasks) {
-  const columns2 = new Map(COLUMNS.map(([key]) => [key, []]));
-  columns2.set("unknown", []);
+  const columns3 = new Map(COLUMNS.map(([key]) => [key, []]));
+  columns3.set("unknown", []);
   const seen = /* @__PURE__ */ new Set();
   for (const task of Array.isArray(tasks) ? tasks : []) {
     if (!task || typeof task.id !== "string" || !task.id || seen.has(task.id)) throw new Error("Invalid or duplicate task ID");
     seen.add(task.id);
     const lane = LANE_OF_STATUS[task.status] ?? task.status;
-    columns2.get(KNOWN.has(lane) ? lane : "unknown").push(task);
+    columns3.get(KNOWN.has(lane) ? lane : "unknown").push(task);
   }
-  return columns2;
+  return columns3;
 }
 function pendingStore(scope) {
   try {
@@ -47631,8 +47589,8 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
   const personalTasks = personal ? activeFiltered.filter((task) => PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress)) : [];
   const personalIds = new Set(personalTasks.map((task) => task.id));
   const legacyTasks = activeFiltered.filter((task) => task.legacy);
-  const columns2 = boardColumns(activeFiltered.filter((task) => !task.legacy && !personalIds.has(task.id)));
-  const listedBase = [...COLUMNS, ...columns2.get("unknown").length ? [["unknown", "Status unknown"]] : []];
+  const columns3 = boardColumns(activeFiltered.filter((task) => !task.legacy && !personalIds.has(task.id)));
+  const listedBase = [...COLUMNS, ...columns3.get("unknown").length ? [["unknown", "Status unknown"]] : []];
   const listed = lanePrefs.order.length ? [...listedBase].sort((left, right) => {
     const li = lanePrefs.order.indexOf(left[0]), ri = lanePrefs.order.indexOf(right[0]);
     return (li === -1 ? 999 : li) - (ri === -1 ? 999 : ri);
@@ -48290,7 +48248,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
           (0, import_react59.createElement)(ColumnRail, { label: t("Workflow") }, listed.map(([status, label]) => {
             const scheduleOnCreate = !personal && ["waiting", "ready", "working"].includes(status);
             const followup = personal || ["reported", "done", "unknown"].includes(status);
-            return renderLane("workflow", status, t(label), columns2.get(status), { laneLabel: t(label), scheduleOnCreate, followup, noCreate: status === "cancelled", defaultDraft: status === "draft", defaultOwner: personal ? "user" : scope.kind === "personal" ? scope.id : "", ownerOnly: scope.kind === "personal" });
+            return renderLane("workflow", status, t(label), columns3.get(status), { laneLabel: t(label), scheduleOnCreate, followup, noCreate: status === "cancelled", defaultDraft: status === "draft", defaultOwner: personal ? "user" : scope.kind === "personal" ? scope.id : "", ownerOnly: scope.kind === "personal" });
           }))
         ) : null,
         view === "type" ? typeSection : null,
@@ -50903,18 +50861,21 @@ var ACCOUNT_MODELS_WAIT_MS = 2e4;
 var SIGNED_OUT = /* @__PURE__ */ new Set(["ACCOUNT_SIGN_IN_REQUIRED", "ACCOUNT_SIGNED_OUT", "ACCOUNT_TOKEN_INVALID"]);
 var KEY_CODES = /* @__PURE__ */ new Set(["MISSING_CREDENTIAL", "INVALID_CREDENTIAL", "AUTH"]);
 var CREDENTIAL_CODES = /* @__PURE__ */ new Set([...KEY_CODES, ...SIGNED_OUT]);
-function failureText2(code, { name, provider, status }) {
+function failureText2(code, { name, provider, status, current: current2 = true, externalQuota = false }) {
   switch (code) {
     case "MISSING_CREDENTIAL":
       return t("{name}'s model has no API key yet.", { name });
     case "INVALID_CREDENTIAL":
       return t("This API key is not in the right format.");
     case "AUTH":
-      return status === void 0 ? t("{provider} did not accept the current API key.", { provider }) : t("{provider} did not accept the current API key ({status}).", { provider, status });
+      return status === 401 ? t("{provider} rejected the credentials used for this request ({status}).", { provider, status }) : t("{provider} denied access for this request.", { provider });
     case "CONTENT_POLICY":
       return status === void 0 ? t("{provider} blocked this request with its content filter. The API key is not the problem; edit the input or start a new chat.", { provider }) : t("{provider} blocked this request with its content filter ({status}). The API key is not the problem; edit the input or start a new chat.", { provider, status });
-    case "QUOTA":
-      return status === void 0 ? t("{provider} is out of balance or quota.", { provider }) : t("{provider} is out of balance or quota ({status}).", { provider, status });
+    case "QUOTA": {
+      if (!current2) return t("{provider} reported insufficient balance or quota for this request.", { provider });
+      const reason = status === void 0 ? t("{provider} is out of balance or quota.", { provider }) : t("{provider} is out of balance or quota ({status}).", { provider, status });
+      return externalQuota ? reason + " " + t("Check your balance and limits with this provider before retrying.") : reason;
+    }
     case "ACCOUNT_QUOTA":
       return t("The DeepSeek account balance is too low.");
     case "ACCOUNT_SIGN_IN_REQUIRED":
@@ -50936,7 +50897,7 @@ function failureText2(code, { name, provider, status }) {
       return knownFailure(code) ?? t("This turn failed.");
   }
 }
-function fixesFor(code, { canSignIn, official, topUp, onAccount = false }) {
+function fixesFor(code, { canSignIn, official, topUp, onAccount = false, status }) {
   if (onAccount && KEY_CODES.has(code)) return [];
   if (SIGNED_OUT.has(code)) return canSignIn ? ["sign-in-again"] : ["model"];
   switch (code) {
@@ -50945,12 +50906,12 @@ function fixesFor(code, { canSignIn, official, topUp, onAccount = false }) {
     case "INVALID_CREDENTIAL":
       return ["rekey", "model"];
     case "AUTH":
-      return ["rekey", canSignIn ? "use-account" : null, "model"].filter(Boolean);
+      return status === 401 ? ["rekey", canSignIn ? "use-account" : null, "model"].filter(Boolean) : ["model"];
     // A content audit is about the input, not the credentials; no key action helps.
     case "CONTENT_POLICY":
       return [];
     case "QUOTA":
-      return official ? ["top-up"] : [];
+      return official ? ["top-up"] : ["model"];
     case "ACCOUNT_QUOTA":
       return topUp ? ["top-up"] : [];
     case "MODEL_SWITCH_COMPACTION_FAILED":
@@ -51027,9 +50988,15 @@ function TechnicalDetails({ facts }) {
 function FailureCell({ node, sessionId, useRoster, useTurnClock, actions }) {
   const roster = useRoster((value) => value);
   const failRow = node?.data ?? {};
-  const bot = roster.byId?.[sessionId];
-  const host = bot?.failures?.[sessionId];
-  const data = host !== void 0 && host.turn === failRow.turn ? { ...failRow, ...host } : failRow;
+  (0, import_react65.useLayoutEffect)(() => {
+    actions.noteTurnVisible?.(sessionId, failRow.turn);
+  }, [actions, sessionId, failRow.turn]);
+  const room2 = roster.rooms?.find((room3) => Object.values(room3.memberSessions ?? {}).includes(sessionId));
+  const member = room2 && Object.keys(room2.memberSessions).find((id) => room2.memberSessions[id] === sessionId);
+  const bot = roster.byId?.[member ?? sessionId];
+  const latest = bot?.failures?.[sessionId];
+  const host = latest !== void 0 && latest.turn === failRow.turn ? latest : void 0;
+  const data = host === void 0 ? failRow : { ...failRow, ...host };
   const later = useTurnClock((state) => Object.keys(state[sessionId] ?? {}).some((turn) => Number(turn) > data.turn));
   const account = useAccountView(actions);
   const signedIn = account?.status === "credential-stored";
@@ -51038,11 +51005,21 @@ function FailureCell({ node, sessionId, useRoster, useTurnClock, actions }) {
   const [retry, setRetry] = (0, import_react65.useState)("idle");
   const [error, setError] = (0, import_react65.useState)("");
   const [joining, setJoining] = (0, import_react65.useState)(null);
-  const blocked = bot?.blocked?.code === data.code ? bot.blocked : void 0;
-  const provider = blocked?.provider ?? host?.provider ?? providerOf(bot, roster);
-  const text = failureText2(data.code, { name: bot?.name ?? t("This Bot"), provider: providerName(roster, provider), status: data.status ?? blocked?.status });
+  const block = bot?.blocked;
+  const bound2 = block !== void 0 && block.sessionId === sessionId && block.turn === data.turn;
+  const legacyMatch = block?.sessionId === void 0 && host?.requestId && host.requestId === block?.requestId;
+  const blocked = block?.code === data.code && (bound2 || legacyMatch) ? block : void 0;
+  const current2 = bot !== void 0 && (member !== void 0 || currentPart(bot) === sessionId) && !later && !(latest?.turn > data.turn);
+  const provider = data.provider ?? blocked?.provider;
+  const status = data.status ?? blocked?.status;
+  const text = failureText2(data.code, {
+    name: bot?.name ?? t("This Bot"),
+    provider: providerName(roster, provider),
+    status,
+    current: current2,
+    externalQuota: provider !== void 0 && provider !== OFFICIAL && provider !== ACCOUNT
+  });
   const facts = failureFacts(data, blocked);
-  const current2 = bot !== void 0 && currentPart(bot) === sessionId && !later;
   const moveToAccount = () => {
     const model = accountModel(roster);
     if (model === void 0) {
@@ -51100,14 +51077,14 @@ function FailureCell({ node, sessionId, useRoster, useTurnClock, actions }) {
     model: actions.showDetails ? () => actions.showDetails(sessionId) : void 0,
     "model-settings": manageModels(actions)
   };
-  const fixes = fixesFor(data.code, { canSignIn, official, topUp: topUp !== void 0, onAccount: provider === ACCOUNT }).filter((fix) => fix === "top-up" || runs[fix] !== void 0);
+  const fixes = fixesFor(data.code, { canSignIn, official, topUp: topUp !== void 0, onAccount: providerOf(bot, roster) === ACCOUNT, status }).filter((fix) => fix === "top-up" || runs[fix] !== void 0);
   const asked = isHiddenTurn(roster, sessionId, data.turn);
   const retrying = !asked && typeof actions.resume === "function" && retryShown(data.code, blocked);
   const retryFirst = retrying && (fixes.length === 0 || CREDENTIAL_CODES.has(data.code));
   const resume = () => {
     setRetry("busy");
     setError("");
-    void Promise.resolve(actions.resume(bot.id)).then(() => setRetry("sent"), (failure) => {
+    void Promise.resolve(actions.resume(bot.id, sessionId, data.turn)).then(() => setRetry("sent"), (failure) => {
       setRetry("idle");
       setError(hostText(failure?.message ?? String(failure)));
     });
@@ -55188,20 +55165,20 @@ function BotPanel({ pane, leaving, room: room2, overlay, roster, actions, useSes
     setDragging(true);
     setSettling(false);
     chatRoom.hold(true);
-    const columns2 = chatRoom.columns();
-    for (const column of columns2) column.style.setProperty("transition", "none", "important");
+    const columns3 = chatRoom.columns();
+    for (const column of columns3) column.style.setProperty("transition", "none", "important");
     const onMove = (move) => {
       next = fitWidth(from.width + from.x - move.clientX, range);
       panel.style.width = `${next}px`;
-      if (columns2.length === 0) chatRoom.setRight(next);
-      for (const column of columns2) column.style.setProperty("margin-right", `${next}px`, "important");
+      if (columns3.length === 0) chatRoom.setRight(next);
+      for (const column of columns3) column.style.setProperty("margin-right", `${next}px`, "important");
     };
     const ends = ["pointerup", "pointercancel", "lostpointercapture"];
     const cleanup = () => {
       dragCleanup.current = null;
       grip.removeEventListener("pointermove", onMove);
       for (const name of ends) grip.removeEventListener(name, onEnd);
-      for (const column of columns2) {
+      for (const column of columns3) {
         column.style.removeProperty("margin-right");
         column.style.removeProperty("transition");
       }
@@ -55524,6 +55501,12 @@ function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useActivity
     previous.current = current2;
     if (current2) actions.followPanel?.(current2);
   }, [current2]);
+  const boardSession = (0, import_react77.useRef)(current2);
+  (0, import_react77.useEffect)(() => {
+    if (!current2 || boardSession.current === current2) return;
+    if (boardSession.current) actions.closePersonalBoard?.();
+    boardSession.current = current2;
+  }, [current2]);
   const open = ui.details ? { id: ui.details, view: ui.view ?? "details", renaming: ui.renaming, tab: ui.tab, side: ui.side, task: ui.task } : null;
   const layout = frameLayout({
     viewport: frameSnap.viewport,
@@ -55560,6 +55543,7 @@ function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useActivity
     null,
     (0, import_react77.createElement)(NotificationWatcher, { key: "ds-bot:notifications", useSessions, useSessionStatus, useRoster, useWork, actions }),
     opening ? (0, import_react_dom14.createPortal)((0, import_react77.createElement)(OpeningCover, { model: opening, column: layout.column }), document.body) : null,
+    ui.personalBoard ? (0, import_react77.createElement)(TaskBoard, { scope: { kind: "personal", id: "user" }, title: t("My task board"), close: actions.closePersonalBoard }) : null,
     pane ? (0, import_react_dom14.createPortal)((0, import_react77.createElement)(BotPanel, { pane, leaving: shown === null, room: layout.room, overlay: layout.panel === "overlay", roster, actions, useSessions, useSessionStatus, useActivity, useWork, useComputer, useBrowserTabs, useBrowserPages, useBrowserHolds }), document.body) : null,
     ui.newChat ? (0, import_react_dom14.createPortal)((0, import_react77.createElement)(NewChat, { key: `${ui.newChat}:${ui.newChatSection ?? ""}`, mode: ui.newChat, sectionId: ui.newChatSection ?? null, paneLeft: layout.column, roster, actions }), document.body) : null,
     ui.palette ? (0, import_react_dom14.createPortal)((0, import_react77.createElement)(CommandPalette, { key: ui.palette.token, start: ui.palette.query, token: ui.palette.token, roster, actions, useSessions }), document.body) : null,
@@ -57154,6 +57138,208 @@ function installBotMentionRule(userText, roster) {
   };
 }
 
+// src/client/inbox-groups.js
+var validId = (value) => typeof value === "string" && value.length > 0;
+function keepInboxPageOnRetry(previous, page) {
+  const samePart = (old, source) => old.sessionId === source.sessionId && old.kind === source.kind && old.roomId === source.roomId && old.earlier === source.earlier && old.endedAt === source.endedAt;
+  if (page.total !== previous.total || page.nextCursor !== previous.nextCursor || page.sources.length !== previous.sources.length || !page.sources.every((source, i) => samePart(previous.sources[i], source))) return page;
+  const sources = page.sources.map((source, i) => {
+    if (source.status === "ready" || source.status === "ambiguous") return source;
+    const old = previous.sources[i];
+    const rowsReadAt = old.status === "ready" ? previous.readAt : old.rowsReadAt;
+    if (!Number.isFinite(rowsReadAt)) return source;
+    return { ...source, rows: old.rows, rowsReadAt };
+  });
+  return { ...page, sources };
+}
+function pageCoverage(pages) {
+  let next = null;
+  const seen = /* @__PURE__ */ new Set();
+  const total = pages[0]?.page.total;
+  for (const { cursor, page } of pages) {
+    if ((cursor ?? null) !== next || seen.size && next === null || page.total !== total) return false;
+    for (const source of page.sources) {
+      if (!validId(source.sessionId) || seen.has(source.sessionId)) return false;
+      seen.add(source.sessionId);
+    }
+    next = page.nextCursor;
+  }
+  return next === null && seen.size === total;
+}
+function uniqueRows(candidates) {
+  const rows2 = [];
+  const byPart = /* @__PURE__ */ new Map();
+  const exchanges = /* @__PURE__ */ new Map();
+  for (const row of candidates) {
+    const exchangeId = row.exchangeId ?? row.row?.source?.exchangeId;
+    if (!validId(row.sessionId) || !validId(exchangeId)) continue;
+    let exchange = exchanges.get(exchangeId);
+    if (!exchange) exchanges.set(exchangeId, exchange = { parts: /* @__PURE__ */ new Map(), conflict: false });
+    const messageId = row.messageId ?? row.row?.id;
+    if (exchange.parts.has(row.sessionId) && (!validId(messageId) || exchange.parts.get(row.sessionId) !== messageId)) exchange.conflict = true;
+    exchange.parts.set(row.sessionId, messageId);
+  }
+  const aliases = /* @__PURE__ */ new Map();
+  let uncertain = false;
+  let missingExchange = false;
+  function recordAlias(alias, index) {
+    if (!validId(alias)) return;
+    if (!aliases.has(alias)) aliases.set(alias, index);
+    else if (aliases.get(alias) !== index) aliases.set(alias, -1);
+  }
+  for (const row of candidates) {
+    if (!validId(row.sessionId)) continue;
+    let part = byPart.get(row.sessionId);
+    if (!part) byPart.set(row.sessionId, part = /* @__PURE__ */ new Map());
+    const messageId = row.messageId ?? row.row?.id;
+    const exchangeId = row.exchangeId ?? row.row?.source?.exchangeId;
+    if (!validId(exchangeId)) missingExchange = true;
+    const own = validId(messageId) ? part.get(messageId) : void 0;
+    const exchange = validId(exchangeId) ? exchanges.get(exchangeId) : void 0;
+    let index = own?.index;
+    if (own && own.exchangeId && exchangeId && own.exchangeId !== exchangeId) uncertain = true;
+    if (exchange?.parts.size > 1) {
+      if (exchange.conflict || index !== void 0 && exchange.index !== void 0 && index !== exchange.index) uncertain = true;
+      else index ??= exchange.index;
+    }
+    index ??= rows2.push(row) - 1;
+    if (validId(messageId)) part.set(messageId, { index, exchangeId });
+    else if (!validId(exchangeId)) uncertain = true;
+    if (exchange) exchange.index ??= index;
+    for (const id of [messageId, exchangeId]) recordAlias(id, index);
+  }
+  const matched = /* @__PURE__ */ new Set();
+  const unlocatedIds = /* @__PURE__ */ new Set();
+  for (const row of candidates) {
+    if (validId(row.sessionId)) continue;
+    const matches2 = new Set([row.id, row.messageId, row.exchangeId].filter(validId).map((id) => aliases.get(id)).filter((index) => index !== void 0));
+    if (matches2.size === 1 && !matches2.has(-1)) {
+      const [index] = matches2;
+      const knownExchange = rows2[index].exchangeId ?? rows2[index].row?.source?.exchangeId;
+      if (!matched.has(index) && !(knownExchange && row.exchangeId && row.exchangeId !== knownExchange)) {
+        matched.add(index);
+        continue;
+      }
+    }
+    if (matches2.size || !validId(row.id) || unlocatedIds.has(row.id)) uncertain = true;
+    unlocatedIds.add(row.id);
+    rows2.push(row);
+  }
+  return { rows: rows2, uncertain: uncertain || missingExchange && byPart.size > 1 };
+}
+function warmIdentity(row) {
+  const message = row.messageId ?? row.row?.id ?? row.id;
+  const exchange = row.exchangeId ?? row.row?.source?.exchangeId;
+  if (!validId(message) && !validId(exchange)) return null;
+  return JSON.stringify([row.sessionId ?? null, message ?? null, exchange ?? null]);
+}
+function rowCounts(rows2) {
+  const counts2 = /* @__PURE__ */ new Map();
+  for (const row of rows2) {
+    const key = warmIdentity(row);
+    counts2.set(key, (counts2.get(key) ?? 0) + 1);
+  }
+  return counts2;
+}
+function sameCounts(a, b) {
+  return a.size === b.size && [...a].every(([key, count]) => b.get(key) === count);
+}
+function sessionCoverage(group) {
+  const live = new Set(group.liveSessionIds);
+  const sources = new Map((group.sources ?? []).map((source) => [source.sessionId, source.status]));
+  return { live, sources };
+}
+function sameCoverage(group, old) {
+  if (group.partial === false !== (old.partial === false)) return false;
+  if (group.liveSessionIds === old.liveSessionIds && group.sources === old.sources) return true;
+  const current2 = sessionCoverage(group), before = sessionCoverage(old);
+  return current2.live.size === before.live.size && [...current2.live].every((sid) => before.live.has(sid)) && current2.sources.size === before.sources.size && [...current2.sources].every(([sid, status]) => before.sources.has(sid) && before.sources.get(sid) === status);
+}
+function stampInboxGroups(groups, previousGroups = []) {
+  const previous = new Map(previousGroups.map((group) => [group.key, group]));
+  return groups.map((group) => {
+    const old = previous.get(group.key);
+    const same = old && sameCoverage(group, old) && (group.rows === old.rows || sameCounts(rowCounts(group.rows ?? []), rowCounts(old.rows ?? [])));
+    const liveRevision = same ? old.liveRevision : (old?.liveRevision ?? 0) + 1;
+    return { ...group, liveRevision };
+  });
+}
+function mergeGroup(group, samples, complete) {
+  const live = new Set(group.liveSessionIds);
+  const warm = group.rows ?? [];
+  const sources = new Map((group.sources ?? []).map((source) => [source.sessionId, source]));
+  const candidates = warm.filter((row) => live.has(row.sessionId));
+  const ready = /* @__PURE__ */ new Set();
+  const previousObservations = [];
+  const captures = /* @__PURE__ */ new Map();
+  const sourceCaptures = /* @__PURE__ */ new Map();
+  let currentCounts;
+  let liveAfterRead = false;
+  let unread = false;
+  for (const [sid, { source, readAt, atStart }] of samples) {
+    let capture;
+    if (atStart !== void 0) {
+      capture = captures.get(atStart);
+      if (!capture) {
+        const counts2 = rowCounts(atStart?.rows ?? []);
+        currentCounts ??= rowCounts(warm);
+        const revisionChanged = atStart?.liveRevision !== void 0 && group.liveRevision !== void 0 && group.liveRevision !== atStart.liveRevision;
+        const newer = group.partial === false && (revisionChanged || atStart?.partial !== false || !sameCounts(counts2, currentCounts));
+        capture = { counts: counts2, newer };
+        captures.set(atStart, capture);
+      }
+      sourceCaptures.set(sid, capture);
+      liveAfterRead ||= capture.newer;
+    }
+    const { rows: rows3, ...meta } = source;
+    sources.set(sid, { ...meta, readAt, ...source.status === "ready" ? { sampledCount: rows3.length } : {} });
+    if (source.status !== "ready") {
+      if (!live.has(sid)) unread = true;
+      if (!live.has(sid) && !capture?.newer && source.status !== "ambiguous" && Number.isFinite(source.rowsReadAt)) {
+        for (const row of rows3) previousObservations.push({ ...row, sessionId: sid, earlier: source.earlier, readAt: source.rowsReadAt });
+      }
+      continue;
+    }
+    ready.add(sid);
+    if (live.has(sid) || capture?.newer) continue;
+    for (const row of rows3) candidates.push({ ...row, sessionId: sid, earlier: source.earlier, readAt });
+  }
+  const allInspected = complete && samples.size > 0 && [...sources.keys()].every((sid) => ready.has(sid) || live.has(sid));
+  const seen = /* @__PURE__ */ new Map();
+  for (const row of warm) {
+    if (live.has(row.sessionId)) continue;
+    const id = warmIdentity(row);
+    const occurrence = (seen.get(id) ?? 0) + 1;
+    seen.set(id, occurrence);
+    if (validId(row.sessionId)) {
+      const capture = sourceCaptures.get(row.sessionId);
+      if (ready.has(row.sessionId) && (!capture || !capture.newer && id && capture.counts.get(id) >= occurrence)) continue;
+    } else if (allInspected && !liveAfterRead) {
+      if (!captures.size || id && [...captures.values()].every(({ counts: counts2 }) => counts2.get(id) >= occurrence)) continue;
+    }
+    candidates.push(row);
+  }
+  const { rows: rows2, uncertain } = uniqueRows(candidates.concat(previousObservations));
+  const partial = uncertain || unread || previousObservations.length > 0 || group.partial !== false && !allInspected;
+  return { key: group.key, name: group.name, rows: rows2, sources: [...sources.values()], partial, knownCount: rows2.length, count: partial ? null : rows2.length };
+}
+function inboxGroups(liveGroups = [], pages = []) {
+  const groups = new Map(liveGroups.map((group) => [group.key, group]));
+  const samples = /* @__PURE__ */ new Map();
+  for (const { page, liveGroups: atStart } of pages) {
+    const captured = atStart && new Map(atStart.map((group) => [group.key, group]));
+    for (const source of page.sources) {
+      const key = source.kind === "private" ? "private" : source.roomId;
+      if (!validId(key) || !validId(source.sessionId)) continue;
+      if (!groups.has(key)) groups.set(key, { key, name: source.roomName, partial: true });
+      if (!samples.has(key)) samples.set(key, /* @__PURE__ */ new Map());
+      samples.get(key).set(source.sessionId, { source, readAt: page.readAt, atStart: captured ? captured.get(key) ?? null : void 0 });
+    }
+  }
+  const complete = pageCoverage(pages);
+  return [...groups.values()].map((group) => mergeGroup(group, samples.get(group.key) ?? /* @__PURE__ */ new Map(), complete));
+}
+
 // src/client/queue-dock.js
 var import_react80 = require("react");
 var OWN_QUEUE_KINDS = /* @__PURE__ */ new Set(["user", "schedule", "user-question-reply"]);
@@ -57228,8 +57414,219 @@ function EditField({ text, onChange, onSave, onCancel }) {
 function RowButton({ label, title, disabled, onClick, children }) {
   return (0, import_react80.createElement)("button", { type: "button", className: "bt-queue-action", "aria-label": label, title: title ?? label, disabled, onClick }, children);
 }
-function QueueDock({ useSession, useProjection, updateQueue, loadImage, renderFactorySlot, actions }) {
+function combineRoomPosts(projection, host, sessionId, available) {
+  const observed = projection.map(({ row }) => ({ sessionId, messageId: typeof row.id === "string" && row.id !== "" ? row.id : void 0, exchangeId: typeof row.source?.exchangeId === "string" && row.source.exchangeId !== "" ? row.source.exchangeId : void 0, row }));
+  const hostRows = host?.rows ?? [];
+  const hostCurrent = hostRows.filter((item) => item.sessionId === sessionId);
+  const projIds = new Set(observed.map((item) => item.messageId).filter(Boolean));
+  const hostIds = new Set(hostCurrent.map((item) => item.messageId).filter(Boolean));
+  let uncertain = !available || host?.unavailable !== false || observed.some((item) => !item.messageId) || hostCurrent.some((item) => !item.messageId);
+  if (projIds.size !== hostIds.size || [...projIds].some((id) => !hostIds.has(id))) uncertain = true;
+  const rows2 = [];
+  const identities = /* @__PURE__ */ new Map();
+  const byMessage = /* @__PURE__ */ new Map();
+  const byExchange = /* @__PURE__ */ new Map();
+  for (const item of [...observed, ...hostRows]) {
+    if (!item.messageId) uncertain = true;
+    else {
+      const key = JSON.stringify([item.sessionId, item.messageId]);
+      if (identities.has(key) && identities.get(key) !== item.exchangeId) uncertain = true;
+      else identities.set(key, item.exchangeId);
+    }
+    const messageKey = item.messageId ? JSON.stringify([item.sessionId, item.messageId]) : void 0;
+    const ownIndex = messageKey === void 0 ? void 0 : byMessage.get(messageKey);
+    const exchange = item.exchangeId ? byExchange.get(item.exchangeId) : void 0;
+    const otherIndex = exchange === void 0 ? void 0 : exchange.first.sessionId === item.sessionId ? exchange.second?.index : exchange.first.index;
+    const sameIndex = ownIndex === void 0 ? otherIndex : otherIndex === void 0 ? ownIndex : Math.min(ownIndex, otherIndex);
+    if (sameIndex !== void 0) continue;
+    const index = rows2.push(item) - 1;
+    if (messageKey !== void 0) byMessage.set(messageKey, index);
+    if (item.exchangeId) {
+      const entry = { index, sessionId: item.sessionId };
+      if (exchange === void 0) byExchange.set(item.exchangeId, { first: entry });
+      else if (exchange.first.sessionId !== item.sessionId && exchange.second === void 0) exchange.second = entry;
+    }
+  }
+  const sessions = new Set(rows2.map((item) => item.sessionId));
+  if (sessions.size > 1 && rows2.some((item) => !item.exchangeId)) uncertain = true;
+  return { rows: rows2, uncertain };
+}
+var sourceStatusLabel = {
+  missing: "Session not found",
+  migration: "Session needs migration",
+  unavailable: "Could not read this inbox",
+  ambiguous: "Session identity could not be confirmed"
+};
+function liveMessage({ row, placement }, sessionId) {
+  return {
+    id: row.id,
+    messageId: row.id,
+    sessionId,
+    exchangeId: row.source?.exchangeId,
+    placement,
+    senderName: row.source?.senderName,
+    content: row.content
+  };
+}
+function InboxMessage({ item, loadImage }) {
+  const text = item.content ? item.content.filter((block) => block.type === "text").map((block) => block.text).join("\n") : item.text;
+  const files = item.content ? queueAttachments(item.content) : EMPTY_QUEUE;
+  const placement = item.placement === "next-step" ? t("Next step") : item.placement === "next-turn" ? t("Next turn") : "";
+  return (0, import_react80.createElement)(
+    "div",
+    { className: "bt-bot-queue-row", "data-bot-queue-row": "", "data-bot-queue-placement": item.placement },
+    (0, import_react80.createElement)(
+      "div",
+      { className: "bt-bot-queue-meta" },
+      (0, import_react80.createElement)("span", { className: "bt-bot-queue-sender" }, item.senderName || t("Bot")),
+      (placement || item.earlier) && (0, import_react80.createElement)("span", { className: "bt-bot-queue-placement" }, placement || t("Earlier conversation"))
+    ),
+    files.length > 0 ? (0, import_react80.createElement)(
+      "span",
+      { className: "bt-queue-attachments bt-bot-queue-attachments" },
+      files.map(({ type, attachment }, index) => type === "image" ? (0, import_react80.createElement)(QueueThumb, { key: index, attachment, loadImage, label: t("Queued image") }) : (0, import_react80.createElement)(QueueFile, { key: index, attachment, label: t("Queued file {name}", { name: attachment.name }) }))
+    ) : item.attachments > 0 && (0, import_react80.createElement)("div", null, t("Attachments: {n}", { n: item.attachments })),
+    text && (0, import_react80.createElement)("div", { className: "bt-bot-queue-text" }, text)
+  );
+}
+function InboxSection({ group, loadImage, roomPendingTitle }) {
+  const { name, rows: rows2, sources, partial } = group;
+  const emptyHistory = sources.filter((source) => source.earlier && source.status === "ready" && source.sampledCount === 0).length;
+  const lastRead = sources.reduce((latest, source) => Math.max(latest, source.readAt || 0), 0);
+  return (0, import_react80.createElement)(
+    "section",
+    { className: "bt-inbox-section", "data-bot-inbox-group": group.key },
+    (0, import_react80.createElement)(
+      "h3",
+      { className: "bt-inbox-group-heading" },
+      (0, import_react80.createElement)("span", null, name),
+      (0, import_react80.createElement)("span", { className: "bt-inbox-group-count" }, t(partial ? "{n} seen" : "{n} queued", { n: rows2.length }))
+    ),
+    lastRead > 0 && (0, import_react80.createElement)("time", { dateTime: new Date(lastRead).toISOString() }, t("Bot inbox snapshot at {time}", { time: new Date(lastRead).toLocaleString() })),
+    roomPendingTitle && (0, import_react80.createElement)("div", null, roomPendingTitle, (0, import_react80.createElement)("div", null, t("Counts exclude items in transfer and may include control events."))),
+    sources.filter((source) => !source.earlier || source.status !== "ready" || source.sampledCount > 0).map((source) => (0, import_react80.createElement)(
+      "div",
+      { key: source.sessionId, className: "bt-inbox-source", title: source.sessionId },
+      source.earlier ? t("Earlier conversation") : t("Current conversation"),
+      source.earlier && (0, import_react80.createElement)("code", null, source.sessionId.slice(-8)),
+      Number.isFinite(source.endedAt) && (0, import_react80.createElement)("time", { dateTime: new Date(source.endedAt).toISOString() }, t("Ended {time}", { time: new Date(source.endedAt).toLocaleString() })),
+      source.sampledCount === 0 && source.status === "ready" && (0, import_react80.createElement)("span", null, t("No Bot messages at the time of this read")),
+      source.status !== "ready" && (0, import_react80.createElement)("span", null, t(sourceStatusLabel[source.status] ?? "Could not read this inbox")),
+      Number.isFinite(source.rowsReadAt) && (0, import_react80.createElement)(
+        "time",
+        { dateTime: new Date(source.rowsReadAt).toISOString() },
+        t("Last successful read: {time}", { time: new Date(source.rowsReadAt).toLocaleString() })
+      )
+    )),
+    emptyHistory > 0 && (0, import_react80.createElement)("div", null, t("Earlier inboxes sampled without Bot messages: {n}", { n: emptyHistory })),
+    rows2.map((item, index) => (0, import_react80.createElement)(InboxMessage, { key: JSON.stringify([item.sessionId, item.messageId ?? item.id, index]), item, loadImage }))
+  );
+}
+function InboxInspection({ read, getLiveGroups, loadImage, roomPendingTitle }) {
+  const [open, setOpen] = (0, import_react80.useState)(false);
+  const [pages, setPages] = (0, import_react80.useState)([]);
+  const [busy, setBusy] = (0, import_react80.useState)(false);
+  const [failure, setFailure] = (0, import_react80.useState)(null);
+  const committedGroups = (0, import_react80.useRef)(EMPTY_QUEUE);
+  const liveGroups = (0, import_react80.useMemo)(() => stampInboxGroups(getLiveGroups(), committedGroups.current), [getLiveGroups]);
+  (0, import_react80.useLayoutEffect)(() => {
+    committedGroups.current = liveGroups;
+  }, [liveGroups]);
+  const pending = (0, import_react80.useRef)(null);
+  const panelId = (0, import_react80.useId)();
+  (0, import_react80.useEffect)(() => () => pending.current?.abort(), []);
+  async function load(cursor, replaceFrom = null) {
+    if (pending.current) return;
+    const request = new AbortController();
+    pending.current = request;
+    setBusy(true);
+    setFailure(null);
+    try {
+      const page = await read(cursor, request.signal);
+      if (!request.signal.aborted) setPages((prior) => {
+        const sample = { page, cursor, liveGroups };
+        if (replaceFrom === null) return cursor ? [...prior, sample] : [sample];
+        const original = prior[replaceFrom].page;
+        const sameRange = page.nextCursor === original.nextCursor && page.total === original.total;
+        const updated = { page: keepInboxPageOnRetry(original, page), cursor, liveGroups };
+        return [...prior.slice(0, replaceFrom), updated, ...sameRange ? prior.slice(replaceFrom + 1) : []];
+      });
+    } catch (error) {
+      if (!request.signal.aborted) setFailure({ cursor, replaceFrom, restart: error?.code === "bot/invalid" });
+    } finally {
+      if (pending.current === request) {
+        pending.current = null;
+        if (!request.signal.aborted) setBusy(false);
+      }
+    }
+  }
+  function toggle() {
+    if (!open && read) void load(void 0, pages.length ? 0 : null);
+    if (open) setFailure(null);
+    if (open && pending.current) {
+      pending.current.abort();
+      pending.current = null;
+      setBusy(false);
+    }
+    setOpen(!open);
+  }
+  const last = pages.at(-1)?.page;
+  const sourcesRead = pages.reduce((count, sample) => count + sample.page.sources.length, 0);
+  const groups = (0, import_react80.useMemo)(() => inboxGroups(liveGroups, pages), [liveGroups, pages]);
+  const total = groups.reduce((sum, group) => sum + group.rows.length, 0);
+  return (0, import_react80.createElement)(
+    "div",
+    { className: "bt-queue-panel bt-inbox-inspection", "data-inbox-inspection": "" },
+    (0, import_react80.createElement)(
+      "button",
+      { type: "button", className: "bt-queue-head", "aria-controls": panelId, "aria-expanded": open, onClick: toggle },
+      (0, import_react80.createElement)("span", { className: "bt-queue-lead", "aria-hidden": true }, (0, import_react80.createElement)(QueueIcon)),
+      (0, import_react80.createElement)("span", { className: "bt-queue-count" }, t("Bot inbox ({n})", { n: total })),
+      (0, import_react80.createElement)("span", { className: "bt-queue-chev", "aria-hidden": true }, open ? (0, import_react80.createElement)(ChevronDownIcon) : (0, import_react80.createElement)(ChevronUpIcon))
+    ),
+    open && (0, import_react80.createElement)(
+      "div",
+      { id: panelId, className: "bt-inbox-inspection-body", "data-bot-queue-list": "" },
+      groups.map((group) => (0, import_react80.createElement)(InboxSection, { key: group.key, group, loadImage, roomPendingTitle })),
+      last && (0, import_react80.createElement)("div", { className: "bt-inbox-sample-count" }, t("Checked {read} of {total} inboxes", { read: sourcesRead, total: last.total })),
+      pages.map(({ page, cursor }, i) => page.sources.some((source) => source.status !== "ready") && (0, import_react80.createElement)(
+        "div",
+        { key: i, className: "bt-inbox-snapshot" },
+        (0, import_react80.createElement)("time", { dateTime: new Date(page.readAt).toISOString() }, t("Bot inbox snapshot at {time}", { time: new Date(page.readAt).toLocaleString() })),
+        (0, import_react80.createElement)("button", { className: "bt-inbox-retry", type: "button", disabled: busy, onClick: () => load(cursor, i) }, t("Retry this page"))
+      )),
+      busy && (0, import_react80.createElement)("div", { role: "status" }, t("Reading inboxes…")),
+      failure && (0, import_react80.createElement)("div", { role: "status" }, t(failure.restart ? "Inbox scope changed. Start a new read." : "Inbox read failed. You can retry.")),
+      (0, import_react80.createElement)(
+        "div",
+        { className: "bt-inbox-inspect-actions" },
+        failure && (0, import_react80.createElement)("button", { type: "button", disabled: busy, onClick: () => failure.restart ? load() : load(failure.cursor, failure.replaceFrom) }, t(failure.restart ? "Read from the start" : "Retry this read")),
+        !failure && last?.nextCursor && (0, import_react80.createElement)("button", { type: "button", disabled: busy, onClick: () => load(last.nextCursor) }, t("Read next inboxes")),
+        last && !failure && (0, import_react80.createElement)("button", { type: "button", disabled: busy, onClick: () => load() }, t("Refresh inbox snapshots"))
+      )
+    )
+  );
+}
+function QueueDock({ sessionId, useSession, useProjection, useRoster, useWork, updateQueue, inspectQueue, loadImage, renderFactorySlot, actions }) {
   const inbox = useProjection?.("inbox");
+  const botId = useRoster?.((roster) => roster.byId?.[sessionId]?.id) ?? null;
+  const primarySession = useRoster?.((roster) => roster.byId?.[sessionId]?.sessionId) ?? sessionId;
+  const roomId = useRoster?.((roster) => roster.roomsById?.[sessionId]?.id) ?? null;
+  const isRoom = roomId !== null;
+  const roomStateJson = useWork?.((work) => JSON.stringify({ posts: work.roomPostQueues?.[roomId] ?? { rows: [], unavailable: true }, pending: work.roomPending?.[roomId] ?? { relay: 0, next: 0 } })) ?? "{}";
+  const roomState = (0, import_react80.useMemo)(() => JSON.parse(roomStateJson), [roomStateJson]);
+  const groupQueueJson = useWork?.((work) => JSON.stringify(work.groupQueues?.[botId] ?? [])) ?? "[]";
+  const groupQueue = (0, import_react80.useMemo)(() => JSON.parse(groupQueueJson), [groupQueueJson]);
+  const earlierPrivateJson = useWork?.((work) => JSON.stringify(work.earlierPrivateQueues?.[botId] ?? [])) ?? "[]";
+  const earlierPrivateItems = (0, import_react80.useMemo)(() => JSON.parse(earlierPrivateJson), [earlierPrivateJson]);
+  const workAvailable = useWork?.((work) => Boolean(work.earlierPrivateQueues && work.groupQueues)) === true;
+  const roomsJson = useRoster?.((roster) => {
+    if (isRoom) return JSON.stringify([[roomId, roster.roomsById[sessionId].name ?? roomId]]);
+    if (!botId || roster.byId[sessionId].private) return "[]";
+    return JSON.stringify((roster.rooms ?? []).filter((room2) => room2.members?.includes(botId)).map((room2) => [room2.id, room2.name]));
+  }) ?? "[]";
+  const rooms = (0, import_react80.useMemo)(() => JSON.parse(roomsJson), [roomsJson]);
+  const inboxAvailable = Array.isArray(inbox?.["next-step"]) && Array.isArray(inbox?.["next-turn"]);
   const pendingSubmissions = useSession?.((s) => s.pendingSubmissions) ?? EMPTY_QUEUE;
   const queue = (0, import_react80.useMemo)(() => {
     const rows2 = (inbox?.["next-turn"] ?? EMPTY_QUEUE).filter((row) => OWN_QUEUE_KINDS.has(row.source?.kind));
@@ -57241,6 +57638,45 @@ function QueueDock({ useSession, useProjection, updateQueue, loadImage, renderFa
     return pendingSubmissions.filter((submission) => submission.placement === "queued" && !admitted.has(submission.requestId));
   }, [pendingSubmissions, queue]);
   const rowCount = queue.length + pendingQueue.length;
+  const getLiveGroups = () => {
+    const allBotQueue = [
+      ...(inbox?.["next-step"] ?? EMPTY_QUEUE).filter((row) => row.source?.kind === "bot").map((row) => ({ row, placement: "next-step" })),
+      ...(inbox?.["next-turn"] ?? EMPTY_QUEUE).filter((row) => row.source?.kind === "bot").map((row) => ({ row, placement: "next-turn" }))
+    ];
+    const current2 = inboxAvailable ? [sessionId] : [];
+    if (isRoom) {
+      const posts = allBotQueue.filter(({ row }) => row.source?.role === "post");
+      const joined = combineRoomPosts(posts, roomState.posts, sessionId, inboxAvailable);
+      const rows2 = joined.rows.map((item) => item.row ? liveMessage({ row: item.row }, item.sessionId) : item);
+      for (const mail of allBotQueue) {
+        if (mail.row.source?.role !== "post") rows2.push(liveMessage(mail, sessionId));
+      }
+      return [{ key: roomId, name: rooms[0]?.[1] || roomId, rows: rows2, partial: joined.uncertain, liveSessionIds: current2 }];
+    }
+    const personal = {
+      key: "private",
+      name: t("Bot private inbox"),
+      rows: allBotQueue.map((item) => liveMessage(item, sessionId)),
+      partial: !inboxAvailable || !workAvailable || primarySession !== sessionId,
+      liveSessionIds: current2
+    };
+    for (const item of earlierPrivateItems) {
+      if (item.unavailable) personal.partial = true;
+      else personal.rows.push({ ...item, earlier: true });
+    }
+    const byRoom = new Map(rooms.map(([id, name]) => [id, { key: id, name: name || id, rows: [], partial: !workAvailable }]));
+    for (const item of groupQueue) {
+      const group = byRoom.get(item.roomId);
+      if (!group) continue;
+      if (item.unavailable) group.partial = true;
+      else group.rows.push({ ...item, earlier: item.previous });
+    }
+    return [personal, ...byRoom.values()];
+  };
+  const roomPendingTitle = [
+    roomState.pending?.relay > 0 && t("Relay waiting items: {n}", { n: roomState.pending.relay }),
+    roomState.pending?.next > 0 && t("Next-round items: {n}", { n: roomState.pending.next })
+  ].filter(Boolean).join(" · ");
   const running = useSession?.((s) => s.running) === true;
   const queueMutable = useSession?.((s) => s.subagent === null || s.subagent === void 0 || s.subagent.address?.mode === "continuable") ?? true;
   const [editing, setEditing] = (0, import_react80.useState)(null);
@@ -57251,7 +57687,8 @@ function QueueDock({ useSession, useProjection, updateQueue, loadImage, renderFa
     if (rowCount === 0 && !collapsed) setCollapsed(true);
     if (editing !== null && (!queueMutable || !queue.some((row) => row.id === editing.id))) setEditing(null);
   }, [collapsed, editing, queue, queueMutable, rowCount]);
-  if (rowCount === 0) return null;
+  const hasInbox = isRoom || botId !== null;
+  if (!hasInbox && rowCount === 0) return null;
   const interactionActive = queueMutable && (editing !== null || busy !== null);
   const expanded = !collapsed || interactionActive;
   const listVisible = rowCount === 1 || expanded;
@@ -57278,7 +57715,8 @@ function QueueDock({ useSession, useProjection, updateQueue, loadImage, renderFa
   return (0, import_react80.createElement)(
     "div",
     { className: "bt-queue-dock", "data-queue-dock": "" },
-    (0, import_react80.createElement)(
+    hasInbox && (0, import_react80.createElement)(InboxInspection, { key: JSON.stringify([sessionId, botId, roomId, rooms.map(([id]) => id)]), read: inspectQueue, getLiveGroups, loadImage, roomPendingTitle }),
+    rowCount > 0 && (0, import_react80.createElement)(
       "div",
       { className: "bt-queue-panel" },
       rowCount > 1 && (0, import_react80.createElement)(
@@ -57358,6 +57796,15 @@ var QUEUE_CSS = `
 .bt-queue-panel:before{z-index:-1;border-radius:inherit;background:var(--dsw-specific-menu,var(--bt-main));backdrop-filter:var(--dsw-menu-backdrop-filter,none);content:"";pointer-events:none;position:absolute;inset:0}
 .bt-queue-panel:after{border:.5px solid var(--bt-line-2);border-bottom:none;border-radius:inherit;content:"";pointer-events:none;position:absolute;inset:0}
 .bt-queue-head{box-sizing:border-box;width:100%;height:36px;border:0;border-radius:var(--dsw-radius-md,10px);background:none;color:var(--bt-ink);text-align:left;font:inherit;cursor:pointer;display:flex;align-items:center;gap:10px;padding:4px 12px}
+.bt-inbox-inspection-body{max-height:clamp(140px,32vh,320px);overflow:auto;padding:5px 12px 10px;line-height:1.5;font-size:12px;color:var(--bt-ink-2)}
+.bt-inbox-section+.bt-inbox-section{border-top:1px solid var(--bt-line);margin-top:6px}
+.bt-inbox-group-heading{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:0;padding:6px 0;font-size:13px;color:var(--bt-ink);overflow-wrap:anywhere}
+.bt-inbox-group-count{flex:none;color:var(--bt-ink-2);font-weight:500;font-variant-numeric:tabular-nums}
+.bt-inbox-source{display:flex;gap:6px;flex-wrap:wrap}
+.bt-inbox-snapshot{margin-top:6px}.bt-inbox-snapshot>time{display:block;color:var(--bt-ink-3)}
+.bt-inbox-section .bt-bot-queue-row{padding:6px 0}
+.bt-inbox-inspect-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.bt-inbox-inspect-actions button,.bt-inbox-retry{border:1px solid var(--bt-line);border-radius:6px;padding:3px 8px;font:inherit;background:var(--bt-main);color:var(--bt-ink);cursor:pointer}
 .bt-queue-head:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}
 .bt-queue-head:disabled{cursor:default}
 .bt-queue-lead{color:var(--bt-ink-3);flex:none;display:grid;place-items:center}
@@ -57366,6 +57813,14 @@ var QUEUE_CSS = `
 .bt-queue-list{max-height:180px;margin:0;padding:0;list-style:none;overflow-y:auto}
 .bt-queue-row{box-sizing:border-box;min-height:36px;width:100%;border-radius:var(--dsw-radius-md,10px);display:flex;align-items:center;gap:10px;padding:4px 5px 4px 12px}
 .bt-queue-row+.bt-queue-row{box-shadow:inset 0 1px 0 var(--bt-line)}
+.bt-bot-queue-list{max-height:240px}
+.bt-bot-queue-row{padding:8px 12px;min-width:0}
+.bt-bot-queue-row+.bt-bot-queue-row{box-shadow:inset 0 1px 0 var(--bt-line)}
+.bt-bot-queue-meta{display:flex;align-items:baseline;gap:8px;font-size:12px;line-height:18px;color:var(--bt-ink-2)}
+.bt-bot-queue-sender{min-width:0;overflow-wrap:anywhere;font-weight:500;color:var(--bt-ink-2)}
+.bt-bot-queue-placement{flex:none}
+.bt-bot-queue-text{margin-top:4px;min-width:0;max-height:160px;overflow-y:auto;font-size:13px;line-height:20px;color:var(--bt-ink-2);white-space:pre-wrap;overflow-wrap:anywhere}
+.bt-queue-attachments.bt-bot-queue-attachments{max-width:100%;margin-top:4px}
 .bt-queue-attachments{flex:none;min-width:0;max-width:55%;display:flex;gap:4px;overflow:hidden}
 .bt-queue-pending .bt-queue-attachments{flex-shrink:1}
 .bt-queue-file{box-sizing:border-box;height:24px;min-width:74px;flex:0 180px;border:.5px solid var(--bt-line);border-radius:var(--dsw-radius-sm,6px);background:var(--bt-main);display:inline-flex;align-items:center;gap:4px;padding:0 6px;overflow:hidden}
@@ -57460,7 +57915,7 @@ function listedOpener({ list, open, refresh, current: current2, begin, done }) {
 }
 
 // src/client/polling.js
-var POLL_MAX_MS = 1e4;
+var POLL_MAX_MS = 5e3;
 var VISIBLE_POLL_MS = 3e3;
 var HIDDEN_POLL_MS = 3e4;
 function pollDelay(base, unchanged, networkFailures = 0) {
@@ -57477,6 +57932,7 @@ var REST_MS = 3e4;
 var INPUTS2 = ["pointermove", "pointerdown", "keydown", "wheel", "touchstart"];
 var CHANGES = ["animationstart", "animationcancel", "animationend"];
 var isLoop = (animation) => animation?.effect?.getTiming?.().iterations === Infinity;
+var isWorkIndicator = ({ animationName }) => animationName === "bt-activity-mark" || animationName === "bt-activity-pulse";
 var boxOf2 = (target) => {
   let element = target ?? null;
   while (element?.ownerSVGElement) element = element.ownerSVGElement;
@@ -57494,7 +57950,7 @@ function installMotionRest({ doc = document, win = window, restMs = REST_MS, now
   let timer = 0;
   let queued = false;
   let stopped = false;
-  const runs = (animation) => !resting && inView.get(loops.get(animation)) !== false;
+  const runs = (animation) => !doc.hidden && inView.get(loops.get(animation)) !== false && (!resting || isWorkIndicator(animation));
   const apply2 = () => {
     for (const animation of loops.keys()) {
       if (runs(animation)) {
@@ -58949,13 +59405,13 @@ function apply(ctx) {
     }
   };
   ctx.effect(() => {
-    const sidebar = ctx.get("sidebarRight");
-    if (!sidebar) return void 0;
+    const sidebar2 = ctx.get("sidebarRight");
+    if (!sidebar2) return void 0;
     let open = rightColumnOpen(document);
     const switchWindow = createSwitchWindow((done) => setTimeout(done, 400));
     const collapseColumn = () => {
       try {
-        if (sidebar.isExpanded()) sidebar.toggleExpanded();
+        if (sidebar2.isExpanded()) sidebar2.toggleExpanded();
       } catch (error) {
         actions.reportError(error, "right-sidebar");
       }
@@ -58973,7 +59429,7 @@ function apply(ctx) {
       attributes: true,
       attributeFilter: RIGHTBAR_ATTRIBUTES
     });
-    const offMounted = sidebar.mounted.subscribe(() => switchWindow.moved());
+    const offMounted = sidebar2.mounted.subscribe(() => switchWindow.moved());
     let drawer = ui.getSnapshot().details !== null;
     const offUi = ui.subscribe(() => {
       const next = ui.getSnapshot().details !== null;

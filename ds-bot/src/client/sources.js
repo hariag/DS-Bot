@@ -23,7 +23,15 @@ export const isMainOf = (roster, id) => id !== undefined && (roster.mainBotIds ?
 // A Bot's chat is a chain of Sessions ("parts"): the Bot id is its first part's id
 // and `sessionId` its current one. Every part id finds the Bot; Session state
 // (running, unread, turns) is read from the current part, team state from the Bot id.
-export function indexRoster(value) {
+export function indexRoster(value, previous) {
+  // Reuse instructions from the snapshot used for this request. Polls and
+  // navigation reads can overlap, so the current UI snapshot may be newer.
+  if (value.instructionsKey !== undefined && value.instructionsKey === previous?.instructionsKey) {
+    value = { ...value, bots: value.bots.map(bot => {
+      const prior = previous.byId[bot.id]
+      return prior?.instructions === undefined ? bot : { ...bot, instructions: prior.instructions }
+    }) }
+  }
   const byId = {}
   for (const bot of value.bots) {
     // A part opened while the Bot was busy is still its own chat: the panel opened on
