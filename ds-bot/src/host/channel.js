@@ -493,7 +493,7 @@ export function install(rt) {
           await rt.loadSecrets()
           const answer = liveAnswer()
           const reusable = body.live === answer.key || (liveHistory.has(body.live) && liveHistory.get(body.live) === answer.scope)
-          if (body.since === state.revision && (body.models === undefined || body.models === modelsKey()) && reusable) {
+          if (body.since === state.revision && (body.models === undefined || body.models === modelsKey())) {
             if (body.live === answer.key) return ok({ revision: state.revision, unchanged: true, liveKey: answer.key })
             return ok({ revision: state.revision, unchanged: true, liveKey: answer.key, ...answer.value })
           }

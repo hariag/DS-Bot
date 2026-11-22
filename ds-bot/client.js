@@ -50861,21 +50861,18 @@ var ACCOUNT_MODELS_WAIT_MS = 2e4;
 var SIGNED_OUT = /* @__PURE__ */ new Set(["ACCOUNT_SIGN_IN_REQUIRED", "ACCOUNT_SIGNED_OUT", "ACCOUNT_TOKEN_INVALID"]);
 var KEY_CODES = /* @__PURE__ */ new Set(["MISSING_CREDENTIAL", "INVALID_CREDENTIAL", "AUTH"]);
 var CREDENTIAL_CODES = /* @__PURE__ */ new Set([...KEY_CODES, ...SIGNED_OUT]);
-function failureText2(code, { name, provider, status, current: current2 = true, externalQuota = false }) {
+function failureText2(code, { name, provider, status }) {
   switch (code) {
     case "MISSING_CREDENTIAL":
       return t("{name}'s model has no API key yet.", { name });
     case "INVALID_CREDENTIAL":
       return t("This API key is not in the right format.");
     case "AUTH":
-      return status === 401 ? t("{provider} rejected the credentials used for this request ({status}).", { provider, status }) : t("{provider} denied access for this request.", { provider });
+      return status === void 0 ? t("{provider} did not accept the current API key.", { provider }) : t("{provider} did not accept the current API key ({status}).", { provider, status });
     case "CONTENT_POLICY":
       return status === void 0 ? t("{provider} blocked this request with its content filter. The API key is not the problem; edit the input or start a new chat.", { provider }) : t("{provider} blocked this request with its content filter ({status}). The API key is not the problem; edit the input or start a new chat.", { provider, status });
-    case "QUOTA": {
-      if (!current2) return t("{provider} reported insufficient balance or quota for this request.", { provider });
-      const reason = status === void 0 ? t("{provider} is out of balance or quota.", { provider }) : t("{provider} is out of balance or quota ({status}).", { provider, status });
-      return externalQuota ? reason + " " + t("Check your balance and limits with this provider before retrying.") : reason;
-    }
+    case "QUOTA":
+      return status === void 0 ? t("{provider} is out of balance or quota.", { provider }) : t("{provider} is out of balance or quota ({status}).", { provider, status });
     case "ACCOUNT_QUOTA":
       return t("The DeepSeek account balance is too low.");
     case "ACCOUNT_SIGN_IN_REQUIRED":
@@ -50897,7 +50894,7 @@ function failureText2(code, { name, provider, status, current: current2 = true, 
       return knownFailure(code) ?? t("This turn failed.");
   }
 }
-function fixesFor(code, { canSignIn, official, topUp, onAccount = false, status }) {
+function fixesFor(code, { canSignIn, official, topUp, onAccount = false }) {
   if (onAccount && KEY_CODES.has(code)) return [];
   if (SIGNED_OUT.has(code)) return canSignIn ? ["sign-in-again"] : ["model"];
   switch (code) {
@@ -50906,12 +50903,12 @@ function fixesFor(code, { canSignIn, official, topUp, onAccount = false, status 
     case "INVALID_CREDENTIAL":
       return ["rekey", "model"];
     case "AUTH":
-      return status === 401 ? ["rekey", canSignIn ? "use-account" : null, "model"].filter(Boolean) : ["model"];
+      return ["rekey", canSignIn ? "use-account" : null, "model"].filter(Boolean);
     // A content audit is about the input, not the credentials; no key action helps.
     case "CONTENT_POLICY":
       return [];
     case "QUOTA":
-      return official ? ["top-up"] : ["model"];
+      return official ? ["top-up"] : [];
     case "ACCOUNT_QUOTA":
       return topUp ? ["top-up"] : [];
     case "MODEL_SWITCH_COMPACTION_FAILED":
@@ -50988,15 +50985,9 @@ function TechnicalDetails({ facts }) {
 function FailureCell({ node, sessionId, useRoster, useTurnClock, actions }) {
   const roster = useRoster((value) => value);
   const failRow = node?.data ?? {};
-  (0, import_react65.useLayoutEffect)(() => {
-    actions.noteTurnVisible?.(sessionId, failRow.turn);
-  }, [actions, sessionId, failRow.turn]);
-  const room2 = roster.rooms?.find((room3) => Object.values(room3.memberSessions ?? {}).includes(sessionId));
-  const member = room2 && Object.keys(room2.memberSessions).find((id) => room2.memberSessions[id] === sessionId);
-  const bot = roster.byId?.[member ?? sessionId];
-  const latest = bot?.failures?.[sessionId];
-  const host = latest !== void 0 && latest.turn === failRow.turn ? latest : void 0;
-  const data = host === void 0 ? failRow : { ...failRow, ...host };
+  const bot = roster.byId?.[sessionId];
+  const host = bot?.failures?.[sessionId];
+  const data = host !== void 0 && host.turn === failRow.turn ? { ...failRow, ...host } : failRow;
   const later = useTurnClock((state) => Object.keys(state[sessionId] ?? {}).some((turn) => Number(turn) > data.turn));
   const account = useAccountView(actions);
   const signedIn = account?.status === "credential-stored";
@@ -51005,21 +50996,11 @@ function FailureCell({ node, sessionId, useRoster, useTurnClock, actions }) {
   const [retry, setRetry] = (0, import_react65.useState)("idle");
   const [error, setError] = (0, import_react65.useState)("");
   const [joining, setJoining] = (0, import_react65.useState)(null);
-  const block = bot?.blocked;
-  const bound2 = block !== void 0 && block.sessionId === sessionId && block.turn === data.turn;
-  const legacyMatch = block?.sessionId === void 0 && host?.requestId && host.requestId === block?.requestId;
-  const blocked = block?.code === data.code && (bound2 || legacyMatch) ? block : void 0;
-  const current2 = bot !== void 0 && (member !== void 0 || currentPart(bot) === sessionId) && !later && !(latest?.turn > data.turn);
-  const provider = data.provider ?? blocked?.provider;
-  const status = data.status ?? blocked?.status;
-  const text = failureText2(data.code, {
-    name: bot?.name ?? t("This Bot"),
-    provider: providerName(roster, provider),
-    status,
-    current: current2,
-    externalQuota: provider !== void 0 && provider !== OFFICIAL && provider !== ACCOUNT
-  });
+  const blocked = bot?.blocked?.code === data.code ? bot.blocked : void 0;
+  const provider = blocked?.provider ?? host?.provider ?? providerOf(bot, roster);
+  const text = failureText2(data.code, { name: bot?.name ?? t("This Bot"), provider: providerName(roster, provider), status: data.status ?? blocked?.status });
   const facts = failureFacts(data, blocked);
+  const current2 = bot !== void 0 && currentPart(bot) === sessionId && !later;
   const moveToAccount = () => {
     const model = accountModel(roster);
     if (model === void 0) {
@@ -51077,14 +51058,14 @@ function FailureCell({ node, sessionId, useRoster, useTurnClock, actions }) {
     model: actions.showDetails ? () => actions.showDetails(sessionId) : void 0,
     "model-settings": manageModels(actions)
   };
-  const fixes = fixesFor(data.code, { canSignIn, official, topUp: topUp !== void 0, onAccount: providerOf(bot, roster) === ACCOUNT, status }).filter((fix) => fix === "top-up" || runs[fix] !== void 0);
+  const fixes = fixesFor(data.code, { canSignIn, official, topUp: topUp !== void 0, onAccount: provider === ACCOUNT }).filter((fix) => fix === "top-up" || runs[fix] !== void 0);
   const asked = isHiddenTurn(roster, sessionId, data.turn);
   const retrying = !asked && typeof actions.resume === "function" && retryShown(data.code, blocked);
   const retryFirst = retrying && (fixes.length === 0 || CREDENTIAL_CODES.has(data.code));
   const resume = () => {
     setRetry("busy");
     setError("");
-    void Promise.resolve(actions.resume(bot.id, sessionId, data.turn)).then(() => setRetry("sent"), (failure) => {
+    void Promise.resolve(actions.resume(bot.id)).then(() => setRetry("sent"), (failure) => {
       setRetry("idle");
       setError(hostText(failure?.message ?? String(failure)));
     });
