@@ -1053,7 +1053,19 @@ export function install(rt) {
   }, 'ds-bot: load state')
 }
 
+// Recovery notes are positive evidence of a delivery, not proof that an
+// unavailable Session inbox is empty: notes may be missing or unreadable.
+function recoveryNoted(unreadOf, sessionId) {
+  try {
+    const notes = unreadOf?.(sessionId)
+    return Array.isArray(notes) && notes.length > 0
+  } catch {
+    return false
+  }
+}
+
 // Local (AIOS) queue views used by the board and the group panel.
+const QUEUE_PREVIEW_MAX = 400
 export function groupQueueView(rooms, bots, getAgent, unreadOf) {
   const result = {}
   for (const room of Object.values(rooms ?? {})) {
