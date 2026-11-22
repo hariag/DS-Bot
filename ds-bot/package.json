@@ -106,7 +106,8 @@
       "version-runtime",
       "usage-on-demand",
       "board",
-      "privacy-board-guard"
+      "privacy-board-guard",
+      "command-catalog-coalescing"
     ]
   }
 }

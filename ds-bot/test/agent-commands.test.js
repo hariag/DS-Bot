@@ -11,8 +11,9 @@ function world({ config = {} } = {}) {
   const scoped = new Map()
   const listeners = new Map()
   const agents = []
+  let changes = 0
   const emit = (event, payload) => { for (const listener of listeners.get(event) ?? []) listener(payload) }
-  const notify = () => emit('commands/change', {})
+  const notify = () => { changes += 1; emit('commands/change', {}) }
   const effective = (sessionId) => {
     const map = new Map(global)
     for (const [name, definition] of scoped.get(sessionId) ?? []) map.set(name, definition)
@@ -23,6 +24,7 @@ function world({ config = {} } = {}) {
     notify()
   }
   const service = {
+    notifyChange: notify,
     list: agent => [...effective(agent.session.id).values()].sort((a, b) => (a.name < b.name ? -1 : 1)),
     find: (agent, name) => effective(agent.session.id).get(name),
     async execute(agent, line) {
@@ -35,20 +37,22 @@ function world({ config = {} } = {}) {
     },
   }
   // The child context a plugin mounted under an agent's context gets. The shield reads
-  // the service through reflection (`get`), as it does in the real host.
+  // a context-bound view of the shared host registry through reflection (`get`), as it
+  // does in the real host. Views differ, but they all mutate/notify the same registry.
   const childOf = (sessionId) => {
-    const commands = {
-      list: agent => service.list(agent),
-      find: (agent, name) => service.find(agent, name),
-      register(definition) {
-        const map = scoped.get(sessionId) ?? new Map()
-        if (map.has(definition.name)) throw new Error(`duplicate command ${definition.name}`)
-        map.set(definition.name, definition)
-        scoped.set(sessionId, map)
-        notify()
-        return () => { map.delete(definition.name); notify() }
+    const commands = new Proxy(service, {
+      get(target, property, receiver) {
+        if (property === 'register') return definition => {
+          const map = scoped.get(sessionId) ?? new Map()
+          if (map.has(definition.name)) throw new Error(`duplicate command ${definition.name}`)
+          map.set(definition.name, definition)
+          scoped.set(sessionId, map)
+          target.notifyChange()
+          return () => { map.delete(definition.name); target.notifyChange() }
+        }
+        return Reflect.get(target, property, receiver)
       },
-    }
+    })
     return { commands, get: name => (name === 'commands' ? commands : undefined) }
   }
   const cleanups = []
@@ -85,7 +89,7 @@ function world({ config = {} } = {}) {
     agents.push(entry)
     return entry
   }
-  return { cleanups, ctx, rt, service, registerGlobal, emit, agent, agents, runs: () => dshRuns }
+  return { cleanups, ctx, rt, service, registerGlobal, emit, agent, agents, runs: () => dshRuns, changes: () => changes }
 }
 
 test('the shield shadows every command a Bot sees and refuses a typed command with its arguments', () => {
@@ -152,6 +156,36 @@ test('two mounted agents are both shielded, each with its own Session\u2019s ref
   assert.equal(w.runs(), 0)
 })
 
+test('a team mount emits one global catalog change instead of one per agent', async () => {
+  const w = world()
+  for (let i = 0; i < 15; i += 1) w.registerGlobal(`command-${i}`)
+  install(w.rt)
+
+  const baseline = w.changes()
+  const agents = []
+  for (let i = 0; i < 13; i += 1) {
+    const sessionId = `bot-${i}`
+    w.rt.chatOwners.set(sessionId, sessionId)
+    const agent = w.agent(sessionId)
+    agents.push(agent)
+    w.emit('agent/created', { agent })
+  }
+
+  for (const agent of agents) {
+    assert.equal(w.service.list(agent).length, 15)
+    assert.match(w.service.find(agent, 'command-0').description, /Not available/)
+  }
+  await new Promise(resolve => setTimeout(resolve, 80))
+  assert.equal(w.changes() - baseline, 1, 'one event invalidates all command catalogs')
+
+  // One real host command change must update every shield without recursively
+  // generating another global invalidation wave.
+  const beforeNewCommand = w.changes()
+  w.registerGlobal('new-command')
+  assert.equal(w.changes() - beforeNewCommand, 1)
+  for (const agent of agents) assert.match(w.service.find(agent, 'new-command').description, /Not available/)
+})
+
 test('a group chat\u2019s own Session is covered and its /goal points at the group goal', async () => {
   const w = world()
   install(w.rt)
@@ -191,8 +225,14 @@ test('a Bot whose agent arrives before its state entry gets the shield on the ne
   assert.equal(w.service.find(a, 'plan').description, 'global plan')
   // The Bot is saved; the shield re-checks and registers its shadows.
   w.rt.chatOwners.set('a', 'a')
+  const beforeFirstSave = w.changes()
   for (const listener of w.rt.saved) listener()
   assert.match(w.service.find(a, 'plan').description, /Not available/)
+  await new Promise(resolve => setTimeout(resolve, 80))
+  assert.equal(w.changes() - beforeFirstSave, 1)
+  for (const listener of w.rt.saved) listener()
+  await new Promise(resolve => setTimeout(resolve, 80))
+  assert.equal(w.changes() - beforeFirstSave, 1, 'unchanged saves do not invalidate command catalogs')
   const { result } = await w.service.execute(a, '/plan 明天上线')
   assert.equal(result.kind, 'error')
   assert.equal(w.runs(), 0)
@@ -220,8 +260,10 @@ test('unloading the plugin lifts commands from agents that stay alive', async ()
   const a = w.agent('a')
   w.emit('agent/created', { agent: a })
   assert.match(w.service.find(a, 'plan').description, /Not available/)
+  const beforeCleanup = w.changes()
   for (const cleanup of w.cleanups) cleanup?.()
   assert.equal(w.service.find(a, 'plan').description, 'global plan')
+  assert.equal(w.changes() - beforeCleanup, 1, 'cleanup tells the client to refresh once')
   for (const saved of w.rt.saved) saved()
   assert.equal((await w.service.execute(a, '/plan')).result.kind, 'success')
 })

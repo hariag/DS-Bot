@@ -32,7 +32,9 @@ export function install(rt) {
   const botChat = sessionId => Object.values(rt.state?.bots ?? {}).some(bot => rt.chatOf?.(bot.id) === sessionId)
   const roomChat = sessionId => rt.roomOf?.(sessionId) !== undefined
     || Object.values(rt.state?.rooms ?? {}).some(room => rt.sessionOfRoom?.(room) === sessionId)
-  const covered = sessionId => rt.chatOwners?.has?.(sessionId) === true || roomChat(sessionId) || botChat(sessionId)
+  const coverageKind = sessionId => roomChat(sessionId)
+    ? 'group'
+    : rt.chatOwners?.has?.(sessionId) === true || botChat(sessionId) ? 'bot' : undefined
   const isGroup = sessionId => roomChat(sessionId)
   const refusal = (sessionId, name) => {
     const where = isGroup(sessionId) ? 'a group chat' : "a Bot's chat"
@@ -46,28 +48,66 @@ export function install(rt) {
   const shields = new Map()
   // Our own registrations notify `commands/change` too; skip the echo while applying.
   let applying = false
+  let pendingNotification
+  let notificationTimer
 
-  const sync = (shield) => {
-    const commands = shield.commands
-    if (commands === undefined) return
-    // One `commands/change` per shield, not one per registration: every event makes
-    // the Web UI refetch /api/commands/list, and a fresh team mounts a dozen shields.
+  const silenceNotifications = commands => {
+    if (commands === undefined || commands === null) return { notify: undefined, restore() {} }
     const hadOwn = Object.hasOwn(commands, 'notifyChange')
     const notify = commands.notifyChange
-    let silent = false
-    if (typeof notify === 'function') { commands.notifyChange = () => {}; silent = true }
-    const restore = () => {
-      if (!silent) return
-      if (hadOwn) commands.notifyChange = notify
-      else delete commands.notifyChange
+    if (typeof notify !== 'function') return { notify: undefined, restore() {} }
+    commands.notifyChange = () => {}
+    return {
+      notify,
+      restore() {
+        if (hadOwn) commands.notifyChange = notify
+        else delete commands.notifyChange
+      },
     }
+  }
+
+  const queueNotification = (commands, notify) => {
+    if (typeof notify !== 'function') return
+    // `ctx.get('commands')` returns a context-bound view per agent, but each view
+    // reaches the same root registry and event bus. One event invalidates every
+    // session's command catalog, so retaining one notifier per view multiplies
+    // a single team mount into N global refresh waves.
+    pendingNotification ??= { commands, notify }
+    if (notificationTimer !== undefined) return
+    notificationTimer = setTimeout(() => {
+      notificationTimer = undefined
+      const pending = pendingNotification
+      pendingNotification = undefined
+      if (pending === undefined) return
+      applying = true
+      try {
+        try { pending.notify.call(pending.commands) } catch { /* the UI can relist on its next visit */ }
+      } finally {
+        applying = false
+      }
+    }, 50)
+    notificationTimer.unref?.()
+  }
+
+  const sync = (shield, force = false) => {
+    const commands = shield.commands
+    if (commands === undefined) return false
+    const nextCoverage = coverageKind(shield.sessionId)
+    if (!force && nextCoverage === shield.coverage) return false
+    shield.coverage = nextCoverage
+    let changed = false
+    // Every event makes the Web UI refetch /api/commands/list across all cached
+    // Sessions. Suppress each registration and queue one event for the whole team.
+    const notification = silenceNotifications(commands)
     try {
-    for (const lift of shield.lifts) { try { lift() } catch { /* already lifted */ } }
+    for (const lift of shield.lifts) {
+      try { lift(); changed = true } catch { /* already lifted */ }
+    }
     shield.lifts = []
     // The agent can arrive before its Bot or group is in the state (a Bot created a
     // moment ago); the shield mounts for every agent and waits for that Session to
     // become known, then registers its shadows on the next sync.
-    if (!covered(shield.sessionId)) return
+    if (nextCoverage === undefined) return changed
     // Lift first: `list(agent)` is the merged view, so only after our shadows are gone
     // does it answer what the host currently serves this agent.
     const definitions = commands.list(shield.agent)
@@ -84,29 +124,28 @@ export function install(rt) {
           handler: () => ({ kind: 'error', text: refusal(shield.sessionId, definition.name) }),
         })
         if (typeof lift === 'function') shield.lifts.push(lift)
+        changed = true
       } catch (error) {
         // A same-name command already in this exact agent scope keeps its own handler.
         rt.warn?.('ds-bot: the DSH /%s command could not be shadowed for %s: %s', definition.name, shield.sessionId, error?.message ?? error)
       }
     }
     } finally {
-      restore()
-      if (silent && !batching) { try { notify.call(commands) } catch { /* the UI relists next time */ } }
+      notification.restore()
+      if (changed && !batching) queueNotification(commands, notification.notify)
     }
+    return changed
   }
   let batching = false
-  const resync = () => {
+  const resync = (force = false, notifyClient = false) => {
     if (applying) return
     applying = true
     batching = true
-    try { for (const shield of shields.values()) sync(shield) } finally { applying = false; batching = false }
-    const seen = new Set()
-    for (const shield of shields.values()) {
-      const commands = shield.commands
-      if (commands === undefined || seen.has(commands)) continue
-      seen.add(commands)
-      try { commands.notifyChange?.() } catch { /* the UI relists next time */ }
-    }
+    let changed = false
+    try { for (const shield of shields.values()) changed = sync(shield, force) || changed } finally { applying = false; batching = false }
+    if (!notifyClient || !changed) return
+    const shield = [...shields.values()].find(candidate => candidate.commands !== undefined)
+    if (shield !== undefined) queueNotification(shield.commands, shield.commands.notifyChange)
   }
 
   const mount = (agent) => {
@@ -163,19 +202,32 @@ export function install(rt) {
     const shield = shields.get(sessionId)
     if (shield === undefined) return
     shields.delete(sessionId)
-    for (const lift of shield.lifts) { try { lift() } catch { /* already lifted */ } }
+    const notification = silenceNotifications(shield.commands)
+    try {
+      for (const lift of shield.lifts) { try { lift() } catch { /* already lifted */ } }
+    } finally {
+      notification.restore()
+      if (shield.lifts.length > 0) queueNotification(shield.commands, notification.notify)
+    }
     shield.lifts = []
     try { shield.fiber?.dispose?.() } catch { /* already gone */ }
   }
 
   ctx.on('agent/created', ({ agent }) => mountReady(agent))
   ctx.on('agent/disposed', ({ agent }) => { unmount(agent?.session?.id) })
-  ctx.on('commands/change', resync)
-  const offSaved = rt.onSaved?.(() => resync())
+  ctx.on('commands/change', () => resync(true))
+  const offSaved = rt.onSaved?.(() => resync(false, true))
   ctx.effect(() => () => {
     applying = true
     offSaved?.()
     for (const sessionId of [...shields.keys()]) unmount(sessionId)
+    if (notificationTimer !== undefined) clearTimeout(notificationTimer)
+    notificationTimer = undefined
+    const pending = pendingNotification
+    pendingNotification = undefined
+    if (pending !== undefined) {
+      try { pending.notify.call(pending.commands) } catch { /* the next generation will refresh */ }
+    }
   }, 'ds-bot: command shield cleanup')
   // A reload can inherit live agents; agent/created will not fire for them again.
   for (const agent of ctx.get?.('agents')?.list?.() ?? []) void mountReady(agent)
