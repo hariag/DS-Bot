@@ -113,6 +113,21 @@ const readNotes = (file) => {
   }
 }
 
+// Local (AIOS) bounded recovery view used by the board's recovery projection.
+const RECOVERY_VIEW_TIMEOUT_MS = 5000
+const unavailableRecoveryView = () => ({ available: false, incomplete: true, items: [] })
+export async function boundedRecoveryView(work, timeoutMs = RECOVERY_VIEW_TIMEOUT_MS) {
+  let timer
+  try {
+    return await Promise.race([work.catch(() => unavailableRecoveryView()), new Promise(resolve => {
+      timer = setTimeout(() => resolve(unavailableRecoveryView()), timeoutMs)
+    })])
+  } finally { clearTimeout(timer) }
+}
+
+// The turns of a Session's durable log, each with the exchanges it took up, what it
+// said and how it ended.
+
 export function install(rt) {
   const { ctx, home } = rt
   const file = join(home, 'inflight.json')

@@ -34,6 +34,7 @@ import { searchGroupBook } from './group-search.js'
 import { threadCurrentOfPart } from './threads.js'
 import { failureLine } from './turns.js'
 import { parseBook } from './ledger.js'
+import { scheduleChangeId } from './room-schedule-delivery.js'
 
 const ROOM_LOG_MAX = 60
 const ROOM_FIRST_LOOK = 12
@@ -399,6 +400,23 @@ export function alignGroupSessionLines(sessionLines, kept) {
     return recovered.reverse()
   }
   return undefined
+}
+
+export function roomBusyForPatrol(rt, room, ignoreMessageId, openingSessionId) {
+  if (rt.roomActive(room.id) || rt.roomInbox.get(room.id)?.length || rt.roomLaterCount(room.id)) return true
+  // An unanswered batch survives a restart, sometimes for hours. A live waiter
+  // protects an in-flight handoff; the historical batch alone cannot prove one.
+  for (const waiter of rt.roomWaiters.values()) if (waiter.roomId === room.id) return true
+  const agents = rt.ctx.get?.('agents')
+  const queued = message => (ignoreMessageId === undefined || message.id !== ignoreMessageId) && !scheduleChangeId(message)
+  const sessions = [rt.sessionOfRoom(room), ...room.members.map(id => room.sessions?.[id])]
+  return sessions.some(id => {
+    if (!id) return false
+    const agent = agents?.get?.(id)
+    if (id !== openingSessionId && (rt.live.get(id)?.turn !== undefined || agent?.status === 'running')) return true
+    return rt.hasSubagents(id) || rt.waitsForApproval(id)
+      || agent?.inbox?.nextStep?.some(queued) || agent?.inbox?.nextTurn?.some(queued)
+  })
 }
 
 export function install(rt) {

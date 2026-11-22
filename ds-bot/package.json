@@ -89,5 +89,24 @@
   "bin": {
     "ds-bot": "./bin/ds-bot-doctor.mjs",
     "ds-bot-mcp": "./bin/ds-bot-mcp.mjs"
+  },
+  "dsBot": {
+    "build": "aios-20261122.2",
+    "fork": "hariag/DS-Bot",
+    "forkCommit": "459cbbdc29fdb2e4425eec948e846128777eed7b",
+    "upstreamCommit": "881b57b5",
+    "changes": [
+      "goal-pass-gate",
+      "git-evidence-verifier",
+      "review-inspection-ledger-bound",
+      "version-endpoint",
+      "notice-4000",
+      "memory-json-retry",
+      "review-cadence-gate",
+      "version-runtime",
+      "usage-on-demand",
+      "board",
+      "privacy-board-guard"
+    ]
   }
 }

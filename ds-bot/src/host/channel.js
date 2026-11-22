@@ -1052,3 +1052,99 @@ export function install(rt) {
     return () => Promise.all([rt.btwDispose?.(), rt.sideDispose?.()])
   }, 'ds-bot: load state')
 }
+
+// Local (AIOS) queue views used by the board and the group panel.
+export function groupQueueView(rooms, bots, getAgent, unreadOf) {
+  const result = {}
+  for (const room of Object.values(rooms ?? {})) {
+    for (const [botId, currentId] of Object.entries(room.sessions ?? {})) {
+      const earlier = (room.segments?.[botId] ?? []).map(segment => segment.sessionId).filter(Boolean)
+      const seen = new Set()
+      let unknown
+      for (const sessionId of new Set([currentId, ...earlier].filter(Boolean))) {
+        const inbox = getAgent?.(sessionId)?.inbox
+        const available = Array.isArray(inbox?.nextStep) && Array.isArray(inbox?.nextTurn)
+        if (!available) {
+          // A missing delivery note does not prove that an unloaded inbox is empty.
+          if (!unknown) {
+            unknown = { id: 'unavailable', roomId: room.id, roomName: room.name, unavailable: true }
+            ;(result[botId] ??= []).push(unknown)
+          }
+          if (recoveryNoted(unreadOf, sessionId)) unknown.noted = true
+          continue
+        }
+        for (const [index, item] of [...inbox.nextStep, ...inbox.nextTurn].entries()) {
+          if (item.source?.kind !== 'bot') continue
+          const exchangeId = item.source.exchangeId
+          if (exchangeId !== undefined && seen.has(exchangeId)) continue
+          if (exchangeId !== undefined) seen.add(exchangeId)
+          const content = Array.isArray(item.content) ? item.content : []
+          const text = content.filter(block => block?.type === 'text').map(block => block.text ?? '').join('\n')
+          ;(result[botId] ??= []).push({
+            id: item.id ?? item.source.exchangeId ?? `${sessionId}:${index}`, roomId: room.id, roomName: room.name, previous: sessionId !== currentId,
+            senderName: item.source.senderName ?? bots?.[item.source.askedBy ?? item.source.fromId]?.name ?? '',
+            text: text.length > QUEUE_PREVIEW_MAX ? `${text.slice(0, QUEUE_PREVIEW_MAX)}…` : text,
+          })
+        }
+      }
+    }
+  }
+  return result
+}
+
+export function earlierPrivateQueueView(bots, getAgent, unreadOf) {
+  const result = {}
+  for (const bot of Object.values(bots ?? {})) {
+    const seen = new Set()
+    let unknown
+    const otherParts = [
+      ...(bot.segments ?? []).map(segment => segment.sessionId),
+      ...(bot.openParts ?? []).flatMap(part => [part.sessionId, ...(part.segments ?? []).map(segment => segment.sessionId)]),
+    ]
+    for (const sessionId of new Set(otherParts.filter(id => id && id !== (bot.sessionId ?? bot.id)))) {
+      const inbox = getAgent?.(sessionId)?.inbox
+      const available = Array.isArray(inbox?.nextStep) && Array.isArray(inbox?.nextTurn)
+      if (!available) {
+        if (!unknown) {
+          unknown = { id: 'unavailable', unavailable: true }
+          ;(result[bot.id] ??= []).push(unknown)
+        }
+        if (recoveryNoted(unreadOf, sessionId)) unknown.noted = true
+        continue
+      }
+      for (const [index, item] of [...inbox.nextStep, ...inbox.nextTurn].entries()) {
+        if (item.source?.kind !== 'bot') continue
+        const exchangeId = item.source.exchangeId
+        if (exchangeId !== undefined && seen.has(exchangeId)) continue
+        if (exchangeId !== undefined) seen.add(exchangeId)
+        const content = Array.isArray(item.content) ? item.content : []
+        const text = content.filter(block => block?.type === 'text').map(block => block.text ?? '').join('\n')
+        ;(result[bot.id] ??= []).push({ id: item.id ?? exchangeId ?? `${sessionId}:${index}`, ...(exchangeId === undefined ? {} : { exchangeId }), senderName: item.source.senderName ?? '', text: text.length > QUEUE_PREVIEW_MAX ? `${text.slice(0, QUEUE_PREVIEW_MAX)}…` : text })
+      }
+    }
+  }
+  return result
+}
+
+// A group's own inbox is distinct from its members' inboxes. Include old parts;
+// missing agents are unknown, not empty. The client joins its live projection by ID.
+export function roomPostQueueView(rooms, sessionOfRoom, getAgent) {
+  const result = {}
+  for (const room of Object.values(rooms ?? {})) {
+    const rows = []
+    let unavailable = false
+    for (const sessionId of new Set([sessionOfRoom?.(room), ...(room.parts ?? []).map(part => part.sessionId)].filter(Boolean))) {
+      const inbox = getAgent?.(sessionId)?.inbox
+      if (!Array.isArray(inbox?.nextStep) || !Array.isArray(inbox?.nextTurn)) { unavailable = true; continue }
+      for (const [index, item] of [...inbox.nextStep, ...inbox.nextTurn].entries()) {
+        if (item.source?.kind !== 'bot' || item.source?.role !== 'post') continue
+        const exchangeId = typeof item.source.exchangeId === 'string' && item.source.exchangeId !== '' ? item.source.exchangeId : undefined
+        const content = Array.isArray(item.content) ? item.content : []
+        const text = content.filter(block => block?.type === 'text').map(block => block.text ?? '').join('\n')
+        rows.push({ id: item.id ?? exchangeId ?? `${sessionId}:${index}`, sessionId, ...(typeof item.id === 'string' && item.id !== '' ? { messageId: item.id } : {}), ...(exchangeId ? { exchangeId } : {}), senderName: item.source.senderName ?? '', text: text.length > QUEUE_PREVIEW_MAX ? `${text.slice(0, QUEUE_PREVIEW_MAX)}…` : text, attachments: content.filter(block => block?.type === 'image' || block?.type === 'file').length })
+      }
+    }
+    result[room.id] = { rows, unavailable }
+  }
+  return result
+}
