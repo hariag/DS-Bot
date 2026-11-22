@@ -11,20 +11,24 @@ const batch = entries => ({id:'batch',source:{kind:'schedule'},content:[{type:'t
 const context = {id:'ctx',source:{kind:'runtime-context',form:'snapshot'}}
 
 function fixture() {
-  const room={id:'room',admin:'pm',sessions:{pm:'pm-in-room'}},state={busy:false,result:'admitted'}
+  let room={id:'room',admin:'pm',sessions:{pm:'pm-in-room'}},agent
+  const state={busy:false,result:'admitted',replaceOnLoad:false}
   const hooks=new Map(),calls=[],native=[],delivered=[],cleanups=[]
-  const agent={id:'root',session:{id:'root'},followup:m=>native.push(m),whenIdle:()=>Promise.resolve(1)}
-  const rt={ctx:{on:(name,fn)=>hooks.set(name,fn),effect:fn=>{const cleanup=fn();if(typeof cleanup==='function')cleanups.push(cleanup)}},load:async()=>{},roomOf:id=>['root','room'].includes(id)?room:undefined,
-    sessionOfRoom:()=>agent.id,roomBusyForPatrol:()=>state.busy,isManagedRoomScheduleId:id=>id==='managed',
-    managedRoomSchedule:(id,sid)=>id==='managed'&&sid==='root'?{roomId:room.id,adminId:room.admin,prompt:'Review the board'}:undefined,
-    runScheduledRoomReview:async(...args)=>{calls.push(args);return state.result},
+  agent={id:'root',session:{id:'root'},followup:m=>native.push(m),whenIdle:()=>Promise.resolve(1)}
+  const replaceRoom=()=>{room={...room,sessions:{...room.sessions}};agent={...agent,session:{...agent.session}}}
+  const rt={ctx:{on:(name,fn)=>hooks.set(name,fn),effect:fn=>{const cleanup=fn();if(typeof cleanup==='function')cleanups.push(cleanup)}},load:async()=>{if(state.replaceOnLoad){state.replaceOnLoad=false;replaceRoom()}},roomOf:id=>['root','room'].includes(id)?room:undefined,
+    sessionOfRoom:()=>agent.id,resolveAgent:async id=>id===agent.id?agent:undefined,roomBusyForPatrol:()=>state.busy,isManagedRoomScheduleId:id=>id==='managed',
+    managedRoomSchedule:(id,sid)=>id==='managed'&&sid===agent.id?{roomId:room.id,adminId:room.admin,prompt:'Review the board'}:undefined,
+    runScheduledRoomReview:async(...args)=>{if(args[0]!==room||args[2]!==agent)return 'invalid';calls.push(args);return state.result},
     ensureGroupTaskSession:async()=>{state.afterResolve?.();return 'pm-in-room'},
     deliver:async(args,guards)=>{guards.beforeAdmission();delivered.push(args)}}
   installRoomScheduleDelivery(rt)
   const target=id=>hooks.get('schedule/resolve-agent')(id,async()=>agent)
   const step=(messages,more=[],number=1)=>hooks.get('agent/pre-step')({agent,step:number,turn:5,messages},
     async()=>({kind:'enter',messages:[...messages,...more,context]}))
-  return {room,state,rt,calls,native,delivered,agent,target,step,dispose:()=>{for(const cleanup of cleanups)cleanup()}}
+  return {get room(){return room},get agent(){return agent},state,rt,calls,native,delivered,target,step,
+    replaceRoom,
+    dispose:()=>{for(const cleanup of cleanups)cleanup()}}
 }
 
 async function captureTimers(run) {
@@ -52,8 +56,13 @@ test('a reminder filtered because the group is busy retries when the room quiets
   const agent=await f.target('root')
   const timers=await captureTimers(async()=>agent.followup(single(entry())))
   assert.deepEqual(f.native,[]);assert.equal(timers.length,1);assert.equal(timers[0].delay,15000)
+  f.state.replaceOnLoad=true
   f.state.busy=false;timers[0].callback();await new Promise(resolve=>setImmediate(resolve))
-  assert.deepEqual(f.calls,[[f.room,JSON.stringify(['managed',at]),f.agent,undefined,'Review the board',undefined]])
+  assert.equal(f.calls.length,1)
+  assert.strictEqual(f.calls[0][0],f.room)
+  assert.equal(f.calls[0][1],JSON.stringify(['managed',at]))
+  assert.strictEqual(f.calls[0][2],f.agent)
+  assert.deepEqual(f.calls[0].slice(3),[undefined,'Review the board',undefined])
 })
 
 test('an idle occurrence goes once through the host and does not become an ordinary group broadcast',async()=>{
