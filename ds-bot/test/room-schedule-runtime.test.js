@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { fakeContext } from './fake-ctx.js'
 import { install as installSchedules } from '../src/host/schedules.js'
+import * as roomScheduleDelivery from '../src/host/room-schedule-delivery.js'
 
 const token = 'migration-test-token'
 const oldPrompt = [
@@ -62,6 +63,7 @@ test('schedule service startup applies managed room prompt migrations', async t 
 })
 
 test('the plugin runtime composes the managed room schedule delivery module', () => {
+  assert.equal(typeof roomScheduleDelivery.install, 'function')
   const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
   assert.match(source, /import \* as roomScheduleDelivery from '\.\/src\/host\/room-schedule-delivery\.js'/)
   const modules = /const MODULES = \[(.*?)\]/s.exec(source)?.[1]

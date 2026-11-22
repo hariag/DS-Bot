@@ -170,3 +170,6 @@ export function installRoomScheduleDelivery(rt) {
 
   rt.consumeSkippedPatrolTurn = (sessionId, turn) => Number.isSafeInteger(turn) && skippedTurns.get(sessionId) === turn && skippedTurns.delete(sessionId)
 }
+
+// Plugin modules are installed through the shared `install(rt)` contract.
+export { installRoomScheduleDelivery as install }
