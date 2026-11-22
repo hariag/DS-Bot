@@ -68,7 +68,11 @@ export function installRoomScheduleDelivery(rt) {
         const remaining = frame ? keepEntries(message, frame, entry => {
           if (!known(entry.schedule_id)) return true
           const binding = bindingFor(entry, sessionId)
-          return !ordinary && binding && !busy(rt.roomOf(binding.roomId), message.id)
+          if (!binding) return false
+          const room = rt.roomOf(binding.roomId)
+          const occupied = ordinary || busy(room, message.id)
+          if (occupied) retryScheduledReview(room, binding, JSON.stringify([entry.schedule_id, entry.occurrence_at]))
+          return !occupied
         }) : message
         skipped = !remaining
         if (remaining) target.followup(remaining)
@@ -98,13 +102,36 @@ export function installRoomScheduleDelivery(rt) {
   // quiet. The occurrence key keeps retries idempotent; the next ten-minute tick is
   // still the fallback if every retry finds the room busy.
   const retriggers = new Map()
-  function retryScheduledReview(room, binding, agent, key, tries = 0) {
-    if (retriggers.has(key) || tries >= 6) return
+  let disposed = false
+  rt.ctx.effect?.(() => () => {
+    disposed = true
+    for (const timer of retriggers.values()) clearTimeout(timer)
+    retriggers.clear()
+  }, 'ds-bot: managed room schedule retries')
+  function retryScheduledReview(room, binding, key, tries = 0) {
+    if (disposed || rt.readOnly?.() !== undefined || !room || retriggers.has(key) || tries >= 6) return
     const timer = setTimeout(() => {
       retriggers.delete(key)
-      void rt.runScheduledRoomReview(room, key, agent, undefined, binding.prompt, undefined)
+      if (disposed) return
+      void (async () => {
+        // `load()` may adopt a newer state object between the schedule and this timer.
+        // Reusing the captured room or agent would fail the review's object/session
+        // identity checks and silently consume every delayed retry as invalid.
+        await rt.load()
+        const currentRoom = rt.roomOf(room.id)
+        if (disposed || rt.readOnly?.() !== undefined || !currentRoom) return 'invalid'
+        const sessionId = rt.sessionOfRoom(currentRoom)
+        if (!sessionId) return 'invalid'
+        const identity = JSON.parse(key)
+        const currentBinding = rt.managedRoomSchedule?.(identity[0], sessionId)
+        if (!currentBinding || currentBinding.roomId !== currentRoom.id
+          || currentBinding.adminId !== binding.adminId || currentBinding.prompt !== binding.prompt) return 'invalid'
+        const currentAgent = await rt.resolveAgent(sessionId)
+        if (disposed || currentAgent?.session?.id !== sessionId) return 'invalid'
+        return rt.runScheduledRoomReview(currentRoom, key, currentAgent, undefined, currentBinding.prompt, undefined)
+      })()
         .then(outcome => {
-          if (outcome === 'busy' || outcome === 'pending') retryScheduledReview(room, binding, agent, key, tries + 1)
+          if (!disposed && (outcome === 'busy' || outcome === 'pending')) retryScheduledReview(room, binding, key, tries + 1)
         })
         .catch(error => rt.warn?.('ds-bot: deferred group check in %s failed: %s', room.id, error))
     }, 15000 + tries * 15000)
@@ -143,7 +170,7 @@ export function installRoomScheduleDelivery(rt) {
     if (step !== 1 || retained.some(message => !contextOnly(message) && !ownChange(message))) {
       for (const { entry, binding } of work) {
         const room = rt.roomOf(binding.roomId)
-        if (room) retryScheduledReview(room, binding, agent, JSON.stringify([entry.schedule_id, entry.occurrence_at]))
+        if (room) retryScheduledReview(room, binding, JSON.stringify([entry.schedule_id, entry.occurrence_at]))
       }
       return { ...decision, messages: retained }
     }
@@ -161,8 +188,9 @@ export function installRoomScheduleDelivery(rt) {
         if (result?.outcome === 'admitted' && result.message) {
           return { ...decision, messages: [result.message, ...retained.filter(contextOnly)] }
         }
+        if (result === 'busy' || result === 'pending') retryScheduledReview(room, binding, key)
         if (result === 'no-goal') await checkBoardWithoutGoal(room, binding, key, message.id, agent)
-      }
+      } else retryScheduledReview(room, binding, key)
     }
     skippedTurns.set(agent.id, turn)
     return { ...decision, messages: [] }
@@ -170,3 +198,6 @@ export function installRoomScheduleDelivery(rt) {
 
   rt.consumeSkippedPatrolTurn = (sessionId, turn) => Number.isSafeInteger(turn) && skippedTurns.get(sessionId) === turn && skippedTurns.delete(sessionId)
 }
+
+// Plugin modules are installed through the shared `install(rt)` contract.
+export { installRoomScheduleDelivery as install }

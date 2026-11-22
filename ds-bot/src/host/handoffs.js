@@ -8,19 +8,9 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { LATE_ANSWER, SOURCE_KIND, TEXT_KEPT } from './constants.js'
+import { LATE_ANSWER, TEXT_KEPT } from './constants.js'
 import { headOf } from './text.js'
-import { isOpenPart, ownChatSessions } from './threads.js'
-
-// Board assignments and release notices have no asking Bot. Their answers stay in the recipient's chat.
-export const answersLocally = info => info.role === 'request' && (info.audience === 'user' || !info.senderSessionId)
-
-// A wait no Bot has answered for this long is closed as stale on the next start.
-// The narrow tests may shorten it; production keeps three days.
-export const STALE_WORK_MS = 72 * 3_600_000
-// One start closes at most this many stale waits, so a saved team cannot turn the
-// sweep into an unbounded burst of deliveries.
-const STALE_WORK_CLOSES = 200
+import { isOpenPart, ownChatSessions, threadCurrentOfPart } from './threads.js'
 
 const minutes = since => {
   const count = Math.floor((Date.now() - since) / 60_000)
@@ -112,7 +102,7 @@ export function install(rt) {
   // The work a turn does: the request it answers, or the work a result that came back
   // (or a turn picked up again) goes on with.
   const workOf = info => (info === undefined ? undefined
-    : info.role === 'request' && !answersLocally(info) ? info.exchangeId : info.work)
+    : info.role === 'request' && info.audience !== 'user' ? info.exchangeId : info.work)
 
   // `parent`: the work the sender was doing when it sent this one. `child`: the
   // session id of the subagent a run of this work belongs to — the run, not the
@@ -207,6 +197,7 @@ export function install(rt) {
     if (work === undefined) return
     const { parent } = work
     delete works()[id]
+    for (const child of Object.values(works())) if (child.parent === id) delete child.parent
     const above = works()[parent]
     if (above !== undefined) above.open = above.open.filter(other => other !== id)
     for (const result of work.results ?? []) whole.delete(result.id)
@@ -350,64 +341,28 @@ export function install(rt) {
     if (work === undefined || parent === undefined || !parent.open.includes(id)) return false
     const target = labelOfWork(work)
     const name = rt.botOf(work.to)?.name ?? work.name ?? (work.room !== undefined ? rt.roomOf(work.room)?.name : undefined) ?? 'the other Bot'
-    const stale = reason === 'stale'
     const text = reason === 'gone'
       ? cap(target) + ' is no longer on the team, so no reply can come back for the work handed to it. The user gave up waiting for that answer: this counts as its result. Go on with the work you were given, and say plainly that this answer is missing.'
-      : stale
-        ? 'No reply came back from ' + target + ' for more than ' + Math.round(STALE_WORK_MS / 3_600_000) + ' hours, so this wait was closed as stale. This counts as its result: go on with the work you were given, and say plainly that this answer never came.'
-        : 'No reply came back from ' + target + ', and the user gave up waiting for it. This counts as its result: go on with the work you were given, and say plainly that this answer is missing.'
+      : 'No reply came back from ' + target + ', and the user gave up waiting for it. This counts as its result: go on with the work you were given, and say plainly that this answer is missing.'
     rememberAbandoned(id, { at: Date.now(), from: work.from, to: work.to, room: work.room, parent: work.parent, name, reason, ...(parent.to !== undefined ? { waiting: parent.to } : {}) })
     closeWork(id, name, text, { abandoned: true, abandonedAt: Date.now(), abandonedReason: reason })
     // The wait is over now, not when the Bot next reads the result.
     parent.open = parent.open.filter(other => other !== id)
     save()
     // The Bot that waited goes on with its work now, the same way a reply brings it back.
-    // A stale closure at start is not pushed to it: the result waits in the work, and
-    // waking every Bot whose old hand-off expired would be a burst of their own.
     const waitingBot = parent.to
-    if (reason !== 'stale' && waitingBot !== undefined && rt.botOf(waitingBot) !== undefined) {
+    if (waitingBot !== undefined && rt.botOf(waitingBot) !== undefined) {
       const said = reason === 'gone'
         ? target + ' is no longer on the team, so the work you handed it has no answer. The user gave up waiting for it; this is its result. Go on with the work you were given.'
-        : reason === 'stale'
-          ? 'No reply came back from ' + target + ' after ' + Math.round(STALE_WORK_MS / 3_600_000) + ' hours, so this wait was closed as stale. This is its result: go on with the work you were given and say that this answer never came.'
-          : 'No reply came back from ' + target + ', and the user gave up waiting for it. This is its result: go on with the work you were given.'
+        : 'No reply came back from ' + target + ', and the user gave up waiting for it. This is its result: go on with the work you were given.'
+      const targetSession = work.fromPart === undefined ? undefined : threadCurrentOfPart(rt.botOf(waitingBot), work.fromPart)
       void rt.deliver({
         fromId: work.to !== undefined && rt.botOf(work.to) !== undefined ? work.to : undefined,
-        fromName: name, toId: waitingBot, text: said, role: 'reply', replyTo: id,
+        fromName: name, toId: waitingBot, ...(targetSession ? { sessionId: targetSession } : {}), text: said, role: 'reply', replyTo: id,
         exchangeId: randomUUID(), work: work.parent, abandoned: true, recordExchange: false,
       }).catch(error => rt.warn('ds-bot: giving up the wait for %s was not delivered: %s', waitingBot, error))
     }
     return true
-  }
-
-  // A wait nobody answered for days is not a wait any more. Close the unanswered
-  // leaf first: the work above it then goes on with an explicit "no reply" result,
-  // and the next pass may find its own parent stale too. This keeps the hand-off
-  // ledger equal to the work actually in flight instead of growing for weeks.
-  // Applies only to an addressee that still exists: a removed Bot or group is
-  // reconcileLostWorks' job, and a subagent run is left alone on purpose.
-  function reconcileStaleWorks(now = Date.now()) {
-    if (rt.readOnly?.() !== undefined) return 0
-    let closed = 0
-    for (let pass = 0; pass < 4; pass += 1) {
-      let changed = false
-      for (const [id, work] of Object.entries(works())) {
-        if (closed >= STALE_WORK_CLOSES) return closed
-        if (work.parent === undefined || works()[work.parent]?.open?.includes(id) !== true) continue
-        if (work.child !== undefined) continue
-        if (work.to === undefined && work.room === undefined) continue
-        if ((work.open ?? []).length > 0) continue
-        if ((work.results ?? []).length > 0) continue
-        if (!Number.isFinite(work.at) || now - work.at < STALE_WORK_MS) continue
-        if (abandonWork(id, 'stale')) {
-          closed += 1
-          changed = true
-        }
-      }
-      if (!changed) break
-    }
-    if (closed > 0) rt.warn('ds-bot: closed %d stale hand-off wait(s) older than %d hours', closed, Math.round(STALE_WORK_MS / 3_600_000))
-    return closed
   }
 
   // A restart settles the waits whose target no longer exists, with the same path as a
@@ -431,10 +386,7 @@ export function install(rt) {
   // is installed before the ones that load it.
   ctx?.effect?.(() => {
     const timer = setTimeout(() => {
-      void rt.load().then(() => {
-        reconcileLostWorks()
-        reconcileStaleWorks()
-      }).catch(error => rt.warn('ds-bot: lost waits not settled: %s', error))
+      void rt.load().then(() => reconcileLostWorks()).catch(error => rt.warn('ds-bot: lost waits not settled: %s', error))
     }, 0)
     return () => clearTimeout(timer)
   }, 'ds-bot: lost hand-offs')
@@ -447,18 +399,18 @@ export function install(rt) {
   }
 
   // What a Bot is doing, in one line for the Bots that work with it.
-  function statusOf(botId, viewerId) {
+  function statusOf(botId) {
     const chat = rt.chatOf(botId)
-    const canSeeRoom = room => room !== undefined && (rt.isMain(viewerId) || room.members.includes(viewerId))
     // A Bot's own chat may keep parts running in the background, as its group Sessions
     // may run: a Bot working there is not idle, and the line says where.
     const bot = rt.botOf(botId)
     const own = bot === undefined ? [chat] : ownChatSessions(bot)
-    const canSeeSession = sessionId => sessionId !== undefined && (own.includes(sessionId) || canSeeRoom(rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)))
     const sessions = [...new Set([...own, ...(rt.groupSessionsOf?.(botId) ?? [])])]
     const place = sessionId => {
       const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
       if (room) return `in group "${room.name}"`
+      const task = rt.taskBySession?.(sessionId)?.task
+      if (task !== undefined) return `in background task "${task.title}"`
       // The same words the message_bot note uses for a background part.
       return isOpenPart(bot, sessionId) ? 'in another of its conversations' : 'in its own chat'
     }
@@ -477,76 +429,30 @@ export function install(rt) {
     const approval = (rt.approvalsView?.() ?? []).find(entry => entry.botId === botId)
     const switching = [...(rt.switchJobs?.() ?? [])].find(job => job.botId === botId)
     const running = sessions.filter(sessionId => rt.live.get(sessionId)?.turn !== undefined)
-    if (approval !== undefined) lines.push((approval.roomId ? canSeeRoom(rt.roomOf(approval.roomId)) : canSeeSession(approval.sessionId))
-      ? `waiting for the user's approval to run ${approval.tool || 'a tool'} ${approval.roomId ? `in group "${rt.roomOf(approval.roomId)?.name ?? '?'}"` : place(approval.sessionId)} (${minutes(approval.at)})`
-      : 'waiting for approval in another conversation')
-    else if (switching !== undefined) lines.push(switching.roomId && !canSeeRoom(rt.roomOf(switching.roomId))
-      ? 'moving on to a fresh part of another conversation'
-      : `moving on to a fresh part of its ${switching.roomId ? `conversation in group "${rt.roomOf(switching.roomId)?.name ?? '?'}"` : 'own chat'}`)
+    if (approval !== undefined) lines.push(`waiting for the user's approval to run ${approval.tool || 'a tool'} ${place(approval.sessionId)} (${minutes(approval.at)})`)
+    else if (switching !== undefined) lines.push(`moving on to a fresh part of its ${switching.roomId ? `conversation in group "${rt.roomOf(switching.roomId)?.name ?? '?'}"` : 'own chat'}`)
     for (const sessionId of approval === undefined && switching === undefined ? running : []) {
       const entry = rt.live.get(sessionId)
-      lines.push(canSeeSession(sessionId)
-        ? `working ${place(sessionId)} ${minutes(entry.since ?? Date.now())}${forWhom(sessionId, entry.info)}${doing(entry)}`
-        : 'working in another conversation')
+      lines.push(`working ${place(sessionId)} ${minutes(entry.since ?? Date.now())}${forWhom(sessionId, entry.info)}${doing(entry)}`)
     }
-    // Keep the full wait ledger for drill-down. Every message receipt includes this
-    // status, so group matching visible labels and bound how many it repeats.
-    const waits = new Map()
-    const countWait = label => waits.set(label, (waits.get(label) ?? 0) + 1)
     for (const { work, out } of held(busyWith(running))) {
       if (work.to !== botId) continue
-      if ((work.room && !canSeeRoom(rt.roomOf(work.room))) || (work.fromRoom && !canSeeRoom(rt.roomOf(work.fromRoom)))) {
-        countWait('waiting for work in another conversation')
-        continue
-      }
       const forName = nameOf(work.from) ? `, for ${nameOf(work.from)}` : ''
-      const on = [...new Set(out.map(({ work: child }) => ((child.fromRoom && !canSeeRoom(rt.roomOf(child.fromRoom))) ? 'another conversation' : child.room ? (canSeeRoom(rt.roomOf(child.room)) ? `group "${rt.roomOf(child.room)?.name ?? 'a group'}"` : 'another conversation') : child.name ?? nameOf(child.to) ?? 'a teammate')))]
-      countWait(on.length > 0 ? `waiting for ${on.join(' and ')} to hand back work${forName}` : `about to go on with work${forName}, whose results came back`)
+      const on = [...new Set(out.map(({ work: child }) => (child.room ? `group "${rt.roomOf(child.room)?.name ?? 'a group'}"` : child.name ?? nameOf(child.to) ?? 'a teammate')))]
+      lines.push(on.length > 0 ? `waiting for ${on.join(' and ')} to hand back work${forName}` : `about to go on with work${forName}, whose results came back`)
     }
-    let shown = 0, remaining = 0
-    for (const [label, count] of waits) {
-      if (shown === 4) { remaining += count; continue }
-      lines.push(count > 1 ? `${label} (${count} hand-offs)` : label)
-      shown++
-    }
-    if (remaining > 0) lines.push(`${remaining} other hand-off(s)`)
     if (lines.length === 0) lines.push('idle')
     for (const [kind, card] of [['question', state.questions?.[chat]], ['view', state.views?.[chat]]]) {
       if (card !== undefined) lines.push(`a ${kind} card in its own chat has waited for the user's answer ${forHowLong(card.askedAt)}`)
     }
-    const registry = ctx.get?.('agents')
-    const pending = (id) => {
-      const inbox = registry?.get?.(id)?.inbox
-      if (!Array.isArray(inbox?.nextStep) || !Array.isArray(inbox?.nextTurn)) return undefined
-      return [...inbox.nextStep, ...inbox.nextTurn]
+    const unread = new Map()
+    for (const args of rt.unreadOf?.(chat) ?? []) {
+      const name = nameOf(args.fromId)
+      if (name !== undefined) unread.set(name, (unread.get(name) ?? 0) + 1)
     }
-    const ownPending = pending(chat)
-    if (ownPending !== undefined) {
-      const deferred = ownPending.filter(message => message.source?.deferred === true).length
-      lines.push(`own chat pending inputs: ${ownPending.length}${deferred > 0 ? ` (${deferred} deferred)` : ''}`)
-      const unread = new Map()
-      for (const message of ownPending) {
-        const source = message.source
-        const name = source?.kind === SOURCE_KIND && !source.deferred ? nameOf(source.senderSessionId) : undefined
-        if (name !== undefined) unread.set(name, (unread.get(name) ?? 0) + 1)
-      }
-      if (unread.size > 0) lines.push(`unread Bot inputs in own chat: ${[...unread].map(([name, count]) => `${count} from ${name}`).join(', ')}`)
-    } else lines.push('own chat pending inputs: unavailable')
-    const groups = sessions.filter(sessionId => {
-      if (sessionId === chat) return false
-      const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
-      return canSeeRoom(room)
-    }).map(pending)
-    if (groups.length > 0) {
-      const loaded = groups.filter(group => group !== undefined)
-      const total = loaded.reduce((count, group) => count + group.length, 0)
-      const deferred = loaded.reduce((count, group) => count + group.filter(message => message.source?.deferred === true).length, 0)
-      const unknown = groups.length - loaded.length
-      const scope = unknown > 0 ? ` in ${loaded.length} available session(s); ${unknown} group session(s) unavailable` : ''
-      lines.push(`group pending inputs: ${total}${deferred > 0 ? ` (${deferred} deferred)` : ''}${scope}`)
-    }
+    if (unread.size > 0) lines.push(`not read yet: ${[...unread].map(([name, count]) => `${count} from ${name}`).join(', ')}`)
     return lines.join('; ')
   }
 
-  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork, abandonWork, abandonedWork: takeAbandoned, reconcileStaleWorks, staleWorkMs: () => STALE_WORK_MS })
+  Object.assign(rt, { workOf, openWork, closeWork, dropWork, takenWork: taken, lateWork, answerMissed, ownsWork: owns, waitsWork: waits, holdWork: hold, workAsker: askedBy, answerText, upstreamOf, sameWork, forgetBotWork: forgetBot, statusOf, waitingView, settleSubWork, subWorkRun, nameSubWork, abandonWork, abandonedWork: takeAbandoned })
 }

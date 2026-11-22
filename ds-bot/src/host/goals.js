@@ -9,7 +9,7 @@ import { dirname } from 'node:path'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { goalNoteContext, validGoalTime } from '../shared/goal-note.js'
-import { SOURCE_KIND } from './constants.js'
+import { GOAL_IDLE_NUDGES, SOURCE_KIND } from './constants.js'
 import { headOf } from './text.js'
 import { output } from './tools.js'
 import { currentGoalBoardTaskId } from './legacy-goal.js'
@@ -1536,6 +1536,18 @@ export function install(rt) {
     await rt.save({ required: true })
   }
 
+  // Work can outlive its round, so settlement checks an otherwise quiet room.
+  // A settlement event is not evidence of progress: turn/end and subagent/end
+  // also fire after an admin [PASS] or a failed turn. Keep the slot non-empty
+  // to allow the check, but do not reset the idle check budget.
+  const SETTLE_ROUND = Object.freeze({ stoppedOnly: false, slots: Object.freeze([{ id: '', worked: false }]) })
+
+  async function goalSettled(room) {
+    if (room === undefined) return
+    if ([...rt.roomProgress.values()].some(round => round.roomId === room.id)) return
+    await goalDrive(room, SETTLE_ROUND)
+  }
+
   async function reconcileOriginalReview(room, now) {
     if (reviewDisposed) return
     await rt.load()
@@ -1647,7 +1659,10 @@ export function install(rt) {
     const at = Date.parse(identity[1])
     if (!Number.isSafeInteger(at) || !room || !agent || agent.session?.id !== rt.sessionOfRoom(room)
       || rt.roomOf(room.id) !== room || reviewDisposed || rt.readOnly() !== undefined) return 'invalid'
-    if (room.scheduledReviewOccurrence?.at >= at || receivingRooms.has(room.id)) return 'duplicate'
+    const previous = room.scheduledReviewOccurrence
+    const retryingRecordedNonAdmission = previous?.at === at && previous.key === occurrenceKey
+      && ['busy', 'pending'].includes(previous.outcome)
+    if (receivingRooms.has(room.id) || previous?.at > at || (previous?.at === at && !retryingRecordedNonAdmission)) return 'duplicate'
     receivingRooms.add(room.id)
     const now = Date.now()
     const goal = room.goal
@@ -1800,11 +1815,39 @@ export function install(rt) {
       return
     }
     if (goal?.reviewAttempt || goal?.status !== 'active' || goal.idle || !admin) return
-    // A legacy nudge can already have been admitted by an earlier release.
-    if (round.goalNudge && round.slots.some(slot => slot.id === admin.id && slot.status === 'passed')) {
-      parkAutomatically(goal, 'admin-pass')
+    if (!room.members.includes(admin.id)) return
+    // The idle driver from 0.3.9: once a round ends with nothing running, wake the
+    // admin for a goal check. Progress only resets the check count; two checks without
+    // progress mark the goal idle until something happens. The AIOS scheduled-review
+    // cadence above stays in charge when a review is already open.
+    if (round.stoppedOnly === true || round.slots.length === 0) return
+    if (round.userMessage === true || round.slots.some(slot => slot.worked === true && slot.id !== admin.id)) goal.nudges = 0
+    if (round.goalNudge === true && round.slots.some(slot => slot.id === admin.id && slot.status === 'passed')) {
+      goal.idle = true
+      goal.idleReason = 'admin-pass'
+      goal.idleRevision = goal.revision + 1
+      goal.revision += 1
+      goal.updatedAt = Date.now()
       await rt.save()
+      return
     }
+    if ((rt.workingInRoom?.(room) ?? []).length > 0) return
+    if (rt.roomBatchPending?.(room.id) === true) return
+    if ((rt.roomInbox.get(room.id)?.length ?? 0) > 0) return
+    if (goal.nudges >= GOAL_IDLE_NUDGES) {
+      goal.idle = true
+      goal.idleReason = 'nudge-limit'
+      goal.idleRevision = goal.revision + 1
+      goal.revision += 1
+      goal.updatedAt = Date.now()
+      await rt.save()
+      return
+    }
+    goal.nudges += 1
+    goal.revision += 1
+    goal.updatedAt = Date.now()
+    await rt.save()
+    await queueGoalRelay(room, 'nudge', '[Goal check]', 'DS Bot')
   }
 
   // The user pressed stop in the group: the goal waits for them instead of
@@ -1933,7 +1976,7 @@ export function install(rt) {
       const member = rt.botOf(self)
       if (member === undefined) return 'Only Bots on the team can use group_goal.'
       const action = String(args.action ?? '')
-      const origin = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
+      const origin = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId ?? rt.taskOwners?.get(sessionId)?.roomId)
       if (rt.pastOwners.has(sessionId) || (origin && !origin.members.includes(self))) return 'This group session is no longer current. Open the target group again.'
       const group = args.group?.trim(), roomId = args.room_id?.trim()
       if ((args.group !== undefined && !group) || (args.room_id !== undefined && !roomId)) return 'The supplied group or room_id is empty. Use an exact group or omit it inside that group.'
@@ -2056,7 +2099,7 @@ export function install(rt) {
           break
         case 'start':
           result = startGoal(room, args, self, of, names)
-          next = 'Started. Check ownership, dependencies, authorization and capacity; hand out only ready tasks needing assignment with @Name, and record blockers.'
+          next = 'Started. Hand out the tasks of stage 1 now, with @Name in your reply.'
           break
         case 'revise':
           result = reviseGoal(room, args, self, of, names)
@@ -2110,7 +2153,7 @@ export function install(rt) {
   }))
 
   Object.assign(rt, {
-    goalBlock, goalLedger, goalDraft, goalControl, goalDrive, goalUserMessage, goalUserStopped, goalUndoEmptyMemberStop, goalStopBegin, goalStopEnd, goalDispatchBlocked, goalRecoveryBlocked, runScheduledRoomReview, goalReviewAllowed, goalReviewBind, goalReviewFinished, goalReviewFailed, goalReviewNotOpened,
+    goalBlock, goalLedger, goalDraft, goalControl, goalDrive, goalSettled, goalUserMessage, goalUserStopped, goalUndoEmptyMemberStop, goalStopBegin, goalStopEnd, goalDispatchBlocked, goalRecoveryBlocked, runScheduledRoomReview, goalReviewAllowed, goalReviewBind, goalReviewFinished, goalReviewFailed, goalReviewNotOpened,
     goalTaskWorking: (roomId, botId) => mark(roomId, botId, 'pending', 'working'),
     goalTaskReported: (roomId, botId) => mark(roomId, botId, 'working', 'reported'),
     goalTaskReset: (roomId, botId, note) => mark(roomId, botId, 'working', 'pending', note),

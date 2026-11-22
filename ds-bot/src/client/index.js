@@ -14,7 +14,9 @@ import { frameLayout, readSidebar, writeSidebar, toggledPref, DSH_NARROW } from 
 import { installFrameWatch } from './frame-watch.js'
 import { HeaderPill } from './header.js'
 import { TASK_BOARD_CSS } from './task-board.js'
-import { ComposerPlus, ComposerVoice, menuIcons } from './composer.js'
+import { watchAgentTerminals } from './agent-terminals.js'
+import { ComposerPlus, ComposerVoice, DraftKeeper, menuIcons } from './composer.js'
+
 import { CHATS_SOURCE, atSources } from './at-menu.js'
 import { BtwDock, BtwTurnTail } from './btw.js'
 import { SIDE_CSS, sideSource } from './side-chat.js'
@@ -36,7 +38,8 @@ import { BROWSER_CSS } from './browser-pane.js'
 import { SECRET_CSS, SecretDock } from './secret-card.js'
 import { ConnectorDock, MailDock, CONNECTOR_CSS } from './connectors.js'
 import { CONNECTORS_PAGE_CSS } from './connectors-page.js'
-import { LearningDock, LearningTurnTail, LEARNING_CSS } from './learning-card.js'
+import { PROVIDERS_CSS } from './providers-page.js'
+import { LearningDock, LearningTurnTail, PendingLearning, LEARNING_CSS } from './learning-card.js'
 import { MODEL_CSS, ModelChoiceDock, DeepSeekSignIn } from './model-menu.js'
 import { ReadOnlyDock, READ_ONLY_CSS } from './read-only-dock.js'
 import { BOT_SETTINGS_CSS } from './bot-settings.js'
@@ -61,10 +64,12 @@ import { MEMBER_CSS, MemberDock } from './member-status.js'
 import { TASK_CSS } from './group-task-board.js'
 import { IM_CSS } from './im-page.js'
 import { GOAL_CSS } from './goal.js'
+import { TASKS_CSS } from './bot-tasks.js'
 import { BotMention, USER_MESSAGE_CSS, UserMessageCell, canDrawUserMessages, installUserBubble } from './user-message.js'
 import { BOT_MENTION_ID, installBotMentionRule } from './user-text-rule.js'
 import { QueueDock, QUEUE_CSS } from './queue-dock.js'
 import { PASTE_CSS, PasteDock, PasteGuard } from './paste-card.js'
+import { pruneDrafts } from './draft-keep.js'
 import { OPENING_CSS, bindOpeningWait } from './opening.js'
 import { noticeApprovals } from './approval-notices.js'
 import { listedOpener } from './open-listed.js'
@@ -72,8 +77,11 @@ import { HIDDEN_POLL_MS, VISIBLE_POLL_MS, needsIdleSample, pollDelay } from './p
 import { installMotionRest } from './motion-rest.js'
 import { agentSessionToReuse, singleFlight } from './agent-new.js'
 import { TextSelectionAction, ANNOTATION_CSS } from './text-annotation.js'
+import { installAgentForks } from './agent-fork.js'
 
 export const inject = ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout']
+
+const WINDOWS = globalThis.navigator?.userAgentData?.platform === 'Windows' || /^Win/u.test(globalThis.navigator?.platform ?? '')
 
 export function apply(ctx) {
   ctx.effect(() => installLocale(ctx.get('locale')), 'ds-bot: interface copy')
@@ -91,7 +99,8 @@ export function apply(ctx) {
   let seenAt = seenStore.read()
   // `details` is the panel's subject (a Session id); `view` picks details or the
   // subject Bot's browser inside it.
-const ui = createSource({ details: null, view: 'details', readOnlyPart: null, renaming: false, tab: null, side: null, newChat: null, exchange: null, menu: null, voice: null, palette: null, quote: null, paste: {}, pendingOpen: null, settings: null, memory: null, personalBoard: false, toast: null, signIn: null, renameAgent: null, unread: unreadStore.read(), reactions: reactionStore.read(), visits: {}, panelYield: false, leftDrawer: false, bootFailed: false, goalCompose: null, goalOpen: null })
+const ui = createSource({ details: null, view: 'details', readOnlyPart: null, renaming: false, tab: null, side: null, task: null, taskDeck: null, newChat: null, exchange: null, menu: null, voice: null, palette: null, quote: null, paste: {}, pendingOpen: null, settings: null, memory: null, personalBoard: false, toast: null, signIn: null, renameAgent: null, unread: unreadStore.read(), reactions: reactionStore.read(), visits: {}, panelYield: false, leftDrawer: false, bootFailed: false, goalCompose: null, goalOpen: null, approvalOpen: null })
+
   // The left column's kept preference, and the frame geometry the layout rules
   // in frame-layout.js read: the window and the shell's collapsed track come from
   // installFrameWatch, the open column's width is the user's own.
@@ -215,27 +224,30 @@ const ui = createSource({ details: null, view: 'details', readOnlyPart: null, re
       if (nextComputer !== computerKey) { computerKey = nextComputer; computer.set(value.computerLive) }
     }
     if (value.memoryNews !== undefined) noteMemoryNews(value.memoryNews)
-    if (value.unchanged) {
-      const current = roster.getSnapshot()
-      // Connector, capability and phone states change without a new revision.
-      const live = {}
-      if (value.groupRowKeys !== undefined && JSON.stringify(value.groupRowKeys) !== JSON.stringify(current.groupRowKeys ?? {})) live.groupRowKeys = value.groupRowKeys
-      if (value.partsRunning !== undefined && JSON.stringify(value.partsRunning) !== JSON.stringify(current.partsRunning ?? {})) live.partsRunning = value.partsRunning
-      if (value.secretStore !== undefined && JSON.stringify(value.secretStore) !== JSON.stringify(current.secretStore ?? {})) live.secretStore = value.secretStore
-      if (value.secrets !== undefined && JSON.stringify(value.secrets) !== JSON.stringify(current.secrets ?? [])) live.secrets = value.secrets
-      if (value.connectors !== undefined && JSON.stringify(value.connectors) !== JSON.stringify(current.connectors ?? [])) live.connectors = value.connectors
-      if (value.capabilityStatuses !== undefined && JSON.stringify(value.capabilityStatuses) !== JSON.stringify(current.capabilityStatuses ?? {})) live.capabilityStatuses = value.capabilityStatuses
-      if (value.phone !== undefined && JSON.stringify(value.phone) !== JSON.stringify(current.phone ?? null)) live.phone = value.phone
-      if (value.learning !== undefined && JSON.stringify(value.learning) !== JSON.stringify(current.learning ?? {})) live.learning = value.learning
-      if (value.learningSettled !== undefined && JSON.stringify(value.learningSettled) !== JSON.stringify(current.learningSettled ?? {})) live.learningSettled = value.learningSettled
-      if (value.btwCards !== undefined && JSON.stringify(value.btwCards) !== JSON.stringify(current.btwCards ?? {})) live.btwCards = value.btwCards
-      if (value.sideChats !== undefined && JSON.stringify(value.sideChats) !== JSON.stringify(current.sideChats ?? {})) live.sideChats = value.sideChats
-      if (value.imStatus !== undefined && JSON.stringify(value.imStatus) !== JSON.stringify(current.imStatus ?? {})) live.imStatus = value.imStatus
-      if (value.imVia !== undefined && JSON.stringify(value.imVia) !== JSON.stringify(current.imVia ?? {})) live.imVia = value.imVia
-      // The read-only notice goes once this host takes the team over from a dsh that
-      // closed, without a reload: the window holds the answer's live fields until then.
-      if (value.readOnly !== undefined && (value.readOnly ?? null) !== (current.readOnly ?? null)) live.readOnly = value.readOnly
-      if (Object.keys(live).length > 0 && current.ready) roster.set({ ...current, ...live })
+
+    const current = roster.getSnapshot()
+    // Connector, capability, phone and MCP states change without a new revision.
+    const live = {}
+    if (value.groupRowKeys !== undefined && JSON.stringify(value.groupRowKeys) !== JSON.stringify(current.groupRowKeys ?? {})) live.groupRowKeys = value.groupRowKeys
+    if (value.partsRunning !== undefined && JSON.stringify(value.partsRunning) !== JSON.stringify(current.partsRunning ?? {})) live.partsRunning = value.partsRunning
+    if (value.secretStore !== undefined && JSON.stringify(value.secretStore) !== JSON.stringify(current.secretStore ?? {})) live.secretStore = value.secretStore
+    if (value.secrets !== undefined && JSON.stringify(value.secrets) !== JSON.stringify(current.secrets ?? [])) live.secrets = value.secrets
+    if (value.connectors !== undefined && JSON.stringify(value.connectors) !== JSON.stringify(current.connectors ?? [])) live.connectors = value.connectors
+    if (value.capabilityStatuses !== undefined && JSON.stringify(value.capabilityStatuses) !== JSON.stringify(current.capabilityStatuses ?? {})) live.capabilityStatuses = value.capabilityStatuses
+    if (value.phone !== undefined && JSON.stringify(value.phone) !== JSON.stringify(current.phone ?? null)) live.phone = value.phone
+    if (value.mcp !== undefined && JSON.stringify(value.mcp) !== JSON.stringify(current.mcp ?? null)) live.mcp = value.mcp
+    if (value.learning !== undefined && JSON.stringify(value.learning) !== JSON.stringify(current.learning ?? {})) live.learning = value.learning
+    if (value.learningSettled !== undefined && JSON.stringify(value.learningSettled) !== JSON.stringify(current.learningSettled ?? {})) live.learningSettled = value.learningSettled
+    if (value.btwCards !== undefined && JSON.stringify(value.btwCards) !== JSON.stringify(current.btwCards ?? {})) live.btwCards = value.btwCards
+    if (value.sideChats !== undefined && JSON.stringify(value.sideChats) !== JSON.stringify(current.sideChats ?? {})) live.sideChats = value.sideChats
+    if (value.imStatus !== undefined && JSON.stringify(value.imStatus) !== JSON.stringify(current.imStatus ?? {})) live.imStatus = value.imStatus
+    if (value.imVia !== undefined && JSON.stringify(value.imVia) !== JSON.stringify(current.imVia ?? {})) live.imVia = value.imVia
+    // The read-only notice goes once this host takes the team over from a dsh that
+    // closed, without a reload: the window holds the answer's live fields until then.
+    if (value.readOnly !== undefined && (value.readOnly ?? null) !== (current.readOnly ?? null)) live.readOnly = value.readOnly
+    if (Object.keys(live).length > 0 && current.ready) roster.set({ ...current, ...live })
+    if (value.unchanged || (value.revision === current.revision && value.modelsKey === current.modelsKey)) {
+
       return value.liveKey !== undefined && value.liveKey !== prevLiveKey
     }
     // On a browser with no visit record yet, everything already there counts as seen.
@@ -444,6 +456,7 @@ const ui = createSource({ details: null, view: 'details', readOnlyPart: null, re
       document.body.dataset.btMotion = motion
       document.body.dataset.btLayout = layout
       document.body.dataset.btEffects = effects
+      if (WINDOWS) document.body.dataset.btOs = 'windows'
       document.body.style.setProperty('--bt-msg-w', String(width / 100))
       document.body.style.setProperty('--bt-flat-w', String(flatWidth / 100))
       const next = `${id}|${accent ?? ''}|${motion}|${layout}|${effects}|${width}|${flatWidth}|${registry.getSnapshot()}`
@@ -474,6 +487,7 @@ const ui = createSource({ details: null, view: 'details', readOnlyPart: null, re
         delete document.body.dataset.btMotion
         delete document.body.dataset.btLayout
         delete document.body.dataset.btEffects
+        delete document.body.dataset.btOs
         document.body.style.removeProperty('--bt-msg-w')
         document.body.style.removeProperty('--bt-flat-w')
         style.remove()
@@ -629,7 +643,7 @@ refreshTeam: async () => { await pull(); return roster.getSnapshot() },
     // The conversation replacements withdraw for a plain Session; set the surface
     // before the navigation so the Bot skin never flashes.
     openAgentSession: (sessionId) => {
-      ui.set(state => ({ ...state, newChat: null, exchange: null, menu: null, palette: null, groupSearch: null, details: null, view: 'details', renaming: false, tab: null }))
+      ui.set(state => ({ ...state, newChat: null, exchange: null, menu: null, palette: null, groupSearch: null, details: null, view: 'details', renaming: false, tab: null, task: null, taskDeck: null }))
       setPlain(true)
       show(sessionId)
     },
@@ -730,7 +744,7 @@ refreshTeam: async () => { await pull(); return roster.getSnapshot() },
         return
       }
       if (mode === 'agent') {
-        ui.set(state => ({ ...state, details: null, view: 'details', settings: null, palette: null, groupSearch: null, newChat: null, menu: null, voice: null, exchange: null, memory: null, personalBoard: false, toast: null }))
+        ui.set(state => ({ ...state, details: null, view: 'details', task: null, taskDeck: null, settings: null, palette: null, groupSearch: null, newChat: null, menu: null, voice: null, exchange: null, memory: null, personalBoard: false, toast: null, goalOpen: null, goalCompose: null, approvalOpen: null }))
       }
       writeMode(mode)
       surface.set(state => ({ ...state, mode }))
@@ -812,13 +826,17 @@ refreshTeam: async () => { await pull(); return roster.getSnapshot() },
         await bridge.views.hold(botId, false)
         return result
       } : undefined,
-      // Cookie imports, only where the bridge offers them (the desktop app): a file or an
-      // installed browser's profile is previewed, then applied into the Bot's storage key.
+      // Cookie imports, only where the bridge offers them (the desktop app): an installed
+      // browser profile, a file, or pasted cookies/cURL is previewed, then applied into
+      // the Bot's storage key.
       browserImport: typeof bridge.importSources === 'function' ? {
         sources: () => bridge.importSources(),
+        probe: typeof bridge.importProbe === 'function' ? (source) => bridge.importProbe(source) : null,
         pick: () => bridge.importPick(),
-        live: (source, close) => bridge.importLive(source, close),
-        apply: (botId, pending) => bridge.importApply(`bot:${botId}`, pending),
+        paste: typeof bridge.importPaste === 'function' ? (text, defaultUrl) => bridge.importPaste(text, defaultUrl) : null,
+        launch: typeof bridge.importLaunch === 'function' ? (source) => bridge.importLaunch(source) : null,
+        live: (source, close, requestId) => bridge.importLive(source, close, requestId),
+        apply: (botId, pending, options) => bridge.importApply(`bot:${botId}`, pending, options),
         cancel: (pending) => bridge.importCancel(pending),
       } : null,
     })
@@ -997,6 +1015,17 @@ refreshTeam: async () => { await pull(); return roster.getSnapshot() },
     updateQueue: async (itemId, action) => (await ctx.sessions.binding(sessionId)?.session?.updateQueue(itemId, action)) ?? { ok: false },
     loadImage: (attachment) => ctx.uiConversation.imageUrl(sessionId, attachment),
   })
+  // A deleted Bot or group takes its kept draft with it.
+  ctx.effect(() => {
+    let chats = null
+    return roster.subscribe(() => {
+      const snapshot = roster.getSnapshot()
+      if (!snapshot.ready) return
+      const now = new Set([...snapshot.bots.map(bot => bot.id), ...snapshot.rooms.map(room => room.id)])
+      if (chats !== null) pruneDrafts([...chats].filter(id => !now.has(id)))
+      chats = now
+    })
+  }, 'ds-bot: drafts of removed chats')
   ctx.effect(() => noticeApprovals({
     work,
     roster,
@@ -1055,9 +1084,27 @@ refreshTeam: async () => { await pull(); return roster.getSnapshot() },
       actions.reportError(new Error(t('Couldn’t steer the queued messages. Try again.')), 'steer-queue')
     }
   }
+  // The shell's own draft intake, for files a chat's draft gets back (draft-keep.js).
+  actions.draftFiles = (ids) => {
+    const conversation = ctx.get('conversation')
+    if (ids.length === 0 || typeof conversation?.resolveDraftAttachments !== 'function') return []
+    return conversation.resolveDraftAttachments(ids).map(item => ({ kind: item.kind, file: item.file }))
+  }
+  actions.restoreDraftFiles = (sessionId, files) => {
+    const conversation = ctx.get('conversation')
+    if (typeof conversation?.createDrafts !== 'function') return []
+    return conversation.createDrafts(sessionId, files, true).map(item => item.id)
+  }
+  actions.releaseDraftFiles = (ids) => {
+    const conversation = ctx.get('conversation')
+    if (typeof conversation?.releaseDraftAttachment !== 'function') return
+    for (const id of ids) conversation.releaseDraftAttachment(id)
+  }
   // A terminal tab in DSH's right column, only where the terminal plugin
   // registered its type and the column face is there.
   actions.canOpenTerminal = () => ctx.get('sidebarRight') !== undefined && ctx.get('sidebarRightTabs')?.get('terminal') !== undefined
+  // The tabs of the terminals a shown Bot starts, as DSH's own header opens them.
+  actions.watchAgentTerminals = sessionId => watchAgentTerminals(ctx.slots, sessionId, error => actions.reportError(error, 'right-sidebar'))
   actions.newTerminal = () => {
     // The column takes the drawer's space: hand it over first.
     actions.closePanel()
@@ -1126,7 +1173,7 @@ refreshTeam: async () => { await pull(); return roster.getSnapshot() },
   const shadow = (name, options, component) => ctx.slots.inject(name, () => ctx.slots.register({
     name, ...options, ...(options.priority === undefined ? {} : { priority: freePriority(ctx.slots.entries(name), options) }),
   }, component))
-  const installHeader = () => ctx.slots.inject('conversation.session.header', () => installHeaderNavigation(ctx.slots, face, HeaderPill, BOT_PRIORITY))
+  const installHeader = () => ctx.slots.inject('conversation.session.header', () => installHeaderNavigation(ctx.slots, () => ({ ...face(), PendingLearning }), HeaderPill, BOT_PRIORITY))
 
   // The "@" menu's Bot group and the chats "+" references. The composer's controller
   // for a Session is the shell's own, so the chats open at its caret.
@@ -1192,7 +1239,7 @@ refreshTeam: async () => { await pull(); return roster.getSnapshot() },
   const SHELL_SHEETS = [
     [SHELL_CSS, 'shell'],
     [SIDEBAR_CSS, 'sidebar'],
-    [SECRET_CSS + CONNECTOR_CSS + CONNECTORS_PAGE_CSS, 'secrets'],
+    [SECRET_CSS + CONNECTOR_CSS + CONNECTORS_PAGE_CSS + PROVIDERS_CSS, 'secrets'],
     [LEARNING_CSS, 'learning'],
     [MODEL_CSS + FOLDER_CSS + BOT_SETTINGS_CSS + BOT_MODELS_CSS + AGENT_CARDS_CSS + GROUP_SETTINGS_CSS + AVATAR_LIBRARY_CSS, 'models'],
     [USAGE_CSS, 'usage'],
@@ -1206,6 +1253,7 @@ refreshTeam: async () => { await pull(); return roster.getSnapshot() },
     [IM_CSS, 'im'],
     [GOAL_CSS, 'goal'],
     [TASK_BOARD_CSS, 'task-board'],
+    [TASKS_CSS, 'tasks'],
     [USER_MESSAGE_CSS, 'user-messages'],
     [WIDGET_CSS, 'widgets'],
     [CHANGES_CSS, 'changes'],
@@ -1221,6 +1269,7 @@ refreshTeam: async () => { await pull(); return roster.getSnapshot() },
     const syncEffects = () => {
       const current = roster.getSnapshot()
       document.body.dataset.btEffects = effectsOf(current.ready ? current.prefs ?? {} : savedPrefs)
+      if (WINDOWS) document.body.dataset.btOs = 'windows'
     }
     syncEffects()
     const snapshot = roster.getSnapshot()
@@ -1234,6 +1283,7 @@ refreshTeam: async () => { await pull(); return roster.getSnapshot() },
     ]
     return () => {
       delete document.body.dataset.btEffects
+      delete document.body.dataset.btOs
       for (const off of offs) off()
     }
   }
@@ -1307,6 +1357,7 @@ refreshTeam: async () => { await pull(); return roster.getSnapshot() },
     () => shadow('conversation.composer.dock', { id: 'activity', order: 0, priority: BOT_PRIORITY }, Nothing),
     () => shadow('conversation.composer.dock', { id: 'usage', order: 1, priority: BOT_PRIORITY }, Nothing),
     () => shadow('conversation.composer.dock', { id: 'btw', order: 2, priority: BOT_PRIORITY, inject: face }, BtwDock),
+    () => shadow('conversation.input.left', { id: 'bot-draft', order: -120, inject: face }, DraftKeeper),
     () => shadow('conversation.input.left', { id: 'bot-paste', order: -110, inject: face }, PasteGuard),
     () => shadow('conversation.input.left', { id: 'bot-plus', order: -100, inject: face }, ComposerPlus),
     () => shadow('conversation.input.right', { id: 'bot-voice', order: 100, inject: face }, ComposerVoice),
@@ -1337,10 +1388,35 @@ refreshTeam: async () => { await pull(); return roster.getSnapshot() },
   ctx.effect(() => installCompiledStyles(COMPUTER_CSS, 'computer'), 'ds-bot: computer styles')
   shadow('sidebar.footer.action', { id: 'bot-return', order: -300, inject: face }, BotReturn)
 
+  ctx.effect(() => {
+    const forks = installAgentForks({
+      sessions: ctx.sessions,
+      ownerOf: id => roster.getSnapshot().agentOf[id],
+      hasAgent: id => roster.getSnapshot().agentsById[id] !== undefined,
+      pending: pendingAdopt,
+      ready: async () => { if (!roster.getSnapshot().ready) await pull() },
+      adopt: (agentId, sessionId) => call('agent-adopt', { agentId, sessionId }),
+      refresh: pull,
+      report: (error, source) => actions.reportError(error, source),
+      storage: globalThis.localStorage,
+    })
+    const reconcile = () => { void forks.reconcile().catch(error => actions.reportError(error, 'agent-fork-reconcile')) }
+    const offRoster = roster.subscribe(reconcile)
+    const offList = ctx.sessions.list.subscribe(reconcile)
+    const timer = setInterval(reconcile, 5000)
+    reconcile()
+    return () => {
+      offRoster()
+      offList()
+      clearInterval(timer)
+      return forks.dispose()
+    }
+  }, 'ds-bot: Agent forks')
+
   // The main view decides `plain`: a DSH Agent Session keeps the Bot shell but
-  // withdraws the conversation replacements, so the native dsh page shows. A jump
-  // this plugin did not start — the hero's workspace picker or a fork — opens an
-  // unowned Session; coming from a DSH Agent Session it is adopted into that Agent.
+  // withdraws the conversation replacements, so the native dsh page shows. The
+  // hero's workspace picker creates a blank Session, adopted into the same Agent;
+  // forks are captured at creation above, without depending on list metadata.
   ctx.effect(() => {
     let previous
     const sync = () => {
@@ -1362,18 +1438,13 @@ refreshTeam: async () => { await pull(); return roster.getSnapshot() },
       if (agentId === undefined) return
       const snapshot = roster.getSnapshot()
       if (snapshot.byId[main] !== undefined || snapshot.roomsById[main] !== undefined || agentOfSession(main) !== undefined) return
-      // Only a Session this jump created joins the Agent: a blank one from the
-      // workspace picker, or a fork of a Session the same Agent owns. An existing
-      // Session the user opened from the sidebar keeps its team tools and stays out.
+      // Only a blank Session from the workspace picker joins here. Existing
+      // Sessions opened from the native sidebar keep their tools and stay out.
       const row = list.byId[main]
       // A subagent child reports the Agent Session as its parent, but adopting it
       // would steal it from subagent routing — the Host refuses anyway, so skip.
       if (row?.origin === 'subagent') return
-      // The client list maps the fork's parent to `parentId`; the raw field is
-      // the fallback for shapes that skip the mapping.
-      const parent = row?.parentId ?? row?.parentSessionId
-      const forkedFromAgent = parent !== undefined && agentOfSession(parent) === agentId
-      if (row?.blank !== true && !forkedFromAgent) return
+      if (row?.blank !== true) return
       pendingAdopt.set(main, agentId)
       setPlain(true)
       void call('agent-adopt', { agentId, sessionId: main }).then(() => pull()).catch((error) => {

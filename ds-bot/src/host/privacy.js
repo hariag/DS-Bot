@@ -2,14 +2,15 @@
 // what it sends out waits for the user. DSH does not fence reads, so this closes the
 // tools DS Bot owns and checks the paths that the file tools and the shell are given;
 // a shell can still reach any file the account can (see docs/plans).
-import { isAbsolute, join, resolve } from 'node:path'
-import { homedir } from 'node:os'
 import { lstatSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { manualDirectory } from './manual-skills.js'
 import { within } from './folders.js'
 import { unquote } from './text.js'
 import { openSessions } from './threads.js'
 
-const FILE_TOOLS = { read: 'file_path', write: 'file_path', edit: 'file_path', read_image: 'file_path', str_replace_editor: 'path' }
+const FILE_TOOLS = { read: 'file_path', write: 'file_path', edit: 'file_path', read_image: 'file_path', str_replace_editor: 'path', read_document: 'path' }
 const WRITE_TOOLS = ['write', 'edit', 'str_replace_editor']
 const SEARCH_TOOLS = ['glob', 'grep']
 const SHELL_TOOLS = ['bash', 'pwsh', 'terminal_open', 'terminal_send']
@@ -25,9 +26,6 @@ const asShell = (path) => {
   const drive = /^([a-z]):\//i.exec(slashed)
   return drive ? [slashed, `/${drive[1]}${slashed.slice(2)}`] : [slashed]
 }
-
-// This is a conservative inspection of explicit shell words, not a shell parser
-// or an OS sandbox. Preserve quoted path fragments so aliases can be resolved.
 
 // Here-document bodies are data, not commands. The word-level checks below (a
 // dynamic `cd`, an ancestor path) must not run on them: a script that merely
@@ -86,7 +84,6 @@ export function install(rt) {
   // parent chain, however many subagents sit between them.
   const callerOf = async (exec) => {
     const own = rt.selfOf(exec.agent?.id) ?? rt.selfOf(exec.agent?.session?.id)
-      ?? rt.userRedoOwner?.(exec.agent?.id)?.id ?? rt.userRedoOwner?.(exec.agent?.session?.id)?.id
     if (own !== undefined) return own
     let parent = exec.agent?.session?.header?.parentSession
     const seen = new Set()
@@ -123,6 +120,7 @@ export function install(rt) {
     join(rt.home, 'learning', 'state.json'),
     join(rt.home, 'ocr.json'),
     join(rt.home, 'secrets.json'),
+    join(rt.home, 'task-reports'),
     join(rt.home, 'memory', 'journal.jsonl'),
     join(rt.home, 'memory', 'journal.torn'),
     join(rt.home, 'memory', 'pending.json'),
@@ -161,7 +159,7 @@ export function install(rt) {
       // A walk of the archive stays closed while a private Bot's memory is on its way
       // there: until the path is known, the walk cannot be told which folder to skip.
       const moving = search && bots.some(bot => bot.archiving === true)
-      const open = [rt.workDirOf({ botId: self }), teamFolder(), teamMemory, moving ? undefined : memoryArchive, ...ownRegions].filter(Boolean)
+      const open = [rt.workDirOf({ botId: self }), teamFolder(), teamMemory, moving ? undefined : memoryArchive, dirname(manualDirectory()), ...ownRegions].filter(Boolean)
       const folders = (await Promise.all(open.map(spellings))).flat()
       const roots = (await Promise.all(dataRoots().map(spellings))).flat()
       for (const key of keys) {
@@ -252,9 +250,9 @@ export function install(rt) {
         if (bot) throw closed(bot, 'settings')
         return
       }
-      case 'recall':
-      case 'remember':
-      case 'forget': {
+      case 'bot_recall':
+      case 'bot_remember':
+      case 'bot_forget': {
         const bot = target(args.scope)
         if (bot) throw closed(bot, 'memory')
         return
@@ -484,6 +482,7 @@ export function install(rt) {
   // Before the tools' own hooks, so that a closed call never reaches a card they show.
   ctx.on('tools/execute', async (exec, next) => {
     const self = await callerOf(exec)
+    // The board belongs to the instance user: only a Bot's call is fenced.
     if (self !== undefined) await guardBoardFiles(exec)
     if (protectedBots().length === 0) return next()
     await guardTeam(exec, self)

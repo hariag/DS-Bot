@@ -1,12 +1,11 @@
 // Memory as text: the entry and file format (Agent Memory Repo), and the checks an
 // entry passes. Nothing here touches the disk.
 import { createHash, randomBytes } from 'node:crypto'
-import { readChanges } from './json-reply.mjs'
 
 // Sizes, in characters of entry text: metadata does not count. Each MEMORY.md rides in
 // every request of a conversation, so its size is what a scope may always have in view;
 // the user can change these three (prefs.memoryLimits). A topic is read whole in one
-// recall. An entry holds one fact.
+// bot_recall. An entry holds one fact.
 export const MEMORY_LIMITS = { entry: 300, group: 12_000, bot: 8_000, team: 4_000, topic: 16_000, topics: 40 }
 // What one MEMORY.md may take of the model's window, however large the size is set.
 export const WINDOW_SHARE = 0.02
@@ -66,7 +65,7 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/
 export const cleanDay = raw => (DAY.test(String(raw ?? '').trim()) ? String(raw).trim() : undefined)
 export const isExpired = (entry, today) => DAY.test(String(entry.meta?.until ?? '')) && entry.meta.until < today
 
-// An entry as the prompt shows it: its id and the day it was saved. recall shows the rest.
+// An entry as the prompt shows it: its id and the day it was saved. bot_recall shows the rest.
 export function promptEntry(entry) {
   const day = /^\d{4}-(\d{2}-\d{2})$/.exec(String(entry.meta?.added ?? ''))?.[1]
   return `- ${entry.text} [${[entryId(entry), day].filter(Boolean).join(' · ')}]`
@@ -274,11 +273,19 @@ export function reviewEntries(home, team, budget = REVIEW_MEMORY_MAX, about = ''
 // are saved. Anything else is no answer: the review says so and moves on — the
 // same lines are not read again.
 export function parseReview(text) {
-  const value = readChanges(text)
-  if (value === undefined) return undefined
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start === -1 || end <= start) return undefined
+  let value
+  try {
+    value = JSON.parse(text.slice(start, end + 1))
+  } catch {
+    return undefined
+  }
+  if (value === null || typeof value !== 'object' || !Array.isArray(value.changes)) return undefined
   const changes = []
   const leftOut = []
-  for (const change of value) (wellFormed(change) ? changes : leftOut).push(change)
+  for (const change of value.changes) (wellFormed(change) ? changes : leftOut).push(change)
   return { changes, leftOut }
 }
 const wellFormed = (change) => {

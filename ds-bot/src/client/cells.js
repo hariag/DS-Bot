@@ -3,7 +3,7 @@ import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useR
 import { createPortal } from 'react-dom'
 import { MarkdownText, writeClipboard } from './dsh-primitives.js'
 import { inkText } from './inks.js'
-import { linkMentions, mentionTarget, dayLabel, contentText, stripHeader, stripToolCallTags, isHiddenTurn, isRelayContext, relaysBefore, relayPart, commRunOf, toolName, toolArgs, reminderPrompts, elapsedLabel, clockLabel, messageClock } from './text.js'
+import { linkMentions, normalizeFileLinks, mentionTarget, dayLabel, contentText, stripHeader, stripToolCallTags, isHiddenTurn, isRelayContext, relaysBefore, relayPart, commRunOf, toolName, toolArgs, reminderPrompts, elapsedLabel, clockLabel, messageClock } from './text.js'
 import { SmileIcon, ReplyIcon, DotsIcon, CheckIcon, DownloadIcon, CopyIcon, GoalIcon, MemoryIcon } from './icons.js'
 import { ChangesCard } from './changes-card.js'
 import { groupReads } from './group-reads.js'
@@ -21,7 +21,7 @@ import { call } from './api.js'
 import { failureLabel } from './diagnostics.js'
 import { turnReasoning, thinkingStep, opensReply, stepActivity } from './turn-reasoning.js'
 import { announcesWork } from '../shared/work-claim.js'
-import { parseReplies, relayRange, stackReplies } from '../shared/group-replies.js'
+import { compressedRelayPreview, parseReplies, relayRange, stackReplies } from '../shared/group-replies.js'
 import { FOLD_AT, FOLD_HUGE, stripLongNote, useFold } from './fold.js'
 import { ReplyGuide } from './reading.js'
 import { noHover, useViewport, viewBottom } from './motion.js'
@@ -100,7 +100,7 @@ const foldArea = (body, code, codeHead, actions) => (code === undefined ? body
 function Bubble({ text, index, roster, selfId, actions, sessionId, msgKey, mentions, fold, picked, live, lead, whole, textInteractionSource }) {
   const { shown, folded, control, code, codeHead } = useFold(text, { limit: fold, whole, live })
   const key = msgKey ? `${msgKey}:${index}` : undefined
-  const body = shown === '' ? null : h(MarkdownText, { text: linkMentions(shown, roster.bots, selfId), streaming: live, labels: mdLabels(), variant: 'compact', fileMentions: mentions })
+  const body = shown === '' ? null : h(MarkdownText, { text: linkMentions(normalizeFileLinks(shown), roster.bots, selfId), streaming: live, labels: mdLabels(), variant: 'compact', fileMentions: mentions })
   const row = useRef(null)
   // Touch has no hover: a tap on the bubble opens its tools, a tap elsewhere
   // closes them. Interactive targets keep their own meaning.
@@ -511,7 +511,7 @@ function MemoryEvent({ sessionId, scope, tool, result, failed, code, roster, act
   // said stays in the tool record.
   const reason = memoryFailure(code)
   const label = failed
-    ? (tool === 'forget' ? t("Couldn't remove from memory") : t("Couldn't save to memory"))
+    ? ((tool === 'forget' || tool === 'bot_forget') ? t("Couldn't remove from memory") : t("Couldn't save to memory"))
     : t('Memory not changed')
   return h('div', { className: 'bt-event bt-event-error', role: 'status', title: code },
     h('span', null, h(MemoryIcon), label),
@@ -670,10 +670,10 @@ function chatRow(row, key, { sessionId, selfId, roster, actions, useUi, onBtwDel
     case 'btw': return h(BtwCardView, { key, card: row.card, sessionId, actions, onDeleted: onBtwDelete })
     case 'post': {
       // A member's message in a group's earlier part, as the live row shows it.
-      const poster = senderOf(roster, { senderSessionId: row.botId, senderName: row.name }, row.seq)
+      const poster = roster.byId[row.botId] ?? { id: row.botId, name: row.name ?? t('a Bot'), color: row.color ?? 'gray' }
       return h(GroupMessage, {
         key, bot: poster, text: row.file ? stripLongNote(row.text) : row.text, texts: row.texts, room: roster.roomsById[sessionId], sessionId, roster, actions,
-        msgKey: `${sessionId}:post:${row.seq ?? row.time}`, time: row.time, duration: row.duration, claims: row.claims, changes: row.changes,
+        msgKey: `${sessionId}:post:${row.seq ?? row.time}`, time: row.time, duration: row.duration, claims: row.claims, changes: row.changes, useUi,
         whole: row.file ? { length: row.length, load: () => actions.fileText(row.file) } : undefined,
       })
     }
@@ -756,7 +756,8 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
       // A part opens with its handoff package, so the earlier parts go right above it.
       if (source.handoff === true) return h(EarlierParts, { sessionId, roster, actions })
       // Group turns belong to the group chat; the member's own chat stays one-to-one.
-      if (source.role === 'kickoff' || source.role === 'room' || source.role === 'goal') return null
+      // Background task handoff notices are model-only context injected before the user's message.
+      if (source.role === 'kickoff' || source.role === 'room' || source.role === 'goal' || source.role === 'task-handoff') return null
       // The secret card itself shows what the user did; the note to the Bot stays out.
       if (source.role === 'secret' || deferred) return null
       // A profile notice is the user's edit landing in the Bot's chat, not a peer
@@ -994,8 +995,11 @@ function toolActivity(name, arg, findBot, self) {
     case 'list_bots': return { label: t('Checking the team'), state: 'searching' }
     case 'read_group_chat': return { label: t('Reading {name}', { name: arg('group') ?? t('a group chat') }), state: 'searching' }
     case 'read_own_chat': return { label: t('Looking back through the chat'), state: 'searching' }
+    case 'bot_remember':
     case 'remember': return { label: t('Saving to memory'), state: 'working' }
+    case 'bot_forget':
     case 'forget': return { label: t('Updating memory'), state: 'working' }
+    case 'bot_recall':
     case 'recall': return { label: t('Checking memory'), state: 'searching' }
     default:
       if (GROUP_PHRASES[name]) return { label: t(GROUP_PHRASES[name]), state: 'sending' }
@@ -1083,6 +1087,9 @@ function RelayEvent({ reply, bot, sessionId, actions }) {
   if (reply.kind === 'folder') {
     return h('div', { className: 'bt-event' }, reply.text)
   }
+  if (reply.kind === 'schedule') {
+    return h('div', { className: 'bt-event' }, reply.text ? t('Scheduled task: {text}', { text: reply.text.slice(0, 80) }) : t('Routine started'))
+  }
   if (reply.kind === 'stopped') {
     return h('div', { className: 'bt-event' }, t("You stopped {name}'s work", { name: bot.name }))
   }
@@ -1127,13 +1134,22 @@ function GroupReplies({ sessionId, turn, callId, done, content, roster, actions,
   }, [done, roomId, callId, reads, actions, cursor])
   const resultText = done ? contentText(content) : ''
   const range = done ? relayRange(resultText) : undefined
-  const rowsKey = range && JSON.stringify(['rows', roomId, range.from, range.to, range.anchor])
-  const cacheKey = range && JSON.stringify([epoch, rowsKey])
-  const [snapshot, setSnapshot] = useState(null)
-  const view = (snapshot?.key === cacheKey ? snapshot?.view : null) ?? reads.closed(cacheKey)
-  // Once another anchor closes a cell it does not depend on later appends.
-  // A rollback, replaced book or new host gives even closed cells a new epoch.
-  const refresh = view?.open === false ? null : hasCursor ? cursor : view?.open && !view.active ? roster.revision : undefined
+
+  const preview = compressedRelayPreview(resultText)
+  const [recovered, setRecovered] = useState(null)
+  useEffect(() => {
+    if (preview === undefined) return undefined
+    let stop = false
+    void actions.groupRelayReplies(sessionId, preview).then(replies => {
+      if (!stop) setRecovered({ sessionId, preview, replies })
+    })
+    return () => { stop = true }
+  }, [sessionId, preview])
+  const rowsKey = range === undefined ? undefined : `${sessionId}:${range.from}:${range.to ?? ''}:${range.anchor ?? ''}`
+  const [view, setView] = useState(() => (rowsKey === undefined ? null : settledRows.get(rowsKey) ?? null))
+  // An open cell that is quiet is read again when the team changes, not on a clock.
+  const quietKey = view?.open === true && view.active !== true ? roster.revision : undefined
+
   useEffect(() => {
     if (!range || view?.open === false) return undefined
     let stop = false
@@ -1144,9 +1160,9 @@ function GroupReplies({ sessionId, turn, callId, done, content, roster, actions,
       const next = await reads.read(rowsKey, cursor, () => actions.groupRows(roomId, range.from, range.to, range.anchor))
       if (stop) return
       if (Array.isArray(next?.rows)) {
-        if (!next.open) reads.settle(cacheKey, next)
+        if (!next.open) reads.settle(rowsKey, next)
         const key = hasCursor ? cursor : JSON.stringify(next)
-        if (key !== seen) { seen = key; setSnapshot({ key: cacheKey, view: next }) }
+        if (key !== seen) { seen = key; setView(next) }
         if (hasCursor || !next.open || !next.active) return
         failures = 0
       } else failures++
@@ -1154,15 +1170,19 @@ function GroupReplies({ sessionId, turn, callId, done, content, roster, actions,
     }
     void tick()
     return () => { stop = true; clearTimeout(timer) }
-  }, [reads, actions, cacheKey, refresh])
+  }, [reads, actions, rowsKey, quietKey])
   let replies = live.replies
   let broken = false
   if (range !== undefined) {
     replies = view?.rows ?? live.replies
   } else if (done) {
-    const parsed = parseReplies(resultText)
-    replies = parsed.replies.length ? parsed.replies : live.replies
-    broken = parsed.broken
+    const restored = recovered?.sessionId === sessionId && recovered.preview === preview ? recovered.replies : null
+    if (Array.isArray(restored)) replies = restored
+    else {
+      const parsed = parseReplies(resultText)
+      replies = parsed.replies.length ? parsed.replies : live.replies
+      broken = parsed.broken
+    }
   }
   // Every member answering in the round is typing; what each is doing comes as text,
   // so the cell redraws only when that changes.
@@ -1209,7 +1229,7 @@ function GroupReplies({ sessionId, turn, callId, done, content, roster, actions,
 // The calls ToolCell draws. A PTC program (`run_code`) dispatches the real tools as
 // its sub-calls, so a call draws by its own name wherever it sits in the tree.
 const isComputerCall = name => name === 'cua' || name?.startsWith('cua_driver_native__') === true
-const DRAWN = new Set(['message_bot', 'stop_bot', 'create_bot', 'update_bot', 'group_relay', 'create_group', 'update_group', 'delete_group', 'post_to_group', 'ask_user', 'request_secret', 'request_connector', 'mail_send', 'ask_user_question', 'show_view', 'browser_handoff', 'read_group_chat', 'remember', 'forget'])
+const DRAWN = new Set(['message_bot', 'stop_bot', 'create_bot', 'update_bot', 'group_relay', 'create_group', 'update_group', 'delete_group', 'post_to_group', 'ask_user', 'request_secret', 'request_connector', 'mail_send', 'ask_user_question', 'show_view', 'browser_handoff', 'read_group_chat', 'bot_remember', 'bot_forget', 'remember', 'forget'])
 // Calls whose card a dock above the composer carries when the call is not drawn.
 const CARDS = new Set(['ask_user', 'request_secret', 'request_connector', 'mail_send', 'show_view', 'browser_handoff', 'computer_handoff'])
 
@@ -1314,7 +1334,9 @@ function renderCall(call, { sessionId, turn, roster, actions, useUi, useWork, fi
       const room = roster.rooms.find(entry => entry.name === arg('group'))
       return room ? h(GroupEvent, { prefix: t('Read'), room, roster, actions }) : h(CellEmpty)
     }
+    case 'bot_remember':
     case 'remember':
+    case 'bot_forget':
     case 'forget':
       return done ? h(MemoryEvent, { sessionId, scope: arg('scope'), tool, result: contentText(call.content), failed: call.isError === true, code: call.error?.code, roster, actions, findBot }) : h(CellEmpty)
     default:

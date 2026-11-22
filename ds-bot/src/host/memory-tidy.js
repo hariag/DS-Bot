@@ -8,7 +8,6 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { HEADING, MAIN, addLink, cleanEntry, cleanTopic, entryId, formatEntry, insertEntry, isExpired, isPinned, joinLines, parseMemory, removeLink } from './memory-entries.js'
 import { tidyRequest, tidySystem } from './memory-copy.js'
-import { readChanges } from './json-reply.mjs'
 
 const EVERY_MS = 30 * 60_000
 // Below this there is nothing a tidy would be worth a model call for.
@@ -19,7 +18,15 @@ const NOTE_MAX = 120
 const ITEMS_SHOWN = 20
 
 function parseTidy(text) {
-  return readChanges(text)
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start === -1 || end <= start) return undefined
+  try {
+    const value = JSON.parse(text.slice(start, end + 1))
+    return Array.isArray(value?.changes) ? value.changes : undefined
+  } catch {
+    return undefined
+  }
 }
 
 export function installTidy(rt, memory) {
@@ -61,16 +68,8 @@ export function installTidy(rt, memory) {
     let changes = []
     if (open.length >= ENTRIES_MIN) {
       const max = Math.max(1, Math.floor(offered.length / SHARE_MAX))
-      const system = tidySystem({ who: job.who, max })
-      const request = tidyRequest({ entries: open, language: languageNow() })
-      const shot = { sessionId: job.scope.kind === 'bot' ? rt.chatOf(job.keeper.id) : job.scope.kind === 'group' ? job.scope.roomId : rt.chatOf(job.keeper.id), kind: 'memory' }
-      let reply = await botShot(job.keeper, system, request, shot)
-      let parsed = parseTidy(reply)
-      // One corrective retry when the model explained instead of answering.
-      if (parsed === undefined) {
-        reply = await botShot(job.keeper, system, request + '\n\nYour previous reply had no JSON list. Reply now with the JSON object only, and no other text.', shot)
-        parsed = parseTidy(reply)
-      }
+      const reply = await botShot(job.keeper, tidySystem({ who: job.who, max }), tidyRequest({ entries: open, language: languageNow() }), { sessionId: job.scope.kind === 'bot' ? rt.chatOf(job.keeper.id) : job.scope.kind === 'group' ? job.scope.roomId : rt.chatOf(job.keeper.id), kind: 'memory' })
+      const parsed = parseTidy(reply)
       if (parsed === undefined) rt.warn('ds-bot: the memory tidy of %s got no list of changes from the model', key)
       else changes = parsed
     }

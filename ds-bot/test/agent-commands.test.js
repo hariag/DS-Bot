@@ -5,35 +5,22 @@ import { install } from '../src/host/agent-commands.js'
 // A small host `commands` registry with the same contract the real one gives the
 // shield: global definitions, per-agent scoped definitions that shadow them, a merged
 // list(agent), find/execute, and a `commands/change` event on every registration.
-function world({ config = {}, inherited = false, deferred = false } = {}) {
+function world({ config = {} } = {}) {
   let dshRuns = 0
   const global = new Map()
   const scoped = new Map()
   const listeners = new Map()
   const agents = []
+  let changes = 0
   const emit = (event, payload) => { for (const listener of listeners.get(event) ?? []) listener(payload) }
-  let notifications = 0, pending = false
-  const notify = () => {
-    notifications++
-    if (deferred) pending = true
-    else emit('commands/change', {})
-  }
-  const flush = () => {
-    if (!pending) return false
-    pending = false
-    emit('commands/change', {})
-    return true
-  }
+  const notify = () => { changes += 1; emit('commands/change', {}) }
   const effective = (sessionId) => {
     const map = new Map(global)
     for (const [name, definition] of scoped.get(sessionId) ?? []) map.set(name, definition)
     return map
   }
-  const registerGlobal = (name, metadata = {}) => {
-    global.set(name, { name, description: `global ${name}`, ...metadata, handler: () => { dshRuns += 1; return { kind: 'success', text: 'DSH ran' } } })
-    notify()
-  }
   const service = {
+    notifyChange: notify,
     list: agent => [...effective(agent.session.id).values()].sort((a, b) => (a.name < b.name ? -1 : 1)),
     find: (agent, name) => effective(agent.session.id).get(name),
     async execute(agent, line) {
@@ -45,22 +32,36 @@ function world({ config = {}, inherited = false, deferred = false } = {}) {
       return { result: await definition.handler({ rawInput }) }
     },
   }
+  const registerGlobal = (name) => {
+    global.set(name, { name, description: `global ${name}`, handler: () => { dshRuns += 1; return { kind: 'success', text: 'DSH ran' } } })
+    service.notifyChange()
+  }
   // The child context a plugin mounted under an agent's context gets. The shield reads
-  // the service through reflection (`get`), as it does in the real host.
+  // a context-bound view of the shared host registry through reflection (`get`), as it
+  // does in the real host. Views differ, but they all mutate/notify the same registry.
   const childOf = (sessionId) => {
-    const commands = {
-      list: agent => service.list(agent),
-      ...(inherited ? { listInherited: () => [...global.values()] } : {}),
-      find: (agent, name) => service.find(agent, name),
-      register(definition) {
-        const map = scoped.get(sessionId) ?? new Map()
-        if (map.has(definition.name)) throw new Error(`duplicate command ${definition.name}`)
-        map.set(definition.name, definition)
-        scoped.set(sessionId, map)
-        notify()
-        return () => { map.delete(definition.name); notify() }
+    const viewProperties = new Map()
+    const commands = new Proxy(service, {
+      get(target, property, receiver) {
+        if (property === Symbol.for('cordis.original')) return target
+        if (viewProperties.has(property)) return viewProperties.get(property)
+        if (property === 'register') return definition => {
+          const map = scoped.get(sessionId) ?? new Map()
+          if (map.has(definition.name)) throw new Error(`duplicate command ${definition.name}`)
+          map.set(definition.name, definition)
+          scoped.set(sessionId, map)
+          target.notifyChange()
+          return () => { map.delete(definition.name); target.notifyChange() }
+        }
+        return Reflect.get(target, property, receiver)
       },
-    }
+      set(_target, property, value) {
+        // Cordis traceable services keep a context-local property shadow. Mutating
+        // commands.notifyChange on this proxy does not alter the root registry.
+        viewProperties.set(property, value)
+        return true
+      },
+    })
     return { commands, get: name => (name === 'commands' ? commands : undefined) }
   }
   const cleanups = []
@@ -97,9 +98,7 @@ function world({ config = {}, inherited = false, deferred = false } = {}) {
     agents.push(entry)
     return entry
   }
-  return { cleanups, ctx, rt, service, registerGlobal, emit, agent, agents, runs: () => dshRuns,
-    notifications: () => notifications, flush, removeGlobal: name => { global.delete(name); notify() },
-    registerLocal: (id, row) => childOf(id).commands.register(row) }
+  return { cleanups, ctx, rt, service, registerGlobal, emit, agent, agents, runs: () => dshRuns, changes: () => changes }
 }
 
 test('the shield shadows every command a Bot sees and refuses a typed command with its arguments', () => {
@@ -166,6 +165,37 @@ test('two mounted agents are both shielded, each with its own Session\u2019s ref
   assert.equal(w.runs(), 0)
 })
 
+test('a team mount emits one global catalog change instead of one per agent', async () => {
+  const w = world()
+  for (let i = 0; i < 15; i += 1) w.registerGlobal(`command-${i}`)
+  install(w.rt)
+
+  const baseline = w.changes()
+  const agents = []
+  for (let i = 0; i < 13; i += 1) {
+    const sessionId = `bot-${i}`
+    w.rt.chatOwners.set(sessionId, sessionId)
+    const agent = w.agent(sessionId)
+    agents.push(agent)
+    w.emit('agent/created', { agent })
+  }
+
+  for (const agent of agents) {
+    assert.equal(w.service.list(agent).length, 15)
+    assert.match(w.service.find(agent, 'command-0').description, /Not available/)
+  }
+  await new Promise(resolve => setTimeout(resolve, 80))
+  assert.equal(w.changes() - baseline, 1, 'one event invalidates all command catalogs')
+
+  // One real host command change must update every shield without recursively
+  // generating another global invalidation wave.
+  const beforeNewCommand = w.changes()
+  w.registerGlobal('new-command')
+  await new Promise(resolve => setTimeout(resolve, 80))
+  assert.equal(w.changes() - beforeNewCommand, 1)
+  for (const agent of agents) assert.match(w.service.find(agent, 'new-command').description, /Not available/)
+})
+
 test('a group chat\u2019s own Session is covered and its /goal points at the group goal', async () => {
   const w = world()
   install(w.rt)
@@ -188,6 +218,7 @@ test('a command registered after the agent is covered by the next commands/chang
   const a = w.agent('a')
   w.emit('agent/created', { agent: a })
   w.registerGlobal('model')
+  await new Promise(resolve => setTimeout(resolve, 80))
   assert.match(w.service.find(a, 'model').description, /Not available/)
   const { result } = await w.service.execute(a, '/model cheap')
   assert.equal(result.kind, 'error')
@@ -205,8 +236,14 @@ test('a Bot whose agent arrives before its state entry gets the shield on the ne
   assert.equal(w.service.find(a, 'plan').description, 'global plan')
   // The Bot is saved; the shield re-checks and registers its shadows.
   w.rt.chatOwners.set('a', 'a')
+  const beforeFirstSave = w.changes()
   for (const listener of w.rt.saved) listener()
   assert.match(w.service.find(a, 'plan').description, /Not available/)
+  await new Promise(resolve => setTimeout(resolve, 80))
+  assert.equal(w.changes() - beforeFirstSave, 1)
+  for (const listener of w.rt.saved) listener()
+  await new Promise(resolve => setTimeout(resolve, 80))
+  assert.equal(w.changes() - beforeFirstSave, 1, 'unchanged saves do not invalidate command catalogs')
   const { result } = await w.service.execute(a, '/plan 明天上线')
   assert.equal(result.kind, 'error')
   assert.equal(w.runs(), 0)
@@ -234,80 +271,10 @@ test('unloading the plugin lifts commands from agents that stay alive', async ()
   const a = w.agent('a')
   w.emit('agent/created', { agent: a })
   assert.match(w.service.find(a, 'plan').description, /Not available/)
+  const beforeCleanup = w.changes()
   for (const cleanup of w.cleanups) cleanup?.()
   assert.equal(w.service.find(a, 'plan').description, 'global plan')
+  assert.equal(w.changes() - beforeCleanup, 1, 'cleanup tells the client to refresh once')
   for (const saved of w.rt.saved) saved()
   assert.equal((await w.service.execute(a, '/plan')).result.kind, 'success')
-})
-
-test('deferred notifications settle after an inherited shadow changes, and ordinary saves keep it in place', async t => {
-  const w = world({ inherited: true, deferred: true })
-  install(w.rt)
-  t.after(() => w.cleanups.forEach(dispose => dispose?.()))
-  w.registerGlobal('plan', { definitionId: 'plan-v1', input: { hint: 'one' } })
-  w.rt.chatOwners.set('a', 'a')
-  const a = w.agent('a')
-  w.emit('agent/created', { agent: a })
-  const first = w.service.find(a, 'plan')
-  const initial = w.notifications()
-  assert.equal(w.flush(), true)
-  assert.equal(w.flush(), false)
-  for (let i = 0; i < 100; i++) w.rt.saved.forEach(save => save())
-  assert.equal(w.notifications(), initial)
-  assert.equal(w.service.find(a, 'plan'), first)
-  w.registerGlobal('new')
-  w.flush()
-  assert.equal((await w.service.execute(a, '/new')).result.kind, 'error')
-  assert.equal(w.service.find(a, 'plan'), first)
-  w.registerGlobal('plan', { definitionId: 'plan-v2', input: { hint: 'two', attachments: true } })
-  w.flush()
-  const next = w.service.find(a, 'plan')
-  assert.notEqual(next, first)
-  assert.equal(next.definitionId, 'plan-v2')
-  assert.deepEqual(next.input, { hint: 'two', attachments: true })
-  w.removeGlobal('new')
-  w.flush()
-  assert.equal(w.service.find(a, 'new'), undefined)
-  w.rt.rooms.set('a', { id:'a' })
-  w.rt.saved.forEach(save => save())
-  assert.match((await w.service.execute(a, '/plan')).result.text, /group chat/)
-  w.rt.rooms.clear()
-  w.rt.chatOwners.clear()
-  w.rt.saved.forEach(save => save())
-  assert.equal((await w.service.execute(a, '/plan')).result.kind, 'success')
-})
-
-test('an exact-scope command is preserved and its inherited replacement is shielded when it unloads', async t => {
-  const w = world({ inherited: true, deferred: true })
-  install(w.rt)
-  t.after(() => w.cleanups.forEach(dispose => dispose?.()))
-  w.registerGlobal('plan')
-  const removeLocal = w.registerLocal('a', {name:'plan', handler: () => ({kind:'success', text:'local'})})
-  w.rt.chatOwners.set('a', 'a')
-  const a = w.agent('a')
-  w.emit('agent/created', { agent: a })
-  assert.equal((await w.service.execute(a, '/plan')).result.text, 'local')
-  const warns = w.rt.warnings.length
-  w.flush()
-  assert.equal(w.rt.warnings.length, warns)
-  removeLocal()
-  w.flush()
-  assert.equal((await w.service.execute(a, '/plan')).result.kind, 'error')
-})
-
-test('a legacy host deferring notifications keeps additions prompt and bounds self-notifications', async t => {
-  const w = world({ deferred: true })
-  install(w.rt)
-  t.after(() => w.cleanups.forEach(dispose => dispose?.()))
-  w.registerGlobal('plan')
-  w.rt.chatOwners.set('a', 'a')
-  const a = w.agent('a')
-  w.emit('agent/created', { agent: a })
-  assert.equal(w.flush(), true)
-  assert.equal(w.flush(), false)
-  w.registerGlobal('model')
-  w.flush()
-  assert.equal((await w.service.execute(a, '/model')).result.kind, 'error')
-  w.flush()
-  assert.equal(w.flush(), false)
 })

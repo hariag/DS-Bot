@@ -11,32 +11,58 @@ const batch = entries => ({id:'batch',source:{kind:'schedule'},content:[{type:'t
 const context = {id:'ctx',source:{kind:'runtime-context',form:'snapshot'}}
 
 function fixture() {
-  const room={id:'room',admin:'pm',sessions:{pm:'pm-in-room'}},state={busy:false,result:'admitted'}
-  const hooks=new Map(),calls=[],native=[],delivered=[]
-  const agent={id:'root',session:{id:'root'},followup:m=>native.push(m),whenIdle:()=>Promise.resolve(1)}
-  const rt={ctx:{on:(name,fn)=>hooks.set(name,fn)},load:async()=>{},roomOf:id=>['root','room'].includes(id)?room:undefined,
-    sessionOfRoom:()=>agent.id,roomBusyForPatrol:()=>state.busy,isManagedRoomScheduleId:id=>id==='managed',
-    managedRoomSchedule:(id,sid)=>id==='managed'&&sid==='root'?{roomId:room.id,adminId:room.admin,prompt:'Review the board'}:undefined,
-    runScheduledRoomReview:async(...args)=>{calls.push(args);return state.result},
+  let room={id:'room',admin:'pm',sessions:{pm:'pm-in-room'}},agent
+  const state={busy:false,result:'admitted',replaceOnLoad:false}
+  const hooks=new Map(),calls=[],native=[],delivered=[],cleanups=[]
+  agent={id:'root',session:{id:'root'},followup:m=>native.push(m),whenIdle:()=>Promise.resolve(1)}
+  const replaceRoom=()=>{room={...room,sessions:{...room.sessions}};agent={...agent,session:{...agent.session}}}
+  const rt={ctx:{on:(name,fn)=>hooks.set(name,fn),effect:fn=>{const cleanup=fn();if(typeof cleanup==='function')cleanups.push(cleanup)}},load:async()=>{if(state.replaceOnLoad){state.replaceOnLoad=false;replaceRoom()}},roomOf:id=>['root','room'].includes(id)?room:undefined,
+    sessionOfRoom:()=>agent.id,resolveAgent:async id=>id===agent.id?agent:undefined,roomBusyForPatrol:()=>state.busy,isManagedRoomScheduleId:id=>id==='managed',
+    managedRoomSchedule:(id,sid)=>id==='managed'&&sid===agent.id?{roomId:room.id,adminId:room.admin,prompt:'Review the board'}:undefined,
+    runScheduledRoomReview:async(...args)=>{if(args[0]!==room||args[2]!==agent)return 'invalid';calls.push(args);return state.result},
     ensureGroupTaskSession:async()=>{state.afterResolve?.();return 'pm-in-room'},
     deliver:async(args,guards)=>{guards.beforeAdmission();delivered.push(args)}}
   installRoomScheduleDelivery(rt)
   const target=id=>hooks.get('schedule/resolve-agent')(id,async()=>agent)
   const step=(messages,more=[],number=1)=>hooks.get('agent/pre-step')({agent,step:number,turn:5,messages},
     async()=>({kind:'enter',messages:[...messages,...more,context]}))
-  return {room,state,rt,calls,native,delivered,agent,target,step}
+  return {get room(){return room},get agent(){return agent},state,rt,calls,native,delivered,target,step,
+    replaceRoom,
+    dispose:()=>{for(const cleanup of cleanups)cleanup()}}
 }
 
-test('a busy group consumes its managed schedule before wake without affecting other reminders',async()=>{
-  const f=fixture();f.state.busy=true
-  const agent=await f.target('root');agent.followup(single(entry()))
+async function captureTimers(run) {
+  const original=setTimeout,timers=[]
+  globalThis.setTimeout=(callback,delay)=>{const timer={callback,delay,unref(){}};timers.push(timer);return timer}
+  try { await run() } finally { globalThis.setTimeout=original }
+  return timers
+}
+
+test('a busy group consumes its managed schedule before wake without affecting other reminders',async t=>{
+  const f=fixture();t.after(()=>f.dispose());f.state.busy=true
+  const agent=await f.target('root'),timers=await captureTimers(async()=>agent.followup(single(entry())))
   assert.deepEqual(f.native,[]);assert.equal(await agent.whenIdle(),undefined)
+  assert.equal(timers.length,1)
   const custom=single(entry('custom','定时巡检'));agent.followup(custom)
   assert.equal(f.native[0],custom)
   agent.followup(batch([entry(),entry('custom','发版')]))
   assert.doesNotMatch(f.native[1].content[0].text,/"managed"/)
   assert.match(f.native[1].content[0].text,/"custom"/)
   const wrong=await f.target('private-pm');wrong.followup(single(entry()));assert.equal(f.native.length,2)
+})
+
+test('a reminder filtered because the group is busy retries when the room quiets',async t=>{
+  const f=fixture();t.after(()=>f.dispose());f.state.busy=true
+  const agent=await f.target('root')
+  const timers=await captureTimers(async()=>agent.followup(single(entry())))
+  assert.deepEqual(f.native,[]);assert.equal(timers.length,1);assert.equal(timers[0].delay,15000)
+  f.state.replaceOnLoad=true
+  f.state.busy=false;timers[0].callback();await new Promise(resolve=>setImmediate(resolve))
+  assert.equal(f.calls.length,1)
+  assert.strictEqual(f.calls[0][0],f.room)
+  assert.equal(f.calls[0][1],JSON.stringify(['managed',at]))
+  assert.strictEqual(f.calls[0][2],f.agent)
+  assert.deepEqual(f.calls[0].slice(3),[undefined,'Review the board',undefined])
 })
 
 test('an idle occurrence goes once through the host and does not become an ordinary group broadcast',async()=>{
@@ -48,13 +74,23 @@ test('an idle occurrence goes once through the host and does not become an ordin
   assert.equal(f.rt.consumeSkippedPatrolTurn('root',5),false)
 })
 
-test('a competing user message, changed catalog text or busy group cancels only the scheduled occurrence',async()=>{
-  const f=fixture(),m=single(entry()),user={id:'work',source:{kind:'user'}}
+test('a competing user message, changed catalog text or busy group cancels only the scheduled occurrence',async t=>{
+  const f=fixture();t.after(()=>f.dispose())
+  const m=single(entry()),user={id:'work',source:{kind:'user'}}
   assert.deepEqual((await f.step([m,user])).messages,[user,context])
   assert.deepEqual((await f.step([m],[user])).messages,[user,context])
   assert.deepEqual((await f.step([single(entry('managed','edited after admission'))])).messages,[])
   f.state.busy=true;assert.deepEqual((await f.step([m])).messages,[])
   assert.deepEqual(f.calls,[])
+})
+
+test('a group that becomes busy before its scheduled pre-step retries after quieting',async t=>{
+  const f=fixture();t.after(()=>f.dispose())
+  const m=single(entry()),agent=await f.target('root');agent.followup(m);f.state.busy=true
+  const timers=await captureTimers(async()=>assert.deepEqual((await f.step([m])).messages,[]))
+  assert.equal(timers.length,1);assert.equal(f.calls.length,0)
+  f.state.busy=false;timers[0].callback();await new Promise(resolve=>setImmediate(resolve))
+  assert.equal(f.calls.length,1)
 })
 
 test('without a defined goal only the current group administrator receives the board check',async()=>{

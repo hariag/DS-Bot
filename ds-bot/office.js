@@ -13,10 +13,6 @@ var __commonJS = (cb, mod) => function __require() {
     throw mod = 0, e;
   }
 };
-var __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, { get: all[name], enumerable: true });
-};
 var __copyProps = (to, from, except, desc) => {
   if (from && typeof from === "object" || typeof from === "function") {
     for (let key of __getOwnPropNames(from))
@@ -34,9 +30,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/@xmldom/xmldom/lib/conventions.js
+// ../../../dsbot-src/ds-bot/node_modules/@xmldom/xmldom/lib/conventions.js
 var require_conventions = __commonJS({
-  "node_modules/@xmldom/xmldom/lib/conventions.js"(exports) {
+  "../../../dsbot-src/ds-bot/node_modules/@xmldom/xmldom/lib/conventions.js"(exports) {
     "use strict";
     function find(list, predicate, ac) {
       if (ac === void 0) {
@@ -243,9 +239,9 @@ var require_conventions = __commonJS({
   }
 });
 
-// node_modules/@xmldom/xmldom/lib/errors.js
+// ../../../dsbot-src/ds-bot/node_modules/@xmldom/xmldom/lib/errors.js
 var require_errors = __commonJS({
-  "node_modules/@xmldom/xmldom/lib/errors.js"(exports) {
+  "../../../dsbot-src/ds-bot/node_modules/@xmldom/xmldom/lib/errors.js"(exports) {
     "use strict";
     var conventions = require_conventions();
     function extendError(constructor, writableName) {
@@ -402,9 +398,9 @@ var require_errors = __commonJS({
   }
 });
 
-// node_modules/@xmldom/xmldom/lib/grammar.js
+// ../../../dsbot-src/ds-bot/node_modules/@xmldom/xmldom/lib/grammar.js
 var require_grammar = __commonJS({
-  "node_modules/@xmldom/xmldom/lib/grammar.js"(exports) {
+  "../../../dsbot-src/ds-bot/node_modules/@xmldom/xmldom/lib/grammar.js"(exports) {
     "use strict";
     function detectUnicodeSupport(RegExpImpl) {
       try {
@@ -609,9 +605,9 @@ var require_grammar = __commonJS({
   }
 });
 
-// node_modules/@xmldom/xmldom/lib/dom.js
+// ../../../dsbot-src/ds-bot/node_modules/@xmldom/xmldom/lib/dom.js
 var require_dom = __commonJS({
-  "node_modules/@xmldom/xmldom/lib/dom.js"(exports) {
+  "../../../dsbot-src/ds-bot/node_modules/@xmldom/xmldom/lib/dom.js"(exports) {
     "use strict";
     var conventions = require_conventions();
     var find = conventions.find;
@@ -3276,9 +3272,9 @@ var require_dom = __commonJS({
   }
 });
 
-// node_modules/@xmldom/xmldom/lib/entities.js
+// ../../../dsbot-src/ds-bot/node_modules/@xmldom/xmldom/lib/entities.js
 var require_entities = __commonJS({
-  "node_modules/@xmldom/xmldom/lib/entities.js"(exports) {
+  "../../../dsbot-src/ds-bot/node_modules/@xmldom/xmldom/lib/entities.js"(exports) {
     "use strict";
     var freeze = require_conventions().freeze;
     exports.XML_ENTITIES = freeze({
@@ -5419,9 +5415,9 @@ var require_entities = __commonJS({
   }
 });
 
-// node_modules/@xmldom/xmldom/lib/sax.js
+// ../../../dsbot-src/ds-bot/node_modules/@xmldom/xmldom/lib/sax.js
 var require_sax = __commonJS({
-  "node_modules/@xmldom/xmldom/lib/sax.js"(exports) {
+  "../../../dsbot-src/ds-bot/node_modules/@xmldom/xmldom/lib/sax.js"(exports) {
     "use strict";
     var conventions = require_conventions();
     var g = require_grammar();
@@ -5655,15 +5651,15 @@ var require_sax = __commonJS({
       return t;
     }
     function parseElementStartPart(source, start, el, currentNSMap, entityReplacer, errorHandler, isHTML) {
-      function addAttribute(qname2, value2, startIndex) {
-        if (hasOwn(el.attributeNames, qname2)) {
-          return errorHandler.fatalError("Attribute " + qname2 + " redefined");
+      function addAttribute(qname, value2, startIndex) {
+        if (hasOwn(el.attributeNames, qname)) {
+          return errorHandler.fatalError("Attribute " + qname + " redefined");
         }
         if (!isHTML && value2.indexOf("<") >= 0) {
           return errorHandler.fatalError("Unescaped '<' not allowed in attributes values");
         }
         el.addValue(
-          qname2,
+          qname,
           // @see https://www.w3.org/TR/xml/#AVNormalize
           // since the xmldom sax parser does not "interpret" DTD the following is not implemented:
           // - recursive replacement of (DTD) entity references
@@ -6201,9 +6197,9 @@ var require_sax = __commonJS({
   }
 });
 
-// node_modules/@xmldom/xmldom/lib/dom-parser.js
+// ../../../dsbot-src/ds-bot/node_modules/@xmldom/xmldom/lib/dom-parser.js
 var require_dom_parser = __commonJS({
-  "node_modules/@xmldom/xmldom/lib/dom-parser.js"(exports) {
+  "../../../dsbot-src/ds-bot/node_modules/@xmldom/xmldom/lib/dom-parser.js"(exports) {
     "use strict";
     var conventions = require_conventions();
     var dom = require_dom();
@@ -6469,9 +6465,9 @@ var require_dom_parser = __commonJS({
   }
 });
 
-// node_modules/@xmldom/xmldom/lib/index.js
+// ../../../dsbot-src/ds-bot/node_modules/@xmldom/xmldom/lib/index.js
 var require_lib = __commonJS({
-  "node_modules/@xmldom/xmldom/lib/index.js"(exports) {
+  "../../../dsbot-src/ds-bot/node_modules/@xmldom/xmldom/lib/index.js"(exports) {
     "use strict";
     var conventions = require_conventions();
     exports.assign = conventions.assign;
@@ -6523,34 +6519,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSy
 import { dirname, join, posix, resolve, sep } from "node:path";
 
 // src/office/xml.js
-var xml_exports = {};
-__export(xml_exports, {
-  NS: () => NS,
-  XmlError: () => XmlError,
-  childrenOf: () => childrenOf,
-  elementsOf: () => elementsOf,
-  firstOf: () => firstOf,
-  parseXml: () => parseXml,
-  parser: () => parser,
-  prettyXml: () => prettyXml,
-  qname: () => qname,
-  serializeXml: () => serializeXml,
-  stripPrettyWhitespace: () => stripPrettyWhitespace,
-  textOf: () => textOf
-});
 var import_xmldom = __toESM(require_lib(), 1);
-var NS = {
-  w: "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
-  w14: "http://schemas.microsoft.com/office/word/2010/wordml",
-  wp: "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing",
-  a: "http://schemas.openxmlformats.org/drawingml/2006/main",
-  r: "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
-  p: "http://schemas.openxmlformats.org/presentationml/2006/main",
-  c: "http://schemas.openxmlformats.org/drawingml/2006/chart",
-  rel: "http://schemas.openxmlformats.org/package/2006/relationships",
-  ct: "http://schemas.openxmlformats.org/package/2006/content-types",
-  xml: "http://www.w3.org/XML/1998/namespace"
-};
 var parser = new import_xmldom.DOMParser({ onError: (level, message) => {
   throw new XmlError(message);
 } });
@@ -6566,9 +6535,6 @@ function parseXml(text) {
 }
 function serializeXml(node) {
   return serializer.serializeToString(node);
-}
-function qname(ns, local) {
-  return `${ns}:${local}`;
 }
 var TEXT_TAGS = /* @__PURE__ */ new Set(["w:t", "w:delText", "w:instrText", "a:t", "m:t"]);
 function preserved(element) {
@@ -7005,8 +6971,7 @@ var Package = class _Package {
   }
 };
 function prettyForUnpack(data) {
-  const { prettyXml: prettyXml2 } = xml_exports;
-  return prettyXml2(parseXml(data));
+  return prettyXml(parseXml(data));
 }
 
 // src/office/check.js

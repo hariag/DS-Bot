@@ -91,7 +91,9 @@ export function reportMarkdown({ facts, client = {}, entries = [], clientEntries
 
 const ownVersion = () => {
   try {
-    return JSON.parse(readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8')).version
+    const version = JSON.parse(readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8')).version
+    // The local build adds a +aios.<stamp> suffix; the report table keeps the semver.
+    return version.split('+')[0]
   } catch {
     return undefined
   }
@@ -253,5 +255,9 @@ export function install(rt) {
     await writing
   }
 
-  Object.assign(rt, { warn, noteFailure: note, diagnostics: { report, logText, clear, entries } })
+  const issueFacts = () => {
+    const { botVersion, dshVersion, os } = facts()
+    return [botVersion && `DS Bot: ${botVersion}`, dshVersion && `DSH: ${dshVersion}`, `OS: ${os}`].filter(Boolean).join('\n')
+  }
+  Object.assign(rt, { warn, noteFailure: note, diagnostics: { report, logText, clear, entries, issueFacts } })
 }

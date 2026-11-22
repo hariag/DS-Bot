@@ -35,16 +35,10 @@ export class LoopbackMcp {
     this.tools = tools
     this.onCall = onCall
     this.calls = new Map()
-    this.server = createServer((request, response) => {
-      // A client can disappear while a tool is running. Stream errors are emitted
-      // asynchronously, so a try/catch around write() alone cannot catch them.
-      response.on('error', () => {})
-      void this.serve(request, response).catch(() => {
-        if (response.destroyed || response.writableEnded) return
-        if (!response.headersSent) response.writeHead(500)
-        response.end()
-      })
-    })
+    this.server = createServer((request, response) => void this.serve(request, response).catch(() => {
+      if (!response.headersSent) response.writeHead(500)
+      response.end()
+    }))
     this.url = undefined
   }
 
@@ -108,44 +102,33 @@ export class LoopbackMcp {
   // tools/call answers on an SSE stream: progress notifications keep the agent
   // patient while DSH runs the call, then the result arrives on the same stream.
   serveCall({ id, params }, response) {
-    if (response.destroyed || response.writableEnded) return
     const callId = `mcp-${randomUUID()}`
     const progressToken = params?._meta?.progressToken ?? callId
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
-    let finished = false
-    let timer
-    const cleanup = () => {
-      if (finished) return false
-      finished = true
-      clearInterval(timer)
-      this.calls.delete(callId)
-      return true
-    }
-    const send = (value) => {
-      if (finished) return
-      if (response.destroyed || response.writableEnded) { cleanup(); return }
-      try { response.write(`data: ${JSON.stringify(value)}\n\n`) } catch { cleanup(); response.destroy() }
-    }
-    const finish = (result) => {
-      if (!cleanup() || response.destroyed || response.writableEnded) return
-      const value = { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: result.text }], isError: result.isError === true } }
-      try { response.end(`data: ${JSON.stringify(value)}\n\n`) } catch {}
-    }
+    const send = (value) => { try { response.write(`data: ${JSON.stringify(value)}\n\n`) } catch {} }
     const entry = {
       progress: 0,
-      settle: finish,
-      cancel: () => finish({ isError: true, text: 'the call was cancelled' }),
+      settle: (result) => {
+        clearInterval(timer)
+        this.calls.delete(callId)
+        send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: result.text }], isError: result.isError === true } })
+        response.end()
+      },
+      cancel: () => {
+        clearInterval(timer)
+        this.calls.delete(callId)
+        send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'the call was cancelled' }], isError: true } })
+        response.end()
+      },
     }
-    response.once('close', cleanup)
-    response.once('error', cleanup)
-    timer = setInterval(() => {
+    const timer = setInterval(() => {
       entry.progress += 1
       send({ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken, progress: entry.progress * KEEPALIVE_MS, message: 'waiting for the tool result' } })
     }, KEEPALIVE_MS)
     timer.unref?.()
     this.calls.set(callId, entry)
-    Promise.resolve().then(() => finished ? undefined : this.onCall({ name: params?.name, arguments: params?.arguments ?? {}, callId }))
-      .then(result => { if (!finished) entry.settle(result) }, error => entry.settle({ isError: true, text: error?.message ?? String(error) }))
+    this.onCall({ name: params?.name, arguments: params?.arguments ?? {}, callId })
+      .then(entry.settle, error => entry.settle({ isError: true, text: error?.message ?? String(error) }))
   }
 }
 

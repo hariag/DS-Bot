@@ -1,4 +1,4 @@
-import { createElement as h, Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createElement as h, Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { inboxGroups, keepInboxPageOnRetry, stampInboxGroups } from './inbox-groups.js'
 import { t } from './i18n.js'
 import { ArrowUpIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CloseIcon, PaperclipIcon, PencilIcon, QueueIcon, TrashIcon } from './icons.js'
@@ -84,8 +84,8 @@ function EditField({ text, onChange, onSave, onCancel }) {
     'aria-label': t('Edit queued message'),
     onChange: event => onChange(event.target.value),
     onKeyDown: (event) => {
-      if (event.key === 'Escape') { event.stopPropagation(); onCancel() }
-      else if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); onSave() }
+      if (event.key === 'Escape' && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.stopPropagation(); onCancel() }
+      else if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); onSave() }
     },
   })
 }
@@ -298,7 +298,7 @@ export function QueueDock({ sessionId, useSession, useProjection, useRoster, use
     return pendingSubmissions.filter(submission => submission.placement === 'queued' && !admitted.has(submission.requestId))
   }, [pendingSubmissions, queue])
   const rowCount = queue.length + pendingQueue.length
-  const getLiveGroups = useCallback(() => {
+  const getLiveGroups = () => {
     const allBotQueue = [
       ...(inbox?.['next-step'] ?? EMPTY_QUEUE).filter(row => row.source?.kind === 'bot').map(row => ({ row, placement: 'next-step' })),
       ...(inbox?.['next-turn'] ?? EMPTY_QUEUE).filter(row => row.source?.kind === 'bot').map(row => ({ row, placement: 'next-turn' })),
@@ -329,7 +329,7 @@ export function QueueDock({ sessionId, useSession, useProjection, useRoster, use
       else group.rows.push({...item, earlier:item.previous})
     }
     return [personal, ...byRoom.values()]
-  }, [isRoom, roomId, rooms, roomState, inbox, inboxAvailable, workAvailable, primarySession, sessionId, earlierPrivateItems, groupQueue])
+  }
   const roomPendingTitle = [
     roomState.pending?.relay > 0 && t('Relay waiting items: {n}', {n:roomState.pending.relay}),
     roomState.pending?.next > 0 && t('Next-round items: {n}', {n:roomState.pending.next}),
