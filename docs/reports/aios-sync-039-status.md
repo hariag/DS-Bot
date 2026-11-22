@@ -16,14 +16,14 @@
 
 | 范围 | 结果 |
 |---|---|
-| 全量 `test/*.test.js` + `test/board-host/*.mjs` | **4044 / 4084（99.0%）** |
+| 全量 `test/*.test.js` + `test/board-host/*.mjs` | **4050 / 4084（99.2%）** |
 | board-service | 60/61 |
 | task-store | 61/61 |
 | bot-tasks | 17/17 |
 | privacy（含看板守卫） | 26/26 |
 | goal-review due/guard | 3/3 |
 | rounds + group-work | 183/184 |
-| group-goal | 19/30（见冲突 2） |
+| group-goal | 25/30（上游 idle 驱动已并入本地 goalDrive） |
 | group-queue-view | 8/8 |
 | original-redo-journal | 34/34 |
 | recovery-held / room-patrol-activity / version-info | 全部通过 |
@@ -54,8 +54,7 @@
 
 - 上游 0.3.9：`goalDrive` 在每轮结束后按 `GOAL_IDLE_NUDGES = 2` 唤醒管理员做 goal check；两次无进展进入 idle（#1330 系列测试）。
 - 本地 AIOS：以定时复核（scheduled review / 清扫器 / admin-pass / nudge-limit）驱动，`goalDrive` 主要处理复核结果，不做逐轮唤醒。
-- 现状：`group-goal` 11 项失败集中在该模型差异；尝试把上游驱动并入本地 goalDrive 出现回归，已回退。
-- 建议：以上游驱动为基础，本地复核作为其上的调度层；需要按上游实现重写 `goalDrive` 相关分支并回归 `group-goal` 全量。
+- 现状：已采用**上游驱动为基础**（goal 逐轮 check、GOAL_IDLE_NUDGES、goalSettled/SETTLE_ROUND 已并入本地 goalDrive），本地复核作为其上的调度层；`group-goal` 由 19/30 提升到 25/30，剩余 5 项为本地复核/阶段门禁差异。
 
 ## 环境/版本类失败（非产品缺陷）
 
