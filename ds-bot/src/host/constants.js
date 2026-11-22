@@ -55,7 +55,7 @@ export const REFERENCE_KIND = 'session-reference'
 // without an admin still answers as `everyone`.
 export const ROOM_MODES = ['everyone', 'admin']
 export const ROOM_NAME_MAX = 60
-export const ROOM_NOTICE_MAX = 2000
+export const ROOM_NOTICE_MAX = 4000
 export const ROOM_MAX_MEMBERS = 12
 // The shared to-do list of a group: one line per item, and a cap on the whole list so
 // a group cannot grow it without bound.
