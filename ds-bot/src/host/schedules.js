@@ -7,6 +7,7 @@
 // the service is optional and every endpoint reports whether it is there.
 
 import { threadCurrentOfPart, threadOfPart } from './threads.js'
+import { createRoomScheduleRegistry } from './room-schedule-registry.mjs'
 
 const MAX_TITLE = 120
 // A time input reports HH:mm, or HH:mm:ss when the browser's picker shows seconds.
@@ -92,11 +93,22 @@ function selectorOf(when) {
 export function install(rt) {
   const { ctx } = rt
   let service = null
+  const roomSchedules = createRoomScheduleRegistry(rt, () => service)
+  const reconcileRoomSchedules = () => {
+    if (!hostWide(service)) return
+    void rt.load().then(() => {
+      roomSchedules.prime()
+      if (Object.keys(rt.state.roomSchedules ?? {}).length) roomSchedules.schedule()
+    }).catch(error => {
+      rt.warn('ds-bot: room schedules: %s', error.message)
+    })
+  }
 
   const attach = (sub) => {
     const own = sub.schedule
     service = own
     sub.effect(() => () => { if (service === own) service = null }, 'ds-bot: schedule service')
+    reconcileRoomSchedules()
   }
   if (typeof ctx.inject === 'function') ctx.inject(['schedule'], attach)
   else if (ctx.get?.('schedule') !== undefined) attach({ schedule: ctx.get('schedule'), effect: (execute, label) => ctx.effect(execute, label) })

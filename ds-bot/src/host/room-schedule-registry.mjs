@@ -195,11 +195,13 @@ export function createRoomScheduleRegistry(rt, service) {
     },delay)
     timer.unref?.()
   }
+  function prime() { rosterKey = scopeKey() }
   function rosterChanged() {
     const next = scopeKey()
+    if (rosterKey === undefined) { rosterKey = next; return }
     if (rosterKey !== next) { rosterKey = next; schedule() }
   }
   const off = rt.onSaved(rosterChanged)
   rt.onHomeDrain(() => { stopped = true; clearTimeout(timer); off(); return serial?.catch(() => {}) })
-  return {refresh, reconcile, schedule, ownerOf, known, lookup}
+  return {refresh, reconcile, schedule, prime, ownerOf, known, lookup}
 }
