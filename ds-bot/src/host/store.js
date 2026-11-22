@@ -21,7 +21,7 @@ export function install(rt) {
   const { ctx, home, statePath } = rt
 
   /** @type {{version:1, workspaceId?:string, mainBotIds:string[], bots:Record<string,any>, privateArchives:any[], rooms:Record<string,any>, agents:Record<string,any>, sections:any[], capabilities:{items:Record<string,any>}, exchanges:any[], exchangeTurns:Record<string,number[]>, revision:number}} */
-  const state = { version: 1, mainBotIds: [], bots: {}, privateArchives: [], rooms: {}, agents: {}, sections: [], capabilities: { items: {} }, exchanges: [], exchangeTurns: {}, works: {}, requests: {}, questions: {}, views: {}, closedCards: {}, prefs: {}, switching: {}, revision: 0 }
+  const state = { version: 1, mainBotIds: [], bots: {}, privateArchives: [], rooms: {}, agents: {}, sections: [], capabilities: { items: {} }, exchanges: [], exchangeTurns: {}, works: {}, requests: {}, questions: {}, views: {}, closedCards: {}, prefs: {}, pendingInputs: {}, pendingRecovery: {}, recoveryCursor: {}, switching: {}, revision: 0 }
   let loaded = null
   let storeReady = false
   let writing = Promise.resolve()
@@ -41,6 +41,14 @@ export function install(rt) {
   // Bumped each time the in-memory state is replaced from the file, so a queued
   // save cannot write a snapshot taken of the state it replaced.
   let lockEpoch = 0
+  let homeLockGeneration = 0n
+  const homeDrains = new Set()
+  const requireHomeLock = () => {
+    if (lockBroken || holder !== undefined || !lock.owns()) {
+      throw Object.assign(new Error('The Bot team lock is not held by this host.'), { code: 'ELOCKLOST' })
+    }
+  }
+  const onHomeDrain = callback => { homeDrains.add(callback); return () => homeDrains.delete(callback) }
   const stamp = () => {
     try {
       const { mtimeMs, size } = statSync(statePath)
@@ -52,6 +60,8 @@ export function install(rt) {
   const lock = homeLock(join(home, 'state.lock'))
   const claimLock = () => {
     if (lockBroken) return
+    // A reclaim is a different lease, even when the state file appears unchanged.
+    homeLockGeneration += 1n
     try {
       mkdirSync(home, { recursive: true })
       holder = lock.claim()
@@ -118,6 +128,9 @@ export function install(rt) {
     for (const key of Object.keys(state)) delete state[key]
     Object.assign(state, JSON.parse(EMPTY), parsed ?? {})
     state.prefs ??= {}
+    if (state.pendingInputs === null || typeof state.pendingInputs !== 'object' || Array.isArray(state.pendingInputs)) state.pendingInputs = {}
+    if (state.pendingRecovery === null || typeof state.pendingRecovery !== 'object' || Array.isArray(state.pendingRecovery)) state.pendingRecovery = {}
+    if (state.recoveryCursor === null || typeof state.recoveryCursor !== 'object' || Array.isArray(state.recoveryCursor)) state.recoveryCursor = {}
     // Teams saved before the DSH Agent existed carry no `agents`; corrupt values reset.
     if (state.agents === null || typeof state.agents !== 'object' || Array.isArray(state.agents)) state.agents = {}
     // `computer` is the computer-use switch; absent or corrupt means off.
@@ -419,12 +432,18 @@ export function install(rt) {
     return warnReadOnly()
   }
 
+  let queuedSave
   const save = ({ required = false } = {}) => {
     if (stopped) return required ? Promise.reject(new Error('The Bot team cannot be saved after this host stopped.')) : writing
     indexSessions()
     // A reading host keeps the file's revision, so its window does not skip the next change.
     if (!writable()) return required ? Promise.reject(new Error(`This host cannot save the Bot team: ${readOnly()}`)) : writing
+    // Calls waiting on the same not-yet-sampled write see the same snapshot.
+    // Stop sharing once a write starts or a reclaim/adoption enters the queue.
+    if (queuedSave?.tail === writing && queuedSave.required === required) return queuedSave.receipt
+    const batch = { required }
     const run = writing.then(async () => {
+      if (queuedSave === batch) queuedSave = undefined
       // Re-check writability once the queued write runs: an adopt queued before
       // it may have made this host read-only (e.g. a file a newer DS Bot wrote).
       if (stuck !== undefined || holder !== undefined) {
@@ -471,15 +490,18 @@ export function install(rt) {
       }
     })
     writing = run.catch(() => {})
-    return run.catch(error => {
+    batch.tail = writing
+    batch.receipt = run.catch(error => {
       warn('ds-bot: state write failed: %s', error)
       throw error
     })
+    queuedSave = batch
+    return batch.receipt
   }
 
   ctx.effect(() => () => {
     stopped = true
-    return writing.finally(() => lock.release())
+    return Promise.allSettled([writing, ...[...homeDrains].map(drain => Promise.resolve().then(drain))]).finally(() => lock.release())
   }, 'ds-bot: state lock')
 
   const botOf = id => (id === undefined ? undefined : own(state.bots, id))
@@ -506,6 +528,7 @@ export function install(rt) {
   const chatOwners = new Map()
   /** @type {Map<string, {botId:string, taskId:string}>} */
   const taskOwners = new Map()
+  const conflictingChatOwners = new Set()
   /** @type {Map<string, {botId:string, roomId:string}>} */
   const groupOwners = new Map()
   /** @type {Map<string, string>} */
@@ -541,9 +564,15 @@ export function install(rt) {
   const indexSessions = () => {
     chatOwners.clear()
     taskOwners.clear()
+    conflictingChatOwners.clear()
     groupOwners.clear()
     roomOwners.clear()
     pastOwners.clear()
+    const indexChat = (sid, botId) => {
+      if (sid === undefined) return
+      if (chatOwners.has(sid) && chatOwners.get(sid) !== botId) conflictingChatOwners.add(sid)
+      chatOwners.set(sid, botId)
+    }
     const indexPast = (segments, owner) => {
       if (!Array.isArray(segments)) return
       for (const segment of segments) {
@@ -556,13 +585,13 @@ export function install(rt) {
       if (botId === undefined) continue
       indexPast(bot.segments, { botId })
       const currentSid = chatOf(botId)
-      if (sessionIdOf(currentSid) !== undefined) chatOwners.set(currentSid, botId)
+      indexChat(sessionIdOf(currentSid), botId)
       // Parts opened while the Bot was busy are its own chat too: a turn there may use
       // the team tools, and the phone still sees only the current part. Their earlier
       // parts stay the Bot's as well, so their history still reads on that thread.
       for (const part of bot.openParts ?? []) {
         const partSid = sessionIdOf(part?.sessionId)
-        if (partSid !== undefined) chatOwners.set(partSid, botId)
+        indexChat(partSid, botId)
         indexPast(part?.segments, { botId })
       }
       // Background tasks keep their own stable records separate from openParts. Only
@@ -604,6 +633,10 @@ export function install(rt) {
   // The Bot a Session speaks for: its own chat, one of its group Sessions, or an
   // earlier segment of either.
   const selfOf = id => chatOwners.get(id) ?? groupOwners.get(id)?.botId ?? pastOwners.get(id)?.botId
+  // A private receipt needs an unambiguous live origin even when old roster
+  // data also assigns that Session to a group, an archive, or another Bot.
+  const privateChatOwner = id => conflictingChatOwners.has(id) || groupOwners.has(id) || roomOwners.has(id) || pastOwners.has(id)
+    ? undefined : chatOwners.get(id)
   // A Session where the Bot speaks now, as opposed to an archived segment.
   const isBotSession = id => chatOwners.has(id) || groupOwners.has(id)
   const groupSessionsOf = botId => Object.values(state.rooms).map(room => room.sessions?.[botId]).filter(Boolean)
@@ -665,8 +698,9 @@ export function install(rt) {
   }
 
   Object.assign(rt, {
-    state, load, save, refresh, readOnly, hasLoaded, syncReadOnly, own, onSaved, closeCard,
-    botOf, roomOf, isMain, chatOf, sessionOfRoom, selfOf, isBotSession,
+    state, load, save, refresh, readOnly, hasLoaded, syncReadOnly, own, onSaved, closeCard, requireHomeLock, onHomeDrain,
+    homeLockVersion: () => { requireHomeLock(); return `${homeLockGeneration}:${lockEpoch}` },
+    botOf, roomOf, isMain, chatOf, sessionOfRoom, selfOf, isBotSession, privateChatOwner,
     chatOwners, taskOwners, groupOwners, roomOwners, pastOwners,
     groupSessionsOf, dropGroupSession, retireGroupSession, findBot, findRooms, isAdminOf,
   })
