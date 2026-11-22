@@ -44,7 +44,6 @@ export function install(rt) {
     if (role === 'task-followup') return `[Follow-up from your own chat · ${note}]`
     if (role === 'task-report') return `[Background task report · ${note}${goesOn}]`
     if (audience === 'user') return `[Message from ${fromName} · the user sees your reply here]`
-    if (botRequest) return `[Message from ${fromName} · this request's turn returns your final reply]`
     return `[Message from ${fromName}]`
   }
 
