@@ -6,7 +6,7 @@ import { test } from 'node:test'
 import { createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session } from '@deepseek-ai/dsh-session'
 import { createRuntime } from '../index.js'
-import { SOURCE_KIND, TEXT_KEPT } from '../src/host/constants.js'
+import { ROOM_NOTICE_MAX, SOURCE_KIND, TEXT_KEPT } from '../src/host/constants.js'
 import { dshHomeOf } from '../src/host/folders.js'
 import { escapeRegExp } from '../src/host/text.js'
 import { fakeApproval, fakeContext } from './fake-ctx.js'
@@ -766,10 +766,13 @@ test('a Bot whose working folder is a registered workspace joins it', async (t) 
 test('a group notice past the limit is refused, not cut', async (t) => {
   const { call, tool, state, stop } = await start()
   t.after(stop)
-  const long = 'x'.repeat(2001)
-  assert.match((await call('update-room', { id: 'r1', notice: long })).error?.message, /at most 2000 characters/)
-  assert.match(await tool('update_group', { group: 'r1', notice: long }, 'a'), /at most 2000 characters/)
-  assert.match(await tool('create_group', { members: ['Writer'], notice: long }, 'a'), /at most 2000 characters/)
+  // The limit is a local setting (AIOS keeps 4000); the refusal text follows it.
+  const limit = ROOM_NOTICE_MAX
+  const long = 'x'.repeat(limit + 1)
+  const refusal = new RegExp(`at most ${limit} characters`)
+  assert.match((await call('update-room', { id: 'r1', notice: long })).error?.message, refusal)
+  assert.match(await tool('update_group', { group: 'r1', notice: long }, 'a'), refusal)
+  assert.match(await tool('create_group', { members: ['Writer'], notice: long }, 'a'), refusal)
   assert.equal(state().rooms.r1.notice ?? '', '')
 })
 
