@@ -16,6 +16,7 @@ import { useGlide, useMorph } from './motion.js'
 import { FreshMemberPart, MemberApprovals, MemberState, StopMemberWork, StopRoomWork, useMemberWork, workState } from './member-status.js'
 import { canSetGoal, goalView, hasGoalAdmin } from './goal.js'
 import { PermissionPicker, presetDanger, presetName } from './permission-picker.js'
+import { GroupTaskBoard } from './group-task-board.js'
 import { TaskBoard } from './task-board.js'
 import { DetailsTaskList, isActiveTask, tasksForChat } from './bot-tasks.js'
 import { BotConnectors } from './connectors.js'
@@ -206,7 +207,7 @@ function GroupOverview({ room, roster, actions, usage, useWork, useComputer, ope
       h('div', { className: 'bt-members', role: 'list' }, members.map(member => h(MemberRow, {
         key: member.id, member, entry: entries.find(item => item.id === member.id), room, roster, actions,
       })))),
-    h('div', { key: 'tasks' }, h(TaskBoard, { room, roster, actions })),
+    h('div', { key: 'tasks' }, h(GroupTaskBoard, { room, roster, actions })),
     h('div', { key: 'goal' }, h('div', { className: 'bt-section-title' }, t('Goal')),
       h('div', { className: 'bt-kv' },
         room.goal

@@ -7,6 +7,7 @@ import { AgentBadge } from './agent-badge.js'
 import { ActivityIndicator } from './activity-row.js'
 import { clockLabel, openingTurn, unseenSince } from './cells.js'
 import { GoalIsland, goalView } from './goal.js'
+import { TaskBoard } from './task-board.js'
 import { ApprovalIslandPod, roomApprovals } from './member-status.js'
 import { TaskIslandPod, isActiveTask, tasksForChat } from './bot-tasks.js'
 import { viewBottom } from './motion.js'
@@ -48,6 +49,9 @@ function MemoryNotice({ shown }) {
 }
 
 export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, useWork, useComputer, useStore, useConversationViews, selectView, actions, PendingLearning }) {
+  const [boardOpen, setBoardOpen] = useState(false)
+  const [boardReview, setBoardReview] = useState(false)
+  useEffect(() => { setBoardOpen(false); setBoardReview(false) }, [sessionId])
   const roster = useRoster(value => value)
   const selectedView = useStore?.(state => state.view)
   const away = useConversationViews?.(views => views.some(view => view.id === selectedView && view.id !== 'chat')) === true
@@ -187,8 +191,10 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
       h('span', null, activeTasks.length))
     : null
   return h('div', { className: 'bt-head' },
-    showIsland ? h(GoalIsland, { room, goal, view, open: goalOpen, composing: goalCompose, approvalPod, approvalOpen, approvalsCount: approvals.length, taskPod, taskOpen: taskDeckOpen, taskCount: activeTasks.length, taskHoverReveal, taskBadge, roomWork, roster, actions, pill }) : pill,
+    showIsland ? h(GoalIsland, { room, goal, view, open: goalOpen, composing: goalCompose, approvalPod, approvalOpen, approvalsCount: approvals.length, taskPod, taskOpen: taskDeckOpen, taskCount: activeTasks.length, taskHoverReveal, taskBadge, roomWork, roster, actions, pill, openReview: () => { actions.closeGoal?.(); setBoardReview(true); setBoardOpen(true) } }) : pill,
     !away && PendingLearning ? h(PendingLearning, { key: sessionId, sessionId, useRoster, actions }) : null,
+    !away && (room || bot) ? h('button', { type: 'button', className: 'bt-board-launch', onClick: () => { setBoardReview(false); setBoardOpen(true) } }, t('Task board')) : null,
+    boardOpen && !away && (room || bot) ? h(TaskBoard, { key: room?.id ?? bot.id, scope: room ? { kind: 'room', id: room.id } : { kind: 'personal', id: bot.id }, title: name, goal: room?.goal, initialReview: boardReview, refreshGoal: actions.refreshTeam, currentRoomGoal: actions.currentRoomGoal, resolveReview: room ? (goalId, reviewId, evidence) => actions.goalReviewResolve(room.id, goalId, reviewId, evidence) : undefined, close: () => setBoardOpen(false) }) : null,
     h('span', { className: 'bt-sr', role: 'status' }, memoryNotice ? t('Memory updated') : ''),
     room !== undefined && !away
       ? h('button', {

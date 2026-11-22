@@ -2612,3 +2612,13 @@ export const DSH_JA = {
     "subagentModelSelectionOff": "サブエージェントは設定されたデフォルトモデルを使用するか、親エージェントのモデルを引き継ぎます。保存済みのモデル選択は保持されます。",
   },
 }
+
+// Local (AIOS) task-board and provider strings.
+Object.assign(JA, {
+  "Retry upload": "アップロードを再試行",
+  "Participants": "参加者",
+  "Mention a teammate in a comment, or add one here.": "コメントでチームメイトに @ するか、ここで追加してください。",
+  "Add a participant": "参加者を追加",
+  "{provider} did not accept the current API key.": "{provider} は現在の API キーを受け付けませんでした。",
+  "{provider} did not accept the current API key ({status}).": "{provider} は現在の API キーを受け付けませんでした（{status}）。"
+})

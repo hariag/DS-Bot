@@ -2648,3 +2648,13 @@ export const DSH_ES = {
     subagentModelSelectionOff: 'Los subagentes usan los valores predeterminados configurados o heredan el modelo del agente padre. Las selecciones de modelos guardadas se conservan.',
   },
 }
+
+// Local (AIOS) task-board and provider strings.
+Object.assign(ES, {
+  "Retry upload": "Reintentar carga",
+  "Participants": "Participantes",
+  "Mention a teammate in a comment, or add one here.": "Menciona a un compañero en un comentario o añádelo aquí.",
+  "Add a participant": "Añadir participante",
+  "{provider} did not accept the current API key.": "{provider} no aceptó la clave de API actual.",
+  "{provider} did not accept the current API key ({status}).": "{provider} no aceptó la clave de API actual ({status})."
+})

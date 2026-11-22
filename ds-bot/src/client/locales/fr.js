@@ -2612,3 +2612,13 @@ export const DSH_FR = {
     "subagentModelSelectionOff": "Les sous-agents utilisent les valeurs par défaut configurées ou héritent du modèle de l’agent parent. Les choix de modèles enregistrés sont conservés."
   },
 }
+
+// Local (AIOS) task-board and provider strings.
+Object.assign(FR, {
+  "Retry upload": "Réessayer le téléversement",
+  "Participants": "Participants",
+  "Mention a teammate in a comment, or add one here.": "Mentionnez un coéquipier dans un commentaire ou ajoutez-le ici.",
+  "Add a participant": "Ajouter un participant",
+  "{provider} did not accept the current API key.": "{provider} n'a pas accepté la clé API actuelle.",
+  "{provider} did not accept the current API key ({status}).": "{provider} n'a pas accepté la clé API actuelle ({status})."
+})

@@ -76,6 +76,22 @@ body[data-bt-motion=quiet] .bt-mark[data-gaze] .bt-gaze,body[data-bt-effects=red
 .bt-mark[data-shape=image]:not([data-state=idle]) .bt-mark-img{animation:bt-bob 1.6s ease-in-out infinite}
 .bt-mark[data-shape=image][data-state=alert] .bt-mark-img{animation:bt-hop 1.3s cubic-bezier(.3,.7,.4,1) 2}
 body[data-bt-motion=lively] .bt-mark[data-state=alert] :is(.bt-b,.bt-mark-img){animation-iteration-count:infinite}
+/* Outside lively mode, the SVG body and eyes play their state entrance once. */
+body:not([data-bt-motion=lively]) .bt-mark:is([data-state=thinking],[data-state=searching],[data-state=working],[data-state=sending],[data-state=orbit],[data-state=waiting]) :is(.bt-b,.bt-eye,.bt-eyes,.bt-mark-img){animation-iteration-count:1}
+/* The work state also covers the member dock and pending group replies, whose
+   marks have no pointer interactions. Move the HTML box so its painted artwork
+   can be reused between poses. Idle marks in the transcript have no such loop. */
+@media (prefers-reduced-motion:no-preference){
+body[data-bt-motion=normal][data-bt-effects=full] .bt-mark:is([data-state=thinking],[data-state=searching],[data-state=working],[data-state=sending],[data-state=orbit],[data-state=waiting]){
+  transform-origin:50% 75%;
+  animation:bt-activity-mark var(--bt-beat,1s) steps(16,end) var(--bt-delay,0s) infinite alternate;
+}
+.bt-mark[data-state=thinking]{--bt-pose:translateY(-4%) rotate(7deg);--bt-beat:1.3s}
+.bt-mark[data-state=searching]{--bt-pose:translateX(7%) rotate(-6deg);--bt-beat:.95s}
+.bt-mark[data-state=sending]{--bt-pose:translateX(9%) rotate(6deg);--bt-beat:.85s}
+.bt-mark:is([data-state=orbit],[data-state=waiting]){--bt-start-pose:rotate(-6deg);--bt-pose:rotate(6deg);--bt-beat:1.4s}
+}
+@keyframes bt-activity-mark{from{transform:var(--bt-start-pose,none)}to{transform:var(--bt-pose,translateY(-7%) rotate(-4deg))}}
 .bt-mark[data-state=done] .bt-b{animation:bt-done 1.8s linear 1}
 .bt-mark[data-shape=image][data-state=done] .bt-mark-img{animation:bt-done 1.8s linear 1;transform-origin:50% 100%}
 @keyframes bt-done{0%{transform:none;animation-timing-function:cubic-bezier(.4,0,.2,1)}13.3%{transform:scale(1.12,.88);animation-timing-function:cubic-bezier(.4,0,.2,1)}25.6%{transform:scale(.93,1.09);animation-timing-function:cubic-bezier(.4,0,.2,1)}37.8%{transform:scale(1.04,.97);animation-timing-function:cubic-bezier(.4,0,.2,1)}51.1%,100%{transform:none}}
@@ -1205,6 +1221,12 @@ body[data-bt-effects=off] :is(.bt-spin,.bt-model-spin,.bt-mem-spin,.bt-loading-s
 `
 
 export const CONVERSATION_CSS = `
+/* Chromium ignores WebKit scrollbar styles when the standard properties are non-auto. */
+body[data-bt-layout] [data-conversation-scroll]{--dsh-scrollbar-width:8px;scrollbar-width:auto;scrollbar-color:auto}
+body[data-bt-layout] [data-conversation-scroll]::-webkit-scrollbar{width:8px;height:8px}
+body[data-bt-layout] [data-conversation-scroll]::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--bt-ink) 40%,transparent);border-radius:999px}
+body[data-bt-layout] [data-conversation-scroll]::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--bt-ink) 60%,transparent)}
+@supports not selector(::-webkit-scrollbar){body[data-bt-layout] [data-conversation-scroll]{scrollbar-width:auto;scrollbar-color:color-mix(in srgb,var(--bt-ink) 40%,transparent) transparent}}
 /* The menus above the composer ("@", "/", and the picker a command such as /model
    opens): DSH paints them translucent and leans on a backdrop blur to keep the chat
    behind them unreadable. Where the blur does not take, the chat shows through the
@@ -1326,6 +1348,11 @@ body[data-bt-goal="2"] [class*="_scroll"]:has(> [class*="_column"]){padding-top:
 @keyframes bt-typing-label{from{opacity:0;filter:var(--bt-fx-blur-5,blur(5px));transform:translateY(3px)}}
 /* Shimmer: a stepped sweep clipped to the text. */
 .bt-shimmer{color:transparent;background:linear-gradient(90deg,var(--bt-shimmer-base) 0%,var(--bt-shimmer-base) 25%,var(--bt-ink) 60%,var(--bt-shimmer-base) 75%,var(--bt-shimmer-base) 100%);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;animation:bt-shimmer 2.2s steps(60) infinite;--bt-shimmer-base:color-mix(in srgb,var(--bt-ink) 40%,transparent)}
+body:not([data-bt-motion=lively]) .bt-shimmer{animation-iteration-count:1}
+@media (prefers-reduced-motion:no-preference){
+body[data-bt-motion=normal][data-bt-effects=full] .bt-shimmer{color:var(--bt-ink);background:none;animation:bt-activity-pulse 1.2s steps(16,end) infinite alternate}
+}
+@keyframes bt-activity-pulse{from{opacity:.72}to{opacity:1}}
 @keyframes bt-shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
 /* New rows slide up; a reply that replaces the activity row grows out of its corner. */
 [data-bt-enter="new"]{animation:bt-row-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}}
@@ -1428,7 +1455,6 @@ body[data-bt-room] [data-composer-card]:has(button[class*="_primary"]:disabled) 
 .bt-mic-note{position:absolute;right:12px;bottom:calc(100% + 8px);padding:5px 10px;border-radius:8px;background:var(--bt-user);color:var(--bt-user-ink);font-size:12px;line-height:16px;white-space:nowrap;pointer-events:none;animation:bt-rise .16s ease-out}
 [data-chain-overlay-fallback="conversation.composer"]:has(~ .bt-q){display:block!important;order:2}
 .bt-q{order:1}
-div:has(> nav [class*="_marks"]){display:none!important}
 /* Every user-side bubble (sent, steering mid-turn, not yet admitted, question replies)
    takes its surface and its text from the one --bt-user pair: a skin that repaints
    the host's bubble surface alone would otherwise leave the text unreadable. The

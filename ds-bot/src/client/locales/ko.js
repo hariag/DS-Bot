@@ -2648,3 +2648,13 @@ export const DSH_KO = {
     subagentModelSelectionOff: '비활성화하면 서브에이전트는 설정된 기본값을 사용하거나 상위 에이전트의 모델을 상속합니다. 저장된 모델 선택 항목은 유지됩니다.',
   },
 }
+
+// Local (AIOS) task-board and provider strings.
+Object.assign(KO, {
+  "Retry upload": "업로드 다시 시도",
+  "Participants": "참여자",
+  "Mention a teammate in a comment, or add one here.": "댓글에서 팀원을 멘션하거나 여기에서 추가하세요.",
+  "Add a participant": "참여자 추가",
+  "{provider} did not accept the current API key.": "{provider}이(가) 현재 API 키를 거부했습니다.",
+  "{provider} did not accept the current API key ({status}).": "{provider}이(가) 현재 API 키를 거부했습니다({status})."
+})
