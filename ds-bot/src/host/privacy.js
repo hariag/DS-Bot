@@ -481,9 +481,10 @@ export function install(rt) {
 
   // Before the tools' own hooks, so that a closed call never reaches a card they show.
   ctx.on('tools/execute', async (exec, next) => {
-    await guardBoardFiles(exec)
-    if (protectedBots().length === 0) return next()
     const self = await callerOf(exec)
+    // The board belongs to the instance user: only a Bot's call is fenced.
+    if (self !== undefined) await guardBoardFiles(exec)
+    if (protectedBots().length === 0) return next()
     await guardTeam(exec, self)
     await guardFiles(exec, self)
     return next()
