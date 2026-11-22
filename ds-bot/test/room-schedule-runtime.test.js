@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { fakeContext } from './fake-ctx.js'
 import { install as installSchedules } from '../src/host/schedules.js'
@@ -58,4 +59,12 @@ test('schedule service startup applies managed room prompt migrations', async t 
   assert.match(task.record.prompt,/A live turn, queued message, chat activity/)
   assert.match(task.record.prompt,/the group administrator reports the exact decision needed/)
   assert.ok(task.record.prompt.endsWith('Keep the signed release milestone.'))
+})
+
+test('the plugin runtime composes the managed room schedule delivery module', () => {
+  const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  assert.match(source, /import \* as roomScheduleDelivery from '\.\/src\/host\/room-schedule-delivery\.js'/)
+  const modules = /const MODULES = \[(.*?)\]/s.exec(source)?.[1]
+  assert.ok(modules)
+  assert.match(modules, /schedules, roomScheduleDelivery, browser/)
 })

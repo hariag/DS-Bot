@@ -48,6 +48,7 @@ import * as repositorySync from './src/host/repository-sync.mjs'
 import * as capabilities from './src/host/capabilities.js'
 import * as learning from './src/host/learning.js'
 import * as schedules from './src/host/schedules.js'
+import * as roomScheduleDelivery from './src/host/room-schedule-delivery.js'
 import * as usage from './src/host/usage.js'
 import * as update from './src/host/update.js'
 import * as dshUpdate from './src/host/dsh-update.js'
@@ -75,7 +76,7 @@ export { name, inject } from './src/host/entry.js'
 // install. Listeners run and tools are listed in registration order, so this order holds:
 // usage meters model requests after every listener that rewrites them. privacy checks a
 // call before the hooks of tools do, so a closed call never reaches a card they show.
-const MODULES = [diagnostics, store, boardService, legacyReview, ledger, models, fanttecQuotaRetry, providers, userRedoSession, permissions, turns, steer, handoffs, requests, delivery, roster, folders, privacy, agents, prompt, timeContext, tools, issueReport, deepseekServices, chatIndex, groups, goals, agentCommands, tasks, approvals, resume, memory, parts, botTasks, changes, images, avatarLibrary, secrets, connectors, remoteChangeWatch, repositorySync, capabilities, learning, schedules, browser, browserPlugins, computer, usage, update, dshUpdate, thinking, mobile, feed, phone, mcpServer, im, channel, remote, officeSkills, goalSkills, manualSkills, localAgents]
+const MODULES = [diagnostics, store, boardService, legacyReview, ledger, models, fanttecQuotaRetry, providers, userRedoSession, permissions, turns, steer, handoffs, requests, delivery, roster, folders, privacy, agents, prompt, timeContext, tools, issueReport, deepseekServices, chatIndex, groups, goals, agentCommands, tasks, approvals, resume, memory, parts, botTasks, changes, images, avatarLibrary, secrets, connectors, remoteChangeWatch, repositorySync, capabilities, learning, schedules, roomScheduleDelivery, browser, browserPlugins, computer, usage, update, dshUpdate, thinking, mobile, feed, phone, mcpServer, im, channel, remote, officeSkills, goalSkills, manualSkills, localAgents]
 
 export function apply(ctx, config = {}) {
   createRuntime(ctx, config)
