@@ -7,6 +7,8 @@ import { install as installSide } from './side.js'
 import { handoffReply, questionReply, viewReply } from './parts.js'
 import { threadCurrentOfPart, threadOfPart } from './threads.js'
 import { validateViewAnswer } from 'deep-view/core'
+import { createQueueInspector } from './queue-inspect.mjs'
+import { versionInfo } from './version-info.mjs'
 import { BACKGROUND_AFTER_MAX_SEC, COLORS, EXTRA_COLORS, ROUTE } from './constants.js'
 
 const STAGED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
@@ -35,6 +37,113 @@ const isInternal = error => error instanceof TypeError || error instanceof Refer
 const MEMORY_LIMIT_SCOPES = new Set(['group', 'bot', 'team'])
 const MEMORY_LIMIT_MIN = 1_000
 const MEMORY_LIMIT_MAX = 200_000
+const QUEUE_PREVIEW_MAX = 400
+
+// Recovery notes are positive evidence of a delivery, not proof that an
+// unavailable Session inbox is empty: notes may be missing or unreadable.
+function recoveryNoted(unreadOf, sessionId) {
+  try {
+    const notes = unreadOf?.(sessionId)
+    return Array.isArray(notes) && notes.length > 0
+  } catch {
+    return false
+  }
+}
+
+export function groupQueueView(rooms, bots, getAgent, unreadOf) {
+  const result = {}
+  for (const room of Object.values(rooms ?? {})) {
+    for (const [botId, currentId] of Object.entries(room.sessions ?? {})) {
+      const earlier = (room.segments?.[botId] ?? []).map(segment => segment.sessionId).filter(Boolean)
+      const seen = new Set()
+      let unknown
+      for (const sessionId of new Set([currentId, ...earlier].filter(Boolean))) {
+        const inbox = getAgent?.(sessionId)?.inbox
+        const available = Array.isArray(inbox?.nextStep) && Array.isArray(inbox?.nextTurn)
+        if (!available) {
+          // A missing delivery note does not prove that an unloaded inbox is empty.
+          if (!unknown) {
+            unknown = { id: 'unavailable', roomId: room.id, roomName: room.name, unavailable: true }
+            ;(result[botId] ??= []).push(unknown)
+          }
+          if (recoveryNoted(unreadOf, sessionId)) unknown.noted = true
+          continue
+        }
+        for (const [index, item] of [...inbox.nextStep, ...inbox.nextTurn].entries()) {
+          if (item.source?.kind !== 'bot') continue
+          const exchangeId = item.source.exchangeId
+          if (exchangeId !== undefined && seen.has(exchangeId)) continue
+          if (exchangeId !== undefined) seen.add(exchangeId)
+          const content = Array.isArray(item.content) ? item.content : []
+          const text = content.filter(block => block?.type === 'text').map(block => block.text ?? '').join('\n')
+          ;(result[botId] ??= []).push({
+            id: item.id ?? item.source.exchangeId ?? `${sessionId}:${index}`, roomId: room.id, roomName: room.name, previous: sessionId !== currentId,
+            senderName: item.source.senderName ?? bots?.[item.source.askedBy ?? item.source.fromId]?.name ?? '',
+            text: text.length > QUEUE_PREVIEW_MAX ? `${text.slice(0, QUEUE_PREVIEW_MAX)}…` : text,
+          })
+        }
+      }
+    }
+  }
+  return result
+}
+
+export function earlierPrivateQueueView(bots, getAgent, unreadOf) {
+  const result = {}
+  for (const bot of Object.values(bots ?? {})) {
+    const seen = new Set()
+    let unknown
+    const otherParts = [
+      ...(bot.segments ?? []).map(segment => segment.sessionId),
+      ...(bot.openParts ?? []).flatMap(part => [part.sessionId, ...(part.segments ?? []).map(segment => segment.sessionId)]),
+    ]
+    for (const sessionId of new Set(otherParts.filter(id => id && id !== (bot.sessionId ?? bot.id)))) {
+      const inbox = getAgent?.(sessionId)?.inbox
+      const available = Array.isArray(inbox?.nextStep) && Array.isArray(inbox?.nextTurn)
+      if (!available) {
+        if (!unknown) {
+          unknown = { id: 'unavailable', unavailable: true }
+          ;(result[bot.id] ??= []).push(unknown)
+        }
+        if (recoveryNoted(unreadOf, sessionId)) unknown.noted = true
+        continue
+      }
+      for (const [index, item] of [...inbox.nextStep, ...inbox.nextTurn].entries()) {
+        if (item.source?.kind !== 'bot') continue
+        const exchangeId = item.source.exchangeId
+        if (exchangeId !== undefined && seen.has(exchangeId)) continue
+        if (exchangeId !== undefined) seen.add(exchangeId)
+        const content = Array.isArray(item.content) ? item.content : []
+        const text = content.filter(block => block?.type === 'text').map(block => block.text ?? '').join('\n')
+        ;(result[bot.id] ??= []).push({ id: item.id ?? exchangeId ?? `${sessionId}:${index}`, ...(exchangeId === undefined ? {} : { exchangeId }), senderName: item.source.senderName ?? '', text: text.length > QUEUE_PREVIEW_MAX ? `${text.slice(0, QUEUE_PREVIEW_MAX)}…` : text })
+      }
+    }
+  }
+  return result
+}
+
+// A group's own inbox is distinct from its members' inboxes. Include old parts;
+// missing agents are unknown, not empty. The client joins its live projection by ID.
+export function roomPostQueueView(rooms, sessionOfRoom, getAgent) {
+  const result = {}
+  for (const room of Object.values(rooms ?? {})) {
+    const rows = []
+    let unavailable = false
+    for (const sessionId of new Set([sessionOfRoom?.(room), ...(room.parts ?? []).map(part => part.sessionId)].filter(Boolean))) {
+      const inbox = getAgent?.(sessionId)?.inbox
+      if (!Array.isArray(inbox?.nextStep) || !Array.isArray(inbox?.nextTurn)) { unavailable = true; continue }
+      for (const [index, item] of [...inbox.nextStep, ...inbox.nextTurn].entries()) {
+        if (item.source?.kind !== 'bot' || item.source?.role !== 'post') continue
+        const exchangeId = typeof item.source.exchangeId === 'string' && item.source.exchangeId !== '' ? item.source.exchangeId : undefined
+        const content = Array.isArray(item.content) ? item.content : []
+        const text = content.filter(block => block?.type === 'text').map(block => block.text ?? '').join('\n')
+        rows.push({ id: item.id ?? exchangeId ?? `${sessionId}:${index}`, sessionId, ...(typeof item.id === 'string' && item.id !== '' ? { messageId: item.id } : {}), ...(exchangeId ? { exchangeId } : {}), senderName: item.source.senderName ?? '', text: text.length > QUEUE_PREVIEW_MAX ? `${text.slice(0, QUEUE_PREVIEW_MAX)}…` : text, attachments: content.filter(block => block?.type === 'image' || block?.type === 'file').length })
+      }
+    }
+    result[room.id] = { rows, unavailable }
+  }
+  return result
+}
 
 export function errorCode(error) {
   if (typeof error?.code === 'string' && error.code.startsWith('bot/')) return error.code
@@ -45,6 +154,7 @@ export function install(rt) {
   installBtw(rt)
   installSide(rt)
   const { ctx, state } = rt
+  const inspectQueue = createQueueInspector(rt)
 
   // The DSH interface language of the last browser that asked for the team.
   let uiLocale
@@ -61,7 +171,9 @@ export function install(rt) {
   // Models come from DSH, not state.json, so a provider added on the Models pages of Settings
   // changes the view without a new revision.
   const modelsKey = () => `${rt.cachedCatalog().map(entry => `${entry.ref}${entry.needsKey ? '!' : ''}${entry.reasoning ? `:${JSON.stringify(entry.reasoning)}` : ''}`).join(',')}|${rt.cachedDefault() ?? ''}`
+  const groupRowsBatchSize = 16
   const view = () => ({
+    groupRowsBatchSize,
     revision: state.revision,
     workspaceId: state.workspaceId ?? null,
     // `mainBotId` is the first Main Bot, which the sidebar shows as its tile.
@@ -100,7 +212,12 @@ export function install(rt) {
         return typeof sid === 'string' && sid !== ''
       })
       const last = (log ?? []).filter(line => line.kind === undefined).at(-1)
-      return { ...room, sessionId: rt.sessionOfRoom(room), ownParts: (ownParts ?? []).map(segment => segment.sessionId), parts, sessionMembers, ...(last ? { lastAt: last.time, preview: last.who === 'User' ? last.text : `${last.who}：${last.text}` } : {}) }
+      // Never expose a scoped check as complete without its live queue proof.
+      // If the goal subsystem is unavailable, mark every scoped assertion unresolved.
+      const goal = rt.goalView?.(rt.roomOf(room.id)) ?? (room.goal?.ownerReview?.checks ? {
+        ...room.goal, ownerReview: { ...room.goal.ownerReview, checks: Object.fromEntries(Object.entries(room.goal.ownerReview.checks).map(([id, check]) => [id, check?.scopedQueueVersion === undefined ? check : { ...check, unresolved: true }])) },
+      } : room.goal)
+      return { ...room, ...(goal === undefined ? {} : { goal }), sessionId: rt.sessionOfRoom(room), memberSessions: sessions ?? {}, sessionMembers, ownParts: (ownParts ?? []).map(segment => segment.sessionId), parts, ...(last ? { lastAt: last.time, preview: last.who === 'User' ? last.text : `${last.who}：${last.text}` } : {}) }
     }),
     // Deleted private Bots whose folder, memory and chats stay closed to the others.
     privateArchives: rt.archivesView(),
@@ -155,14 +272,15 @@ export function install(rt) {
     secretStore: rt.secretStoreStatus(),
     secrets: rt.secretsView(),
     activity: rt.activityView(),
-    // Which of a Bot's own chat parts has a turn right now, current or background:
+    groupRowKeys: Object.fromEntries(Object.keys(state.rooms).map(id => [id, rt.groupRowKey?.(id) ?? null])),
+// Which of a Bot's own chat parts has a turn right now, current or background:
     // the session list's Running mark reads this, not a guess from the transcript.
     partsRunning: Object.fromEntries(Object.values(state.bots)
       .flatMap(bot => [rt.chatOf(bot.id), ...(bot.openParts ?? []).map(part => part.sessionId)])
       .filter((sessionId, index, list) => sessionId !== undefined && list.indexOf(sessionId) === index)
       .filter(sessionId => rt.live.get(sessionId)?.turn !== undefined)
       .map(sessionId => [sessionId, true])),
-    work: { bots: rt.workView(), agents: rt.agentWorkView?.() ?? {}, rooms: rt.roomWorkView(), approvals: rt.approvalsView(), waiting: rt.waitingView?.() ?? {}, turns: rt.turnsView?.() ?? {}, steered: rt.steeredView?.() ?? {} },
+    work: { bots: rt.workView(), rooms: rt.roomWorkView(), approvals: rt.approvalsView(), waiting: rt.waitingView?.() ?? {}, agents: rt.agentWorkView?.() ?? {}, turns: rt.turnsView?.() ?? {}, steered: rt.steeredView?.() ?? {}, groupQueues: groupQueueView(state.rooms, state.bots, id => ctx.get?.('agents')?.get?.(id), rt.unreadOf), earlierPrivateQueues: earlierPrivateQueueView(state.bots, id => ctx.get?.('agents')?.get?.(id), rt.unreadOf), roomPostQueues: roomPostQueueView(state.rooms, room => rt.sessionOfRoom(room), id => ctx.get?.('agents')?.get?.(id)), roomPending: Object.fromEntries(Object.values(state.rooms).map(room => [room.id, { relay: rt.roomInbox?.get(room.id)?.length ?? 0, next: rt.roomLaterCount?.(room.id) ?? 0 }])) },
     memoryNews: rt.memoryNews(),
     memoryReviews: rt.memoryReviews(),
     learning: rt.learningView(),
@@ -191,17 +309,59 @@ export function install(rt) {
   // a per-run prefix: a window can outlive the host, and a counter that restarts
   // at 1 would let its stale key name a different answer.
   const liveRun = randomUUID()
+  // Bot instructions dominate large rosters and often outlive thousands of team saves.
+  // Only a client that echoes the exact current set can reuse its cached strings.
+  let instructions = new Map()
+  let instructionsSeq = 0
+  const withInstructionsKey = (out, previousKey) => {
+    if (instructionsSeq === 0 || out.bots.length !== instructions.size || out.bots.some(bot =>
+      !instructions.has(bot.id) || instructions.get(bot.id) !== bot.instructions)) {
+      instructions = new Map(out.bots.map(bot => [bot.id, bot.instructions]))
+      instructionsSeq++
+    }
+    const instructionsKey = `${liveRun}:instructions:${instructionsSeq}`
+    if (previousKey === instructionsKey) {
+      for (const bot of out.bots) delete bot.instructions // view() made a new object for each Bot
+    }
+    return { ...out, instructionsKey }
+  }
+  // The storage revision includes private bookkeeping. Compare only the public
+  // roster, leaving volatile fields and already-versioned instructions to their own cursors.
+  let rosterJson
+  let rosterSeq = 0
+  const publicRosterKey = (out, liveFields) => {
+    const fields = { ...out, bots: out.bots.map(({ instructions, ...bot }) => bot) }
+    delete fields.revision
+    delete fields.liveKey
+    for (const field of Object.keys(liveFields)) delete fields[field]
+    const json = JSON.stringify(fields)
+    if (json !== rosterJson) {
+      rosterJson = json
+      rosterSeq++
+    }
+    return `${liveRun}:roster:${rosterSeq}`
+  }
   let liveSeq = 0
   let liveCache = null
+  const liveHistory = new Map()
+  const scopedReviewState = () => JSON.stringify(Object.values(state.rooms ?? {}).flatMap(room => {
+    const goal = rt.goalView?.(room)
+    return Object.entries(goal?.ownerReview?.checks ?? {})
+      .map(([id, check]) => [room.id, id, check?.unresolved === true])
+  }).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))))
   const liveAnswer = () => {
     const value = live()
     const json = JSON.stringify(value)
-    if (liveCache?.json === json) return liveCache
-    return liveCache = { key: `${liveRun}:${++liveSeq}`, value, json }
+    const scope = scopedReviewState()
+    if (liveCache?.json === json && liveCache.scope === scope) return liveCache
+    liveCache = { key: `${liveRun}:${++liveSeq}`, value, json, scope }
+    liveHistory.set(liveCache.key, scope)
+    if (liveHistory.size > 64) liveHistory.delete(liveHistory.keys().next().value)
+    return liveCache
   }
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
-  const READS = new Set(['secret-store', 'secret-unlock', 'state', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'agent-chat', 'bot-task-read', 'run-stats', 'room-progress', 'group-rows', 'group-relay-replies', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'avatar-library', 'computer-system-status', 'computer-shot', 'local-agents', 'local-agent-models', 'browser-frame', 'hello', 'notices', 'avatar', 'room-chat', 'usage-summary', 'image', 'markdown-image', 'file-download', 'changes-check', 'deepseek-services', 'deepseek-synthesize'])
+  const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-release-list', 'board-release-report', 'board-proposal-list', 'board-history', 'board-operation', 'board-image', 'secret-store', 'secret-unlock', 'state', 'version', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'group-rows', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'avatar-library', 'computer-system-status', 'computer-shot', 'local-agents', 'local-agent-models', 'browser-frame', 'hello', 'notices', 'avatar', 'room-chat', 'usage-summary', 'image', 'markdown-image', 'file-download', 'changes-check', 'changes-summary', 'changes-diff', 'agent-chat', 'bot-task-read', 'group-relay-replies', 'deepseek-services', 'deepseek-synthesize'])
 
   async function setPrefs(body) {
     if (body.theme !== undefined) {
@@ -281,19 +441,74 @@ export function install(rt) {
       const readOnly = rt.readOnly()
       if (readOnly !== undefined && !READS.has(endpoint)) return fail(readOnly, 'bot/read-only')
       switch (endpoint) {
+        case 'queue-inspect':
+          return ok(await inspectQueue(body, signal))
+        // This handler is reached only through the authenticated instance-owner
+        // route; these endpoints record review notes and never dispatch work.
+        case 'legacy-review-list':
+        case 'legacy-review-get':
+        case 'legacy-review-prepare':
+        case 'legacy-review-operation':
+        case 'legacy-review-create':
+        case 'legacy-review-finding':
+        case 'legacy-review-decision':
+          return ok(await rt.legacyReviewCall(endpoint, body))
+        case 'board-project':
+        case 'board-project-bind':
+        case 'board-project-decide':
+        case 'board-list':
+        case 'board-release-list':
+        case 'board-release-create':
+        case 'board-release-plan':
+        case 'board-release-configure-team':
+        case 'board-release-update':
+        case 'board-release-assign':
+        case 'board-release-remove':
+        case 'board-release-queue':
+        case 'board-release-start':
+        case 'board-release-cancel':
+        case 'board-release-gate':
+        case 'board-release-check':
+        case 'board-release-report':
+        case 'board-proposal-list':
+        case 'board-proposal-decide':
+        case 'board-history':
+        case 'board-redo-preview':
+        case 'board-redo-confirm':
+        case 'board-operation':
+        case 'board-command':
+        case 'board-held-decision':
+        case 'board-queued-delivery-decision':
+        case 'board-operation-cancel':
+        case 'board-image':
+          return ok(await rt.boardCall(endpoint, body))
+        case 'board-upload':
+          return fail('Use the streaming image upload route.', 'bot/invalid')
+        case 'version':
+          return ok(versionInfo(state, rt.home))
         case 'state': {
           if (typeof body.locale === 'string' && /^[a-z]{2,3}(-[\w-]+)?$/i.test(body.locale)) uiLocale = body.locale
           if (readOnly === undefined) await rt.bootstrap()
           await rt.catalog()
           await rt.loadSecrets()
           const answer = liveAnswer()
-          if (body.since === state.revision && (body.models === undefined || body.models === modelsKey())) {
+          const reusable = body.live === answer.key || (liveHistory.has(body.live) && liveHistory.get(body.live) === answer.scope)
+          if (body.since === state.revision && (body.models === undefined || body.models === modelsKey()) && reusable) {
             if (body.live === answer.key) return ok({ revision: state.revision, unchanged: true, liveKey: answer.key })
             return ok({ revision: state.revision, unchanged: true, liveKey: answer.key, ...answer.value })
           }
           // A phone asks for photos by reference and fetches each once (`avatar`).
           const out = { ...view(), liveKey: answer.key, ...answer.value }
-          return ok(body.avatars === 'ref' ? rt.slimAvatars(out) : out)
+          if (body.avatars === 'ref') return ok(rt.slimAvatars(out))
+          if (typeof body.instructionsKey !== 'string') return ok(out)
+          const web = withInstructionsKey(out, body.instructionsKey)
+          if (typeof body.rosterKey !== 'string') return ok(web)
+          const rosterKey = publicRosterKey(web, answer.value)
+          if (reusable && body.rosterKey === rosterKey && body.instructionsKey === web.instructionsKey) {
+            return ok({ revision: state.revision, unchanged: true, liveKey: answer.key,
+              ...(body.live === answer.key ? {} : answer.value) })
+          }
+          return ok({ ...web, rosterKey })
         }
         case 'models':
           await rt.catalog({ fresh: true })
@@ -390,14 +605,18 @@ export function install(rt) {
         case 'group-rows': {
           await rt.load()
           const room = rt.roomOf(body.roomId) ?? rt.roomOf(rt.pastOwners.get(body.roomId)?.roomId)
-          const from = Number(body.from)
-          const to = body.to === undefined ? undefined : Number(body.to)
-          if (room === undefined || !Number.isInteger(from) || (to !== undefined && !Number.isInteger(to))) return ok({ rows: [], open: false, speaking: [] })
-          const view = rt.groupRowsView(room.id, from, to, typeof body.anchor === 'string' ? body.anchor : undefined)
-          // The newest call's rows grow while the group works; who is answering shows under them.
-          const active = view.open && rt.roomActive(room.id)
-          const speaking = active ? [...rt.roomProgress.values()].filter(round => round.roomId === room.id).flatMap(round => round.slots.filter(slot => slot.status === 'speaking').map(slot => slot.id)) : []
-          return ok({ ...view, active, speaking })
+          const readRange = range => {
+            const from = Number(range?.from)
+            const to = range?.to === undefined ? undefined : Number(range.to)
+            if (room === undefined || !Number.isInteger(from) || (to !== undefined && !Number.isInteger(to))) return { rows: [], open: false, speaking: [] }
+            const view = rt.groupRowsView(room.id, from, to, typeof range.anchor === 'string' ? range.anchor : undefined)
+            const active = view.open && rt.roomActive(room.id)
+            const speaking = active ? [...rt.roomProgress.values()].filter(round => round.roomId === room.id).flatMap(round => round.slots.filter(slot => slot.status === 'speaking').map(slot => slot.id)) : []
+            return { ...view, active, speaking }
+          }
+          if (body.ranges === undefined) return ok(readRange(body))
+          if (!Array.isArray(body.ranges) || body.ranges.length > groupRowsBatchSize) return fail('Invalid group range batch', 'bot/invalid')
+          return ok(body.ranges.map(readRange))
         }
         case 'group-relay-replies':
           await rt.load()
@@ -421,7 +640,7 @@ export function install(rt) {
           await rt.load()
           const bot = rt.botOf(String(body.botId ?? ''))
           if (bot === undefined) return fail('Unknown Bot', 'bot/not-found')
-          await rt.resumeBot(bot)
+          await rt.resumeBot(bot, body.sessionId, body.turn)
           return ok(true)
         }
         // The avatar library: photos the user imported once, kept beside the team.
@@ -460,6 +679,7 @@ export function install(rt) {
           const { room, changes } = await rt.updateRoom(body.id, {
             name: body.name,
             notice: body.notice,
+            expectedNotice: body.expectedNotice,
             mode: body.mode,
             admin: body.admin,
             members: Array.isArray(body.members) ? body.members : undefined,
@@ -542,19 +762,34 @@ export function install(rt) {
         case 'approval-answer':
           rt.answerApproval(body.id, body.choice)
           return ok(true)
-        // A stop that fails partway still parks the goal, or it wakes the admin again.
-        case 'stop-member-work':
+        // Persist a stop fence before cancellation can yield. If that write
+        // fails, still try to stop running work, but report the failure.
+        case 'stop-member-work': {
+          const roomId = String(body.roomId ?? '')
+          const botId = String(body.botId ?? '')
+          rt.goalStopBegin?.(roomId)
           try {
-            return ok(await rt.stopMemberWork(String(body.roomId ?? ''), String(body.botId ?? '')))
-          } finally {
-            rt.goalUserStopped?.(String(body.roomId ?? ''))
-          }
-        case 'stop-room-work':
+            await rt.load()
+            let token, fenceError
+            try { token = await rt.goalUserStopped?.(roomId, botId) } catch (error) { fenceError = error }
+            const stopped = await rt.stopMemberWork(roomId, botId)
+            if (fenceError !== undefined) throw fenceError
+            if (stopped === false) await rt.goalUndoEmptyMemberStop?.(roomId, token)
+            return ok(stopped)
+          } finally { rt.goalStopEnd?.(roomId) }
+        }
+        case 'stop-room-work': {
+          const roomId = String(body.roomId ?? '')
+          rt.goalStopBegin?.(roomId)
           try {
-            return ok(await rt.stopRoomWork(String(body.roomId ?? '')))
-          } finally {
-            rt.goalUserStopped?.(String(body.roomId ?? ''))
-          }
+            await rt.load()
+            let fenceError
+            try { await rt.goalUserStopped?.(roomId) } catch (error) { fenceError = error }
+            const stopped = await rt.stopRoomWork(roomId)
+            if (fenceError !== undefined) throw fenceError
+            return ok(stopped)
+          } finally { rt.goalStopEnd?.(roomId) }
+        }
         case 'goal-draft': {
           await rt.load()
           const result = await rt.goalDraft(String(body.roomId ?? ''), body.text)
@@ -960,8 +1195,15 @@ export function install(rt) {
     }
   }
 
-  rt.channelCall = handle
-  rt.phoneServe(handle)
+  // Neither carrier supplies the authenticated owner identity used by boards.
+  // Reject those calls rather than letting a remote peer inherit that identity.
+  const carrierCall = (endpoint, payload, signal) => endpoint === 'queue-inspect'
+    ? Promise.resolve(fail('Use the authenticated owner connection to inspect inboxes.', 'bot/refused'))
+    : endpoint.startsWith('legacy-review-') || endpoint.startsWith('board-')
+    ? Promise.resolve(fail('Use the authenticated owner connection for this board.', 'bot/refused'))
+    : handle(endpoint, payload, signal)
+  rt.channelCall = carrierCall
+  rt.phoneServe(carrierCall)
 
   // How a user message reaches a Session: a Bot id, a group chat's id, or an earlier
   // part of either resolves to its current part. `content` is the prompt blocks DSH
@@ -1051,112 +1293,4 @@ export function install(rt) {
     // next owner.
     return () => Promise.all([rt.btwDispose?.(), rt.sideDispose?.()])
   }, 'ds-bot: load state')
-}
-
-// Recovery notes are positive evidence of a delivery, not proof that an
-// unavailable Session inbox is empty: notes may be missing or unreadable.
-function recoveryNoted(unreadOf, sessionId) {
-  try {
-    const notes = unreadOf?.(sessionId)
-    return Array.isArray(notes) && notes.length > 0
-  } catch {
-    return false
-  }
-}
-
-// Local (AIOS) queue views used by the board and the group panel.
-const QUEUE_PREVIEW_MAX = 400
-export function groupQueueView(rooms, bots, getAgent, unreadOf) {
-  const result = {}
-  for (const room of Object.values(rooms ?? {})) {
-    for (const [botId, currentId] of Object.entries(room.sessions ?? {})) {
-      const earlier = (room.segments?.[botId] ?? []).map(segment => segment.sessionId).filter(Boolean)
-      const seen = new Set()
-      let unknown
-      for (const sessionId of new Set([currentId, ...earlier].filter(Boolean))) {
-        const inbox = getAgent?.(sessionId)?.inbox
-        const available = Array.isArray(inbox?.nextStep) && Array.isArray(inbox?.nextTurn)
-        if (!available) {
-          // A missing delivery note does not prove that an unloaded inbox is empty.
-          if (!unknown) {
-            unknown = { id: 'unavailable', roomId: room.id, roomName: room.name, unavailable: true }
-            ;(result[botId] ??= []).push(unknown)
-          }
-          if (recoveryNoted(unreadOf, sessionId)) unknown.noted = true
-          continue
-        }
-        for (const [index, item] of [...inbox.nextStep, ...inbox.nextTurn].entries()) {
-          if (item.source?.kind !== 'bot') continue
-          const exchangeId = item.source.exchangeId
-          if (exchangeId !== undefined && seen.has(exchangeId)) continue
-          if (exchangeId !== undefined) seen.add(exchangeId)
-          const content = Array.isArray(item.content) ? item.content : []
-          const text = content.filter(block => block?.type === 'text').map(block => block.text ?? '').join('\n')
-          ;(result[botId] ??= []).push({
-            id: item.id ?? item.source.exchangeId ?? `${sessionId}:${index}`, roomId: room.id, roomName: room.name, previous: sessionId !== currentId,
-            senderName: item.source.senderName ?? bots?.[item.source.askedBy ?? item.source.fromId]?.name ?? '',
-            text: text.length > QUEUE_PREVIEW_MAX ? `${text.slice(0, QUEUE_PREVIEW_MAX)}…` : text,
-          })
-        }
-      }
-    }
-  }
-  return result
-}
-
-export function earlierPrivateQueueView(bots, getAgent, unreadOf) {
-  const result = {}
-  for (const bot of Object.values(bots ?? {})) {
-    const seen = new Set()
-    let unknown
-    const otherParts = [
-      ...(bot.segments ?? []).map(segment => segment.sessionId),
-      ...(bot.openParts ?? []).flatMap(part => [part.sessionId, ...(part.segments ?? []).map(segment => segment.sessionId)]),
-    ]
-    for (const sessionId of new Set(otherParts.filter(id => id && id !== (bot.sessionId ?? bot.id)))) {
-      const inbox = getAgent?.(sessionId)?.inbox
-      const available = Array.isArray(inbox?.nextStep) && Array.isArray(inbox?.nextTurn)
-      if (!available) {
-        if (!unknown) {
-          unknown = { id: 'unavailable', unavailable: true }
-          ;(result[bot.id] ??= []).push(unknown)
-        }
-        if (recoveryNoted(unreadOf, sessionId)) unknown.noted = true
-        continue
-      }
-      for (const [index, item] of [...inbox.nextStep, ...inbox.nextTurn].entries()) {
-        if (item.source?.kind !== 'bot') continue
-        const exchangeId = item.source.exchangeId
-        if (exchangeId !== undefined && seen.has(exchangeId)) continue
-        if (exchangeId !== undefined) seen.add(exchangeId)
-        const content = Array.isArray(item.content) ? item.content : []
-        const text = content.filter(block => block?.type === 'text').map(block => block.text ?? '').join('\n')
-        ;(result[bot.id] ??= []).push({ id: item.id ?? exchangeId ?? `${sessionId}:${index}`, ...(exchangeId === undefined ? {} : { exchangeId }), senderName: item.source.senderName ?? '', text: text.length > QUEUE_PREVIEW_MAX ? `${text.slice(0, QUEUE_PREVIEW_MAX)}…` : text })
-      }
-    }
-  }
-  return result
-}
-
-// A group's own inbox is distinct from its members' inboxes. Include old parts;
-// missing agents are unknown, not empty. The client joins its live projection by ID.
-export function roomPostQueueView(rooms, sessionOfRoom, getAgent) {
-  const result = {}
-  for (const room of Object.values(rooms ?? {})) {
-    const rows = []
-    let unavailable = false
-    for (const sessionId of new Set([sessionOfRoom?.(room), ...(room.parts ?? []).map(part => part.sessionId)].filter(Boolean))) {
-      const inbox = getAgent?.(sessionId)?.inbox
-      if (!Array.isArray(inbox?.nextStep) || !Array.isArray(inbox?.nextTurn)) { unavailable = true; continue }
-      for (const [index, item] of [...inbox.nextStep, ...inbox.nextTurn].entries()) {
-        if (item.source?.kind !== 'bot' || item.source?.role !== 'post') continue
-        const exchangeId = typeof item.source.exchangeId === 'string' && item.source.exchangeId !== '' ? item.source.exchangeId : undefined
-        const content = Array.isArray(item.content) ? item.content : []
-        const text = content.filter(block => block?.type === 'text').map(block => block.text ?? '').join('\n')
-        rows.push({ id: item.id ?? exchangeId ?? `${sessionId}:${index}`, sessionId, ...(typeof item.id === 'string' && item.id !== '' ? { messageId: item.id } : {}), ...(exchangeId ? { exchangeId } : {}), senderName: item.source.senderName ?? '', text: text.length > QUEUE_PREVIEW_MAX ? `${text.slice(0, QUEUE_PREVIEW_MAX)}…` : text, attachments: content.filter(block => block?.type === 'image' || block?.type === 'file').length })
-      }
-    }
-    result[room.id] = { rows, unavailable }
-  }
-  return result
 }
