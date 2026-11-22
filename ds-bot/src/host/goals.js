@@ -252,6 +252,15 @@ export function reviseGoal(room, input, by, memberOf, memberNames, now = Date.no
   return { goal, reply: { event: 'revise', title: goal.title, count: goal.stages.length, text: reason } }
 }
 
+const TASK_NOTE_FIELDS = ['note', 'noteStatus', 'noteStatusVersion', 'noteAt', 'noteHistory']
+
+// Local (AIOS) note helpers used by the board editors; additive to 0.3.9.
+export function taskNoteUnchanged(task, note, now) {
+  if (note === undefined) return true
+  if (note === '') return TASK_NOTE_FIELDS.every(field => !Object.hasOwn(task, field))
+  return task.note === note && goalNoteContext(task, now).kind === 'current'
+}
+
 export function taskGoal(room, input, by, memberOf, memberNames, now = Date.now()) {
   const goal = room.goal
   if (goal === undefined) return { error: noGoal(room) }
