@@ -68,7 +68,11 @@ export function installRoomScheduleDelivery(rt) {
         const remaining = frame ? keepEntries(message, frame, entry => {
           if (!known(entry.schedule_id)) return true
           const binding = bindingFor(entry, sessionId)
-          return !ordinary && binding && !busy(rt.roomOf(binding.roomId), message.id)
+          if (!binding) return false
+          const room = rt.roomOf(binding.roomId)
+          const occupied = ordinary || busy(room, message.id)
+          if (occupied) retryScheduledReview(room, binding, target, JSON.stringify([entry.schedule_id, entry.occurrence_at]))
+          return !occupied
         }) : message
         skipped = !remaining
         if (remaining) target.followup(remaining)
@@ -98,13 +102,20 @@ export function installRoomScheduleDelivery(rt) {
   // quiet. The occurrence key keeps retries idempotent; the next ten-minute tick is
   // still the fallback if every retry finds the room busy.
   const retriggers = new Map()
+  let disposed = false
+  rt.ctx.effect?.(() => () => {
+    disposed = true
+    for (const timer of retriggers.values()) clearTimeout(timer)
+    retriggers.clear()
+  }, 'ds-bot: managed room schedule retries')
   function retryScheduledReview(room, binding, agent, key, tries = 0) {
-    if (retriggers.has(key) || tries >= 6) return
+    if (disposed || rt.readOnly?.() !== undefined || !room || retriggers.has(key) || tries >= 6) return
     const timer = setTimeout(() => {
       retriggers.delete(key)
+      if (disposed) return
       void rt.runScheduledRoomReview(room, key, agent, undefined, binding.prompt, undefined)
         .then(outcome => {
-          if (outcome === 'busy' || outcome === 'pending') retryScheduledReview(room, binding, agent, key, tries + 1)
+          if (!disposed && (outcome === 'busy' || outcome === 'pending')) retryScheduledReview(room, binding, agent, key, tries + 1)
         })
         .catch(error => rt.warn?.('ds-bot: deferred group check in %s failed: %s', room.id, error))
     }, 15000 + tries * 15000)
@@ -161,8 +172,9 @@ export function installRoomScheduleDelivery(rt) {
         if (result?.outcome === 'admitted' && result.message) {
           return { ...decision, messages: [result.message, ...retained.filter(contextOnly)] }
         }
+        if (result === 'busy' || result === 'pending') retryScheduledReview(room, binding, agent, key)
         if (result === 'no-goal') await checkBoardWithoutGoal(room, binding, key, message.id, agent)
-      }
+      } else retryScheduledReview(room, binding, agent, key)
     }
     skippedTurns.set(agent.id, turn)
     return { ...decision, messages: [] }

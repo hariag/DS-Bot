@@ -134,6 +134,24 @@ const startGoal = (host, extra = {}) => host.tool('group_goal', {
   action: 'start', title: 'Ship it', objective: 'Ship the thing', acceptance: 'it is shipped', stages: STAGES, ...extra,
 }, 'ga')
 
+test('a scheduled review retries the same occurrence after a busy result', async t => {
+  const host = await start(t)
+  await startGoal(host)
+  const room = host.rt.state.rooms.r1
+  host.rt.roomBusyForPatrol = () => false
+  room.goal.ownerReviewAt = 0
+  await host.rt.save({ required:true })
+  const agent = host.agentOf('r1')
+  agent.inbox.nextTurn.push({ id:'busy', source:{ kind:'bot' } })
+  const key = JSON.stringify(['managed', new Date().toISOString()])
+  assert.equal(await host.rt.runScheduledRoomReview(room, key, agent), 'busy')
+  assert.equal(room.scheduledReviewOccurrence.outcome, 'busy')
+  agent.inbox.nextTurn.length = 0
+  assert.equal(await host.rt.runScheduledRoomReview(room, key, agent), 'admitted')
+  assert.equal(room.scheduledReviewOccurrence.outcome, 'admitted')
+  assert.ok(room.goal.reviewAttempt)
+})
+
 test('group_goal start validates the goal with the contract refusals', async (t) => {
   const host = await start(t)
   const run = args => host.tool('group_goal', args, 'ga')

@@ -1659,7 +1659,10 @@ export function install(rt) {
     const at = Date.parse(identity[1])
     if (!Number.isSafeInteger(at) || !room || !agent || agent.session?.id !== rt.sessionOfRoom(room)
       || rt.roomOf(room.id) !== room || reviewDisposed || rt.readOnly() !== undefined) return 'invalid'
-    if (room.scheduledReviewOccurrence?.at >= at || receivingRooms.has(room.id)) return 'duplicate'
+    const previous = room.scheduledReviewOccurrence
+    const retryingRecordedNonAdmission = previous?.at === at && previous.key === occurrenceKey
+      && ['busy', 'pending'].includes(previous.outcome)
+    if (receivingRooms.has(room.id) || previous?.at > at || (previous?.at === at && !retryingRecordedNonAdmission)) return 'duplicate'
     receivingRooms.add(room.id)
     const now = Date.now()
     const goal = room.goal
