@@ -17370,11 +17370,11 @@ function parseColor(value) {
 var hex2 = (value) => Math.max(0, Math.min(255, Math.round(value))).toString(16).padStart(2, "0");
 var withAlpha = ({ r, g, b }, a) => `#${hex2(r)}${hex2(g)}${hex2(b)}${hex2(a * 255)}`;
 var alphaOf = (value) => parseColor(value)?.a ?? 1;
-function skinSurfaceVars({ main, sidebar: sidebar2, colors }, { minAlpha = MIN_SKIN_ALPHA } = {}) {
+function skinSurfaceVars({ main, sidebar, colors }, { minAlpha = MIN_SKIN_ALPHA } = {}) {
   const vars = {};
   const floor = (alpha) => Math.min(1, Math.max(alpha, minAlpha));
   const mainAlpha = alphaOf(main);
-  const sidebarAlpha = alphaOf(sidebar2);
+  const sidebarAlpha = alphaOf(sidebar);
   if (mainAlpha < 1) {
     const alpha = floor(mainAlpha);
     vars["--bt-skin-main"] = withAlpha(parseColor(colors.main) ?? { r: 252, g: 252, b: 252 }, alpha);
@@ -18048,7 +18048,7 @@ function liveSprings(apply2) {
   };
 }
 var CHOSEN = '[aria-pressed="true"],[aria-selected="true"],[aria-current="page"]';
-function useGlide(key, { axis = "x", selector: selector2 = CHOSEN, lead = SPRING_LEAD, trail = SPRING_TRAIL, box: given } = {}) {
+function useGlide(key, { axis = "x", selector = CHOSEN, lead = SPRING_LEAD, trail = SPRING_TRAIL, box: given } = {}) {
   const ownBox = (0, import_react.useRef)(null);
   const box = given ?? ownBox;
   const thumb = (0, import_react.useRef)(null);
@@ -18073,7 +18073,7 @@ function useGlide(key, { axis = "x", selector: selector2 = CHOSEN, lead = SPRING
     const knob = thumb.current;
     if (!container || !knob) return;
     const currentAxis = own.current.axis;
-    const chosen = container.querySelector(selector2);
+    const chosen = container.querySelector(selector);
     if (!chosen) {
       knob.dataset.hidden = "";
       return;
@@ -18126,14 +18126,14 @@ function Segmented({ label, value, className, children }) {
     children
   );
 }
-function useFlip(list, key, selector2, id = (node) => node.dataset.flip) {
+function useFlip(list, key, selector, id = (node) => node.dataset.flip) {
   const tops = (0, import_react.useRef)(null);
   (0, import_react.useLayoutEffect)(() => {
     const container = list.current;
     if (!container) return;
     const next = /* @__PURE__ */ new Map();
     const moving = tops.current !== null && !reducedMotion();
-    for (const node of container.querySelectorAll(selector2)) {
+    for (const node of container.querySelectorAll(selector)) {
       const name = id(node);
       const top = node.offsetTop;
       next.set(name, top);
@@ -19952,7 +19952,7 @@ body[data-bt-effects=off] :is([data-bt-enter="new"],[data-bt-enter="after-collap
 `;
 var PLUGIN_ID = "ds-bot";
 var ROOT_SELECTOR = /^(?:html\s+)?(?:body|:root)(?:\[[^\]]*\])*$/;
-var ownSelector = (selector2) => selector2.includes(".bt-") && !/\[class[*^$]?=/.test(selector2);
+var ownSelector = (selector) => selector.includes(".bt-") && !/\[class[*^$]?=/.test(selector);
 function splitTopLevel(text, separator) {
   const parts = [];
   let depth = 0;
@@ -19997,7 +19997,7 @@ function botOwnCss(css) {
       continue;
     }
     const selectors = splitTopLevel(head, ",").map((part) => part.trim());
-    if (selectors.every((selector2) => ROOT_SELECTOR.test(selector2))) {
+    if (selectors.every((selector) => ROOT_SELECTOR.test(selector))) {
       const custom = splitTopLevel(body, ";").map((part) => part.trim()).filter((part) => part.startsWith("--"));
       if (custom.length > 0) out += `${head}{${custom.join(";")}}
 `;
@@ -22153,8 +22153,8 @@ function ComputerCallRow({ sessionId, call: call2, roster, actions, hooks }) {
   const { value: argValue } = toolArgs(call2);
   const method = argValue("method") ?? String(call2?.name ?? "").replace(/^cua_driver_native__/, "");
   const stepApp = hooks?.useComputer?.((map) => (map.bots?.[roster.byId[sessionId]?.id]?.steps ?? []).find((step) => step.callId === call2?.callId)?.app);
-  const selector2 = argValue("params")?.selector;
-  const app = stepApp ?? (method === "getApp" && typeof selector2 === "string" && selector2 !== "" ? selector2 : void 0);
+  const selector = argValue("params")?.selector;
+  const app = stepApp ?? (method === "getApp" && typeof selector === "string" && selector !== "" ? selector : void 0);
   const shot = (call2?.content ?? []).find((block) => (block?.type === "image" || block?.type === "file") && block.attachment !== void 0)?.attachment;
   const [url, setUrl] = (0, import_react12.useState)(null);
   const [open, setOpen] = (0, import_react12.useState)(false);
@@ -23429,7 +23429,7 @@ function valueAxis(values, zero) {
   const pad2 = (high - low) * 0.1 || Math.abs(high) * 0.1 || 1;
   return niceTicks(low - pad2, high + pad2);
 }
-function columns2({ categories, series, unit, kind }, width, active, shown) {
+function columns({ categories, series, unit, kind }, width, active, shown) {
   const visible = series.filter((_, index) => shown[index]);
   const ticks = valueAxis(visible.flatMap((item) => item.values), kind !== "line");
   const lo = ticks[0];
@@ -23655,7 +23655,7 @@ function WidgetChart({ node, lookup, registerChart, refreshCharts }) {
   const label = typeof node.caption === "string" && node.caption !== "" ? node.caption : ui.t("Chart");
   const isDonut = kind === "donut";
   const legendBeside = isDonut && width >= 360;
-  const drawn = isDonut ? donut(data, legendBeside ? width - 200 : width, active, setActive) : kind === "hbar" ? rows(data, width, active, shown) : columns2(data, width, active, shown);
+  const drawn = isDonut ? donut(data, legendBeside ? width - 200 : width, active, setActive) : kind === "hbar" ? rows(data, width, active, shown) : columns(data, width, active, shown);
   const svgWidth = isDonut ? drawn.size : width;
   const move = (event) => {
     const keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
@@ -24134,9 +24134,9 @@ function SubmitInput({ node, ctx }) {
   );
 }
 function WidgetTable({ node, lookup }) {
-  const columns3 = (Array.isArray(node.columns) ? node.columns : []).filter((column) => column !== null && typeof column === "object");
+  const columns2 = (Array.isArray(node.columns) ? node.columns : []).filter((column) => column !== null && typeof column === "object");
   const rows2 = (Array.isArray(node.rows) ? node.rows : []).map((row) => (Array.isArray(row) ? row : []).map((cell) => resolve(cell, lookup, "")));
-  const numeric2 = columns3.map((_, index) => {
+  const numeric2 = columns2.map((_, index) => {
     const cells = rows2.map((row) => row[index]).filter((cell) => cell !== void 0 && cell !== "");
     return cells.length > 0 && cells.every((cell) => typeof cell === "number" || typeof cell === "string" && NUMERIC_CELL.test(cell.trim()));
   });
@@ -24146,11 +24146,11 @@ function WidgetTable({ node, lookup }) {
     (0, import_react16.createElement)(
       "table",
       null,
-      (0, import_react16.createElement)("thead", null, (0, import_react16.createElement)("tr", null, columns3.map((column, index) => (0, import_react16.createElement)("th", { key: column.key ?? index, scope: "col", className: numeric2[index] ? "dv-num" : void 0 }, column.label)))),
+      (0, import_react16.createElement)("thead", null, (0, import_react16.createElement)("tr", null, columns2.map((column, index) => (0, import_react16.createElement)("th", { key: column.key ?? index, scope: "col", className: numeric2[index] ? "dv-num" : void 0 }, column.label)))),
       (0, import_react16.createElement)("tbody", null, rows2.map((row, rowIndex) => (0, import_react16.createElement)(
         "tr",
         { key: rowIndex },
-        columns3.map((column, columnIndex) => (0, import_react16.createElement)("td", { key: column.key ?? columnIndex, className: numeric2[columnIndex] ? "dv-num" : void 0 }, cellText2(row[columnIndex])))
+        columns2.map((column, columnIndex) => (0, import_react16.createElement)("td", { key: column.key ?? columnIndex, className: numeric2[columnIndex] ? "dv-num" : void 0 }, cellText2(row[columnIndex])))
       )))
     )
   );
@@ -26475,7 +26475,7 @@ function DeepSeekSignIn({ useUi, actions }) {
 function SignInHost({ entry, actions }) {
   const [ops] = (0, import_react20.useState)(() => entry.inject?.() ?? {});
   const close = () => actions.closeSignIn();
-  const useHook = (source) => (selector2) => (0, import_react20.useSyncExternalStore)(source.subscribe, () => selector2(source.getSnapshot()));
+  const useHook = (source) => (selector) => (0, import_react20.useSyncExternalStore)(source.subscribe, () => selector(source.getSnapshot()));
   const [hooks] = (0, import_react20.useState)(() => ({ useAccount: useHook(ops.hooks.account), useTheme: useHook(ops.hooks.theme) }));
   return (0, import_react20.createElement)(entry.component, {
     ...ops,
@@ -33298,11 +33298,8 @@ function showsDshRow(dsh, app) {
 
 // src/client/frame-watch.js
 var sidebarTrackWidth = () => {
-  const column = typeof document === "undefined" ? null : document.querySelector('[class*="_sidebarCol"]');
-  if (!column) return null;
-  const position = typeof getComputedStyle === "function" ? getComputedStyle(column).position : "";
-  if (position === "absolute" || position === "fixed") return 0;
-  return trackRoom(column.getBoundingClientRect());
+  const box = typeof document === "undefined" ? void 0 : document.querySelector('[class*="_sidebarCol"]')?.getBoundingClientRect();
+  return box === void 0 ? null : trackRoom(box);
 };
 var dshCollapsed = () => {
   if (typeof document === "undefined") return null;
@@ -33315,20 +33312,18 @@ var roomRule = () => {
   const live = room.rule?.parentStyleSheet?.ownerNode?.isConnected;
   if (live && room.selector) return room.rule;
   const column = document.querySelector('[class*="_centerCol"]');
-  const selector2 = column ? [...column.classList].filter((name) => name.includes("_centerCol")).map((name) => `.${CSS.escape(name)}`).join(",") : "";
-  if (live && !selector2) return room.rule;
+  const selector = column ? [...column.classList].filter((name) => name.includes("_centerCol")).map((name) => `.${CSS.escape(name)}`).join(",") : "";
+  if (live && !selector) return room.rule;
   const declarations2 = room.rule?.style.cssText ?? "";
   room.rule?.parentStyleSheet?.ownerNode?.remove();
-  const style = installStyles(`${selector2 || '[class*="_centerCol"]'}{${declarations2}}`, "chat-room");
+  const style = installStyles(`${selector || '[class*="_centerCol"]'}{${declarations2}}`, "chat-room");
   room.rule = style.sheet.cssRules[0];
-  room.selector = selector2;
+  room.selector = selector;
   return room.rule;
 };
 var margin = (side, width, style) => {
   if (width === null) style.removeProperty(`margin-${side}`);
   else style.setProperty(`margin-${side}`, `${width}px`, "important");
-  if (style.marginLeft || style.marginRight) style.setProperty("width", "auto", "important");
-  else style.removeProperty("width");
 };
 var roomHold = 0;
 var chatRoom = {
@@ -33360,16 +33355,19 @@ var chatRoom = {
 function installFrameWatch(frame2) {
   let collapsedWidth = collapsedTrackWidth();
   let raf = 0;
-  const watched = /* @__PURE__ */ new WeakSet();
+  const selector = '[class*="_sidebarCol"],[class*="_centerCol"]';
+  let sidebar = null;
+  let columns2 = [];
+  let rescan = true;
   const observer = typeof ResizeObserver === "function" ? new ResizeObserver(() => schedule()) : null;
   const measure = () => {
     if (rescan) {
       rescan = false;
       const next = [...document.querySelectorAll(selector)];
-      for (const column of columns) if (!next.includes(column)) observer?.unobserve(column);
-      for (const column of next) if (!columns.includes(column)) observer?.observe(column);
-      columns = next;
-      sidebar = columns.find((column) => column.matches('[class*="_sidebarCol"]')) ?? null;
+      for (const column of columns2) if (!next.includes(column)) observer?.unobserve(column);
+      for (const column of next) if (!columns2.includes(column)) observer?.observe(column);
+      columns2 = next;
+      sidebar = columns2.find((column) => column.matches('[class*="_sidebarCol"]')) ?? null;
     }
     const animating = sidebar?.closest("[data-animating]") != null;
     const width = !sidebar || animating ? null : trackRoom(sidebar.getBoundingClientRect());
@@ -33387,15 +33385,21 @@ function installFrameWatch(frame2) {
       measure();
     });
   };
-  const relevant = (records) => records.some((record) => {
-    if (record.type === "attributes") return true;
-    const target = record.target;
-    if (target instanceof Element && target.closest("[data-chat-flow],[data-composer-card]")) return false;
-    return true;
-  });
   measure();
   const mutations = new MutationObserver((records) => {
-    if (relevant(records)) schedule();
+    for (const record of records) {
+      if (record.type === "attributes") {
+        if (sidebar && record.target.contains(sidebar)) schedule();
+        continue;
+      }
+      if (columns2.some((column) => !column.isConnected)) rescan = true;
+      else if (columns2.some((column) => column.contains(record.target))) continue;
+      else if ([...record.addedNodes].some((node) => node.nodeType === 1 && (node.matches(selector) || node.querySelector(selector)))) rescan = true;
+      if (rescan) {
+        schedule();
+        break;
+      }
+    }
   });
   mutations.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-sidebar-collapsed", "data-animating"] });
   window.addEventListener("resize", schedule);
@@ -34090,8 +34094,8 @@ function TeamSidebar(props) {
     delete column.dataset.folding;
     grip.setPointerCapture?.(event.pointerId);
     chatRoom.hold(true);
-    const columns3 = chatRoom.columns();
-    for (const col of columns3) col.style.setProperty("transition", "none", "important");
+    const columns2 = chatRoom.columns();
+    for (const col of columns2) col.style.setProperty("transition", "none", "important");
     const panes = [...document.querySelectorAll(".bt-pane")];
     const offLeft = frameSnap.collapsedWidth ?? 0;
     let last = null;
@@ -34103,18 +34107,18 @@ function TeamSidebar(props) {
       column.style.setProperty("--bt-lc-w", `${width}px`);
       const occupied = at.left === "open" ? width : RAIL_WIDTH;
       const push = Math.max(0, occupied - offLeft);
-      for (const col of columns3) col.style.setProperty("margin-left", `${push}px`, "important");
+      for (const col of columns2) col.style.setProperty("margin-left", `${push}px`, "important");
       for (const pane of panes) pane.style.left = `${occupied}px`;
     };
     let springUntil = 0;
     const springOff = () => {
       springUntil = 0;
       delete column.dataset.folding;
-      for (const col of columns3) col.style.setProperty("transition", "none", "important");
+      for (const col of columns2) col.style.setProperty("transition", "none", "important");
     };
     const springOn = () => {
       column.dataset.folding = "";
-      for (const col of columns3) col.style.setProperty("transition", `margin-left ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}`, "important");
+      for (const col of columns2) col.style.setProperty("transition", `margin-left ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}`, "important");
       springUntil = performance.now() + SPRING_SHAPE.duration;
       clearTimeout(springTimer.current);
       springTimer.current = setTimeout(springOff, SPRING_SHAPE.duration);
@@ -34132,7 +34136,7 @@ function TeamSidebar(props) {
     const finish = () => {
       clearTimeout(springTimer.current);
       if (column.isConnected && last !== null) chatRoom.setLeft(Math.max(0, (last.left === "open" ? last.width : RAIL_WIDTH) - offLeft));
-      for (const col of columns3) {
+      for (const col of columns2) {
         col.style.removeProperty("margin-left");
         col.style.removeProperty("transition");
       }
@@ -35811,13 +35815,13 @@ function niceTop(max) {
   const step = 10 ** Math.floor(Math.log10(max));
   return [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].map((scale) => scale * step).find((value) => value >= max);
 }
-function Chart({ range, columns: columns3, series, tipSeries, by, onBy, onPick }) {
+function Chart({ range, columns: columns2, series, tipSeries, by, onBy, onPick }) {
   const [hover, setHover] = (0, import_react42.useState)(null);
-  const top = niceTop(Math.max(0, ...columns3.map((column) => column.total)));
-  const count = columns3.length;
+  const top = niceTop(Math.max(0, ...columns2.map((column) => column.total)));
+  const count = columns2.length;
   const fillOf = new Map(series.map((entry) => [entry.key, entry.fill]));
   const tipOf = new Map(tipSeries.map((entry) => [entry.key, entry]));
-  const tip = hover === null ? null : columns3[hover];
+  const tip = hover === null ? null : columns2[hover];
   const tipSide = hover !== null && hover >= count / 2 ? { right: `calc(${(count - hover) / count * 100}% + 8px)` } : { left: `calc(${(hover + 1) / count * 100}% + 8px)` };
   return (0, import_react42.createElement)(
     "section",
@@ -35839,7 +35843,7 @@ function Chart({ range, columns: columns3, series, tipSeries, by, onBy, onPick }
         (0, import_react42.createElement)(
           "div",
           { className: "bt-us-cols" },
-          columns3.map((column, at) => (0, import_react42.createElement)("div", {
+          columns2.map((column, at) => (0, import_react42.createElement)("div", {
             key: `${range.from ? `${range.from}~${range.to}` : range.id}:${column.key}`,
             className: "bt-us-col",
             "data-on": hover === at ? "" : void 0,
@@ -35868,7 +35872,7 @@ function Chart({ range, columns: columns3, series, tipSeries, by, onBy, onPick }
         "div",
         { className: "bt-us-ticks", "aria-hidden": true },
         // A preset counts its labels back from now; a picked span forward from its first day.
-        columns3.map((column, at) => (0, import_react42.createElement)(
+        columns2.map((column, at) => (0, import_react42.createElement)(
           "span",
           { key: column.key, "data-now": at === count - 1 && range.ends !== false ? "" : void 0 },
           (range.from ? at : count - 1 - at) % range.stride === 0 ? column.tick : ""
@@ -36234,12 +36238,12 @@ function UsagePage({ roster, actions, focusId }) {
     const tipSeries2 = face2 ? PARTS.map(([key, strength]) => ({ key, name: partLabel(key), fill: soften(face2.paint, strength) })) : series2;
     const fillOf2 = new Map(series2.map((entry) => [entry.key, entry.fill]));
     const shownKeys = new Set(series2.map((entry) => entry.key));
-    const columns4 = part2.buckets.map((bucket) => {
+    const columns3 = part2.buckets.map((bucket) => {
       const parts = face2 ? [["all", bucket.sum.total]] : series2.map((entry) => [entry.key, entry.key === "more" ? [...bucket.stacks].filter(([key]) => key !== "rest" && !shownKeys.has(key)).reduce((sum, [, value]) => sum + value, 0) : bucket.stacks.get(entry.key) ?? 0]);
       const tip = face2 ? PARTS.map(([key]) => [key, bucket.sum[key]]) : parts;
       return { key: bucket.key, tick: tickOf(range, bucket), title: titleOf2(range, bucket), total: bucket.sum.total, parts, tip };
     });
-    return { faces: faces2, models: models2, ownerAt: ownerAt2, modelAt, face: face2, keep: keep2, all: all2, part: part2, series: series2, tipSeries: tipSeries2, fillOf: fillOf2, columns: columns4, ranked: ranked2, isBot: isBot2, activeDays: activeDays2, oldest: oldest2 };
+    return { faces: faces2, models: models2, ownerAt: ownerAt2, modelAt, face: face2, keep: keep2, all: all2, part: part2, series: series2, tipSeries: tipSeries2, fillOf: fillOf2, columns: columns3, ranked: ranked2, isBot: isBot2, activeDays: activeDays2, oldest: oldest2 };
   }, [view, rangeId, span, by, focusId, roster]);
   const root = (0, import_react42.useRef)(null);
   (0, import_react42.useEffect)(() => {
@@ -36261,7 +36265,7 @@ function UsagePage({ roster, actions, focusId }) {
       )
     );
   }
-  const { faces, models, ownerAt, face, keep, all, part, series, tipSeries, fillOf, columns: columns3, ranked, isBot, activeDays, oldest } = shaped;
+  const { faces, models, ownerAt, face, keep, all, part, series, tipSeries, fillOf, columns: columns2, ranked, isBot, activeDays, oldest } = shaped;
   const pick2 = (next) => actions.openSettings("usage", `${next.kind}:${next.key}`);
   const chooseRange = (id) => {
     if (id !== "custom") {
@@ -36318,7 +36322,7 @@ function UsagePage({ roster, actions, focusId }) {
         "div",
         { key: "sheet", className: "bt-us-sheet" },
         (0, import_react42.createElement)(Stats, { key: "stats", range, total: part.total, previous: part.previous }),
-        (0, import_react42.createElement)(Chart, { key: "chart", range, columns: columns3, series, tipSeries, onPick: pick2 }),
+        (0, import_react42.createElement)(Chart, { key: "chart", range, columns: columns2, series, tipSeries, onPick: pick2 }),
         (0, import_react42.createElement)(
           "div",
           { key: "pair", className: "bt-us-pair" },
@@ -36342,7 +36346,7 @@ function UsagePage({ roster, actions, focusId }) {
         "div",
         { key: "sheet", className: "bt-us-sheet" },
         (0, import_react42.createElement)(Stats, { key: "stats", range, total: all.total, previous: all.previous }),
-        (0, import_react42.createElement)(Chart, { key: "chart", range, columns: columns3, series, tipSeries, by, onBy: setBy, onPick: pick2 }),
+        (0, import_react42.createElement)(Chart, { key: "chart", range, columns: columns2, series, tipSeries, by, onBy: setBy, onPick: pick2 }),
         (0, import_react42.createElement)(
           "div",
           { key: "pair", className: "bt-us-pair" },
@@ -43131,16 +43135,16 @@ var CONFIRM_FIELD_LABELS = {
   reason: "Reason for correction"
 };
 function boardColumns(tasks) {
-  const columns3 = new Map(COLUMNS.map(([key]) => [key, []]));
-  columns3.set("unknown", []);
+  const columns2 = new Map(COLUMNS.map(([key]) => [key, []]));
+  columns2.set("unknown", []);
   const seen = /* @__PURE__ */ new Set();
   for (const task of Array.isArray(tasks) ? tasks : []) {
     if (!task || typeof task.id !== "string" || !task.id || seen.has(task.id)) throw new Error("Invalid or duplicate task ID");
     seen.add(task.id);
     const lane = LANE_OF_STATUS[task.status] ?? task.status;
-    columns3.get(KNOWN.has(lane) ? lane : "unknown").push(task);
+    columns2.get(KNOWN.has(lane) ? lane : "unknown").push(task);
   }
-  return columns3;
+  return columns2;
 }
 function pendingStore(scope) {
   try {
@@ -47589,8 +47593,8 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
   const personalTasks = personal ? activeFiltered.filter((task) => PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress)) : [];
   const personalIds = new Set(personalTasks.map((task) => task.id));
   const legacyTasks = activeFiltered.filter((task) => task.legacy);
-  const columns3 = boardColumns(activeFiltered.filter((task) => !task.legacy && !personalIds.has(task.id)));
-  const listedBase = [...COLUMNS, ...columns3.get("unknown").length ? [["unknown", "Status unknown"]] : []];
+  const columns2 = boardColumns(activeFiltered.filter((task) => !task.legacy && !personalIds.has(task.id)));
+  const listedBase = [...COLUMNS, ...columns2.get("unknown").length ? [["unknown", "Status unknown"]] : []];
   const listed = lanePrefs.order.length ? [...listedBase].sort((left, right) => {
     const li = lanePrefs.order.indexOf(left[0]), ri = lanePrefs.order.indexOf(right[0]);
     return (li === -1 ? 999 : li) - (ri === -1 ? 999 : ri);
@@ -48248,7 +48252,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
           (0, import_react59.createElement)(ColumnRail, { label: t("Workflow") }, listed.map(([status, label]) => {
             const scheduleOnCreate = !personal && ["waiting", "ready", "working"].includes(status);
             const followup = personal || ["reported", "done", "unknown"].includes(status);
-            return renderLane("workflow", status, t(label), columns3.get(status), { laneLabel: t(label), scheduleOnCreate, followup, noCreate: status === "cancelled", defaultDraft: status === "draft", defaultOwner: personal ? "user" : scope.kind === "personal" ? scope.id : "", ownerOnly: scope.kind === "personal" });
+            return renderLane("workflow", status, t(label), columns2.get(status), { laneLabel: t(label), scheduleOnCreate, followup, noCreate: status === "cancelled", defaultDraft: status === "draft", defaultOwner: personal ? "user" : scope.kind === "personal" ? scope.id : "", ownerOnly: scope.kind === "personal" });
           }))
         ) : null,
         view === "type" ? typeSection : null,
@@ -55146,20 +55150,20 @@ function BotPanel({ pane, leaving, room: room2, overlay, roster, actions, useSes
     setDragging(true);
     setSettling(false);
     chatRoom.hold(true);
-    const columns3 = chatRoom.columns();
-    for (const column of columns3) column.style.setProperty("transition", "none", "important");
+    const columns2 = chatRoom.columns();
+    for (const column of columns2) column.style.setProperty("transition", "none", "important");
     const onMove = (move) => {
       next = fitWidth(from.width + from.x - move.clientX, range);
       panel.style.width = `${next}px`;
-      if (columns3.length === 0) chatRoom.setRight(next);
-      for (const column of columns3) column.style.setProperty("margin-right", `${next}px`, "important");
+      if (columns2.length === 0) chatRoom.setRight(next);
+      for (const column of columns2) column.style.setProperty("margin-right", `${next}px`, "important");
     };
     const ends = ["pointerup", "pointercancel", "lostpointercapture"];
     const cleanup = () => {
       dragCleanup.current = null;
       grip.removeEventListener("pointermove", onMove);
       for (const name of ends) grip.removeEventListener(name, onEnd);
-      for (const column of columns3) {
+      for (const column of columns2) {
         column.style.removeProperty("margin-right");
         column.style.removeProperty("transition");
       }
@@ -58505,8 +58509,8 @@ function apply(ctx) {
     }
     if (value.memoryNews !== void 0) noteMemoryNews(value.memoryNews);
     const current2 = roster.getSnapshot();
-    if (value.groupRowKeys !== void 0 && JSON.stringify(value.groupRowKeys) !== JSON.stringify(current2.groupRowKeys ?? {})) live2.groupRowKeys = value.groupRowKeys;
     const live2 = {};
+    if (value.groupRowKeys !== void 0 && JSON.stringify(value.groupRowKeys) !== JSON.stringify(current2.groupRowKeys ?? {})) live2.groupRowKeys = value.groupRowKeys;
     if (value.partsRunning !== void 0 && JSON.stringify(value.partsRunning) !== JSON.stringify(current2.partsRunning ?? {})) live2.partsRunning = value.partsRunning;
     if (value.secretStore !== void 0 && JSON.stringify(value.secretStore) !== JSON.stringify(current2.secretStore ?? {})) live2.secretStore = value.secretStore;
     if (value.secrets !== void 0 && JSON.stringify(value.secrets) !== JSON.stringify(current2.secrets ?? [])) live2.secrets = value.secrets;
@@ -59386,13 +59390,13 @@ function apply(ctx) {
     }
   };
   ctx.effect(() => {
-    const sidebar2 = ctx.get("sidebarRight");
-    if (!sidebar2) return void 0;
+    const sidebar = ctx.get("sidebarRight");
+    if (!sidebar) return void 0;
     let open = rightColumnOpen(document);
     const switchWindow = createSwitchWindow((done) => setTimeout(done, 400));
     const collapseColumn = () => {
       try {
-        if (sidebar2.isExpanded()) sidebar2.toggleExpanded();
+        if (sidebar.isExpanded()) sidebar.toggleExpanded();
       } catch (error) {
         actions.reportError(error, "right-sidebar");
       }
@@ -59410,7 +59414,7 @@ function apply(ctx) {
       attributes: true,
       attributeFilter: RIGHTBAR_ATTRIBUTES
     });
-    const offMounted = sidebar2.mounted.subscribe(() => switchWindow.moved());
+    const offMounted = sidebar.mounted.subscribe(() => switchWindow.moved());
     let drawer = ui.getSnapshot().details !== null;
     const offUi = ui.subscribe(() => {
       const next = ui.getSnapshot().details !== null;

@@ -227,8 +227,8 @@ const ui = createSource({ details: null, view: 'details', readOnlyPart: null, re
 
     const current = roster.getSnapshot()
     // Connector, capability, phone and MCP states change without a new revision.
-    if (value.groupRowKeys !== undefined && JSON.stringify(value.groupRowKeys) !== JSON.stringify(current.groupRowKeys ?? {})) live.groupRowKeys = value.groupRowKeys
     const live = {}
+    if (value.groupRowKeys !== undefined && JSON.stringify(value.groupRowKeys) !== JSON.stringify(current.groupRowKeys ?? {})) live.groupRowKeys = value.groupRowKeys
     if (value.partsRunning !== undefined && JSON.stringify(value.partsRunning) !== JSON.stringify(current.partsRunning ?? {})) live.partsRunning = value.partsRunning
     if (value.secretStore !== undefined && JSON.stringify(value.secretStore) !== JSON.stringify(current.secretStore ?? {})) live.secretStore = value.secretStore
     if (value.secrets !== undefined && JSON.stringify(value.secrets) !== JSON.stringify(current.secrets ?? [])) live.secrets = value.secrets
