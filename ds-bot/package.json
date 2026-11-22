@@ -1,6 +1,6 @@
 {
   "name": "ds-bot",
-  "version": "0.3.9+aios.20261122.16",
+  "version": "0.3.9+aios.20261122.17",
   "description": "DS Bot: a team of long-lived Bots for DeepSeek Harness, with Main Bots, Bot-to-Bot messages and group chats",
   "keywords": [
     "dsh-plugin",
@@ -91,9 +91,9 @@
     "ds-bot-mcp": "./bin/ds-bot-mcp.mjs"
   },
   "dsBot": {
-    "build": "aios-20261122.16",
+    "build": "aios-20261122.17",
     "fork": "hariag/DS-Bot",
-    "forkCommit": "71e17ae3741963061833854f5f657de1a9e8b4a1",
+    "forkCommit": "4df793f611925fa7f8296803557d86d80cf0a8f1",
     "upstreamCommit": "881b57b5",
     "changes": [
       "goal-pass-gate",
@@ -109,7 +109,8 @@
       "privacy-board-guard",
       "command-catalog-coalescing",
       "group-progress-evidence",
-      "managed-room-schedule-runtime"
+      "managed-room-schedule-runtime",
+      "managed-room-schedule-delivery"
     ]
   }
 }
