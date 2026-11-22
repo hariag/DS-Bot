@@ -28,6 +28,11 @@ const TASK_TYPES = [
   ['test', 'Test'], ['deployment', 'Deployment'], ['operations', 'Operations'], ['bugfix', 'Bugfix'],
   ['ui', 'UI design'], ['ux', 'UX'], ['other', 'Other'],
 ]
+// A block DS Bot set from how the member's work ended, not one the Bot reported.
+const blockedReason = blocked => blocked?.cause === 'stopped' ? t('Stopped by the user')
+  : blocked?.cause === 'restarted' ? t('Not updated after a restart')
+    : blocked?.code ? t('Its model call failed ({code})', { code: `${blocked.code}${blocked.status ? ` ${blocked.status}` : ''}` }) : ''
+
 const TASK_TYPE_LABELS = Object.fromEntries(TASK_TYPES)
 const TASK_TYPE_KEYS = new Set(TASK_TYPES.map(([id]) => id))
 const BULK_STATUS_ACTIONS = [
@@ -1087,7 +1092,7 @@ function LabelsEditor({ task, editable, disabled, onSave }) {
     h('div', { className: 'bt-card-side-head' }, h('h4', null, t('Labels')), editable && !editing ? h('button', { type: 'button', className: 'bt-card-mini', onClick: start }, h(PencilIcon), t('Edit')) : null),
     editing ? h('div', { className: 'bt-card-editor' },
       h('div', { className: 'bt-board-card-labels' }, draft.length ? draft.map(label => h(LabelChip, { key: label, label, disabled, onRemove: () => setDraft(current => current.filter(item => item !== label)) })) : h('span', { className: 'bt-card-muted' }, t('No labels'))),
-      h('div', { className: 'bt-card-inline' }, h('input', { value: entry, disabled, placeholder: t('Add a label'), 'aria-label': t('Add a label'), onChange: event => setEntry(event.target.value), onKeyDown: event => { if (event.key === 'Enter') { event.preventDefault(); add() } } }),
+      h('div', { className: 'bt-card-inline' }, h('input', { value: entry, disabled, placeholder: t('Add a label'), 'aria-label': t('Add a label'), onChange: event => setEntry(event.target.value), onKeyDown: event => { if (event.key === 'Enter' && !event.nativeEvent?.isComposing && event.keyCode !== 229) { event.preventDefault(); add() } } }),
         h('button', { type: 'button', className: 'bt-btn bt-btn-ghost', disabled, onClick: add }, t('Add'))),
       error ? h('p', { className: 'bt-form-error', role: 'alert' }, error) : null,
       h('div', { className: 'bt-card-editor-actions' },
@@ -1130,7 +1135,7 @@ function ChecklistEditor({ task, editable, disabled, onSave }) {
   return h(CardSection, { title: t('Checklist'), action: items.length ? h(ChecklistProgress, { task }) : null, className: 'bt-card-checklist' },
     items.length ? h('ul', { className: 'bt-card-checklist-list' }, items.map(item => h('li', { key: item.id, className: 'bt-card-checklist-item' },
       editingId === item.id ? h('div', { className: 'bt-card-inline bt-card-checklist-edit' },
-        h('input', { value: draft, disabled: disabled || saving, 'aria-label': t('Edit checklist item'), autoFocus: true, onChange: event => setDraft(event.target.value), onKeyDown: event => { if (event.key === 'Enter') { event.preventDefault(); void saveEdit(item) } else if (event.key === 'Escape') { event.preventDefault(); setEditingId('') } } }),
+        h('input', { value: draft, disabled: disabled || saving, 'aria-label': t('Edit checklist item'), autoFocus: true, onChange: event => setDraft(event.target.value), onKeyDown: event => { if (event.key === 'Enter' && !event.nativeEvent?.isComposing && event.keyCode !== 229) { event.preventDefault(); void saveEdit(item) } else if (event.key === 'Escape') { event.preventDefault(); setEditingId('') } } }),
         h('button', { type: 'button', className: 'bt-btn bt-btn-primary', disabled: disabled || saving || !draft.trim(), onClick: () => void saveEdit(item) }, t('Save')),
         h('button', { type: 'button', className: 'bt-btn bt-btn-ghost', disabled: saving, onClick: () => setEditingId('') }, t('Cancel')))
         : h('label', { className: 'bt-card-check' }, h('input', { type: 'checkbox', checked: item.checked === true, disabled: !editable || disabled || saving, 'aria-label': t('Mark checklist item'), onChange: event => void write(items.map(row => row.id === item.id ? { ...row, checked: event.target.checked } : row)) }), h('span', { className: item.checked ? 'bt-card-checked' : '' }, item.text)),
@@ -1138,7 +1143,7 @@ function ChecklistEditor({ task, editable, disabled, onSave }) {
         h('button', { type: 'button', className: 'bt-card-mini', 'aria-label': t('Edit checklist item'), disabled: disabled || saving, onClick: () => startEdit(item) }, h(PencilIcon)),
         h('button', { type: 'button', className: 'bt-card-icon-danger', 'aria-label': t('Remove checklist item'), disabled: disabled || saving, onClick: () => void write(items.filter(row => row.id !== item.id)) }, h(TrashIcon))) : null))) : h('p', { className: 'bt-card-muted' }, t('No checklist items yet.')),
     editable ? h('div', { className: 'bt-card-inline' },
-      h('input', { value: entry, disabled: disabled || saving, placeholder: t('Add an item'), 'aria-label': t('New checklist item'), onChange: event => setEntry(event.target.value), onKeyDown: event => { if (event.key === 'Enter') { event.preventDefault(); add() } } }),
+      h('input', { value: entry, disabled: disabled || saving, placeholder: t('Add an item'), 'aria-label': t('New checklist item'), onChange: event => setEntry(event.target.value), onKeyDown: event => { if (event.key === 'Enter' && !event.nativeEvent?.isComposing && event.keyCode !== 229) { event.preventDefault(); add() } } }),
       h('button', { type: 'button', className: 'bt-btn bt-btn-ghost', disabled: disabled || saving || !entry.trim(), onClick: add }, t('Add item'))) : null,
     error ? h('p', { className: 'bt-form-error', role: 'alert' }, error) : null,
     h('p', { className: 'bt-card-note' }, t('Checklist items do not complete the task or its dependencies.')))
@@ -1494,7 +1499,7 @@ function FactsBlock({ task }) {
     h('div', { className: 'bt-card-facts' },
       h(Fact, { label: t('Acceptance criteria'), value: textValue(task.acceptance) }),
       h(Fact, { label: t('Next action'), value: asText(task.nextAction) }),
-      h(Fact, { label: t('Blocked'), value: asText(task.blocked) }),
+      h(Fact, { label: t('Blocked'), value: [asText(task.blocked), blockedReason(task.blocked)].filter(Boolean).join(' · ') }),
       h(Fact, { label: t('Evidence'), value: evidence }),
       h(Fact, { label: t('Target version'), value: asText(task.authority) }),
       task.legacy ? h(Fact, { label: t('Goal task note'), value: textValue(task.goalNote) }) : null,

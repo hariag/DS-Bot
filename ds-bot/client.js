@@ -33298,8 +33298,11 @@ function showsDshRow(dsh, app) {
 
 // src/client/frame-watch.js
 var sidebarTrackWidth = () => {
-  const box = typeof document === "undefined" ? void 0 : document.querySelector('[class*="_sidebarCol"]')?.getBoundingClientRect();
-  return box === void 0 ? null : trackRoom(box);
+  const column = typeof document === "undefined" ? null : document.querySelector('[class*="_sidebarCol"]');
+  if (!column) return null;
+  const position = typeof getComputedStyle === "function" ? getComputedStyle(column).position : "";
+  if (position === "absolute" || position === "fixed") return 0;
+  return trackRoom(column.getBoundingClientRect());
 };
 var dshCollapsed = () => {
   if (typeof document === "undefined") return null;
@@ -33324,6 +33327,8 @@ var roomRule = () => {
 var margin = (side, width, style) => {
   if (width === null) style.removeProperty(`margin-${side}`);
   else style.setProperty(`margin-${side}`, `${width}px`, "important");
+  if (style.marginLeft || style.marginRight) style.setProperty("width", "auto", "important");
+  else style.removeProperty("width");
 };
 var roomHold = 0;
 var chatRoom = {
@@ -43052,6 +43057,7 @@ var TASK_TYPES = [
   ["ux", "UX"],
   ["other", "Other"]
 ];
+var blockedReason = (blocked) => blocked?.cause === "stopped" ? t("Stopped by the user") : blocked?.cause === "restarted" ? t("Not updated after a restart") : blocked?.code ? t("Its model call failed ({code})", { code: `${blocked.code}${blocked.status ? ` ${blocked.status}` : ""}` }) : "";
 var TASK_TYPE_LABELS = Object.fromEntries(TASK_TYPES);
 var TASK_TYPE_KEYS = new Set(TASK_TYPES.map(([id]) => id));
 var BULK_STATUS_ACTIONS = [
@@ -44595,7 +44601,7 @@ function LabelsEditor({ task, editable, disabled, onSave }) {
         "div",
         { className: "bt-card-inline" },
         (0, import_react59.createElement)("input", { value: entry, disabled, placeholder: t("Add a label"), "aria-label": t("Add a label"), onChange: (event) => setEntry2(event.target.value), onKeyDown: (event) => {
-          if (event.key === "Enter") {
+          if (event.key === "Enter" && !event.nativeEvent?.isComposing && event.keyCode !== 229) {
             event.preventDefault();
             add();
           }
@@ -44669,7 +44675,7 @@ function ChecklistEditor({ task, editable, disabled, onSave }) {
         "div",
         { className: "bt-card-inline bt-card-checklist-edit" },
         (0, import_react59.createElement)("input", { value: draft, disabled: disabled || saving, "aria-label": t("Edit checklist item"), autoFocus: true, onChange: (event) => setDraft(event.target.value), onKeyDown: (event) => {
-          if (event.key === "Enter") {
+          if (event.key === "Enter" && !event.nativeEvent?.isComposing && event.keyCode !== 229) {
             event.preventDefault();
             void saveEdit(item);
           } else if (event.key === "Escape") {
@@ -44691,7 +44697,7 @@ function ChecklistEditor({ task, editable, disabled, onSave }) {
       "div",
       { className: "bt-card-inline" },
       (0, import_react59.createElement)("input", { value: entry, disabled: disabled || saving, placeholder: t("Add an item"), "aria-label": t("New checklist item"), onChange: (event) => setEntry2(event.target.value), onKeyDown: (event) => {
-        if (event.key === "Enter") {
+        if (event.key === "Enter" && !event.nativeEvent?.isComposing && event.keyCode !== 229) {
           event.preventDefault();
           add();
         }
@@ -45265,7 +45271,7 @@ function FactsBlock({ task }) {
       { className: "bt-card-facts" },
       (0, import_react59.createElement)(Fact, { label: t("Acceptance criteria"), value: textValue(task.acceptance) }),
       (0, import_react59.createElement)(Fact, { label: t("Next action"), value: asText2(task.nextAction) }),
-      (0, import_react59.createElement)(Fact, { label: t("Blocked"), value: asText2(task.blocked) }),
+      (0, import_react59.createElement)(Fact, { label: t("Blocked"), value: [asText2(task.blocked), blockedReason(task.blocked)].filter(Boolean).join(" · ") }),
       (0, import_react59.createElement)(Fact, { label: t("Evidence"), value: evidence }),
       (0, import_react59.createElement)(Fact, { label: t("Target version"), value: asText2(task.authority) }),
       task.legacy ? (0, import_react59.createElement)(Fact, { label: t("Goal task note"), value: textValue(task.goalNote) }) : null,
