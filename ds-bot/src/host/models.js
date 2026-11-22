@@ -418,7 +418,11 @@ export function install(rt) {
       if (cache?.cachedSnapshot === undefined) return undefined
       const record = (await listedSessions())?.get(sessionId)
       if (record === undefined || !record.persisted || record.live) return undefined
-      if (ctx.sessions?.get?.(sessionId) !== undefined || ctx.agents?.get?.(sessionId) !== undefined) return undefined
+      // rc.5 guards plain service access behind inject; treat an unreadable live
+      // session as unknown instead of failing the whole selection read.
+      let live = false
+      try { live = ctx.sessions?.get?.(sessionId) !== undefined || ctx.agents?.get?.(sessionId) !== undefined } catch { live = false }
+      if (live) return undefined
       const selection = cache.cachedSnapshot(record.header, ['modelSelection'])?.values?.modelSelection
       return selection?.next ?? selection?.lastUsed ?? undefined
     } catch (error) {

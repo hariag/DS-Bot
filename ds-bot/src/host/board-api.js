@@ -103,6 +103,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
       const laneTasks = activeTasks.filter(task => !task.legacy && !task.parentTaskId && !task.personalProgress)
       board.summary = {
         total: activeTasks.length,
+        archived: board.tasks.length - activeTasks.length,
         lanes: laneTasks.length,
         statuses: Object.fromEntries(['draft','proposed','waiting','ready','working','reported','done','cancelled'].map(status => [status, laneTasks.filter(task => task.status === status).length])),
         types: Object.fromEntries((laneTasks.reduce((map, task) => { const type = task.type ?? 'other'; map.set(type, (map.get(type) ?? 0) + 1); return map }, new Map()))),
