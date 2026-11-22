@@ -50,6 +50,18 @@ export function install(rt) {
   const sync = (shield) => {
     const commands = shield.commands
     if (commands === undefined) return
+    // One `commands/change` per shield, not one per registration: every event makes
+    // the Web UI refetch /api/commands/list, and a fresh team mounts a dozen shields.
+    const hadOwn = Object.hasOwn(commands, 'notifyChange')
+    const notify = commands.notifyChange
+    let silent = false
+    if (typeof notify === 'function') { commands.notifyChange = () => {}; silent = true }
+    const restore = () => {
+      if (!silent) return
+      if (hadOwn) commands.notifyChange = notify
+      else delete commands.notifyChange
+    }
+    try {
     for (const lift of shield.lifts) { try { lift() } catch { /* already lifted */ } }
     shield.lifts = []
     // The agent can arrive before its Bot or group is in the state (a Bot created a
@@ -77,11 +89,24 @@ export function install(rt) {
         rt.warn?.('ds-bot: the DSH /%s command could not be shadowed for %s: %s', definition.name, shield.sessionId, error?.message ?? error)
       }
     }
+    } finally {
+      restore()
+      if (silent && !batching) { try { notify.call(commands) } catch { /* the UI relists next time */ } }
+    }
   }
+  let batching = false
   const resync = () => {
     if (applying) return
     applying = true
-    try { for (const shield of shields.values()) sync(shield) } finally { applying = false }
+    batching = true
+    try { for (const shield of shields.values()) sync(shield) } finally { applying = false; batching = false }
+    const seen = new Set()
+    for (const shield of shields.values()) {
+      const commands = shield.commands
+      if (commands === undefined || seen.has(commands)) continue
+      seen.add(commands)
+      try { commands.notifyChange?.() } catch { /* the UI relists next time */ }
+    }
   }
 
   const mount = (agent) => {
