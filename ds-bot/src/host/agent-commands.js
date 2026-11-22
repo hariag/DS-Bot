@@ -46,59 +46,123 @@ export function install(rt) {
     : 'Not available in a Bot chat — use the Bot’s own controls'
   // Session id → the shield mounted under that Session's agent.
   const shields = new Map()
-  // Our own registrations notify `commands/change` too; skip the echo while applying.
-  let applying = false
-  let pendingNotification
+  // Cordis returns a context-bound service proxy per agent. Resolve its original
+  // service before coalescing notifications: CommandRuntime's registration callback
+  // calls notifyChange() on that root instance, so overriding the proxy is ineffective.
+  const originalService = Symbol.for('cordis.original')
+  let commandService
+  let originalNotify
+  let notifierWrapper
+  let notifierDescriptor
   let notificationTimer
+  let pendingInternal = false
+  let pendingExternal = false
+  let internalDispatch = false
+  let warnedNotifier = false
+  // Suppress re-entrant command changes while this module is editing its own shadows.
+  let applying = false
+  let batching = false
 
-  const silenceNotifications = commands => {
-    if (commands === undefined || commands === null) return { notify: undefined, restore() {} }
-    const hadOwn = Object.hasOwn(commands, 'notifyChange')
-    const notify = commands.notifyChange
-    if (typeof notify !== 'function') return { notify: undefined, restore() {} }
-    commands.notifyChange = () => {}
-    return {
-      notify,
-      restore() {
-        if (hadOwn) commands.notifyChange = notify
-        else delete commands.notifyChange
-      },
-    }
+  const dispatchQueuedNotification = () => {
+    notificationTimer = undefined
+    const notifyExternal = pendingExternal
+    const notifyInternal = pendingInternal && !notifyExternal
+    pendingExternal = false
+    pendingInternal = false
+    if (typeof originalNotify !== 'function' || commandService === undefined) return
+    // An external registry event has already begun a real DSH change and must run
+    // the normal resync path. Our own event only refreshes the client catalog; do
+    // not feed it back into another full shadow rebuild.
+    internalDispatch = notifyInternal
+    try { originalNotify.call(commandService) } catch { /* the UI can relist on its next visit */ }
+    finally { internalDispatch = false }
   }
 
-  const queueNotification = (commands, notify) => {
-    if (typeof notify !== 'function') return
-    // `ctx.get('commands')` returns a context-bound view per agent, but each view
-    // reaches the same root registry and event bus. One event invalidates every
-    // session's command catalog, so retaining one notifier per view multiplies
-    // a single team mount into N global refresh waves.
-    pendingNotification ??= { commands, notify }
+  const scheduleNotification = (kind) => {
+    if (kind === 'external') pendingExternal = true
+    else pendingInternal = true
     if (notificationTimer !== undefined) return
-    notificationTimer = setTimeout(() => {
-      notificationTimer = undefined
-      const pending = pendingNotification
-      pendingNotification = undefined
-      if (pending === undefined) return
-      applying = true
-      try {
-        try { pending.notify.call(pending.commands) } catch { /* the UI can relist on its next visit */ }
-      } finally {
-        applying = false
-      }
-    }, 50)
+    notificationTimer = setTimeout(dispatchQueuedNotification, 50)
     notificationTimer.unref?.()
+  }
+
+  const ensureNotificationBatch = commands => {
+    if (commands === undefined || commands === null) return false
+    const service = commands[originalService] ?? commands
+    if (service === commandService && typeof originalNotify === 'function') return true
+    if (commandService !== undefined) return false
+    const notify = service?.notifyChange
+    if (typeof notify !== 'function') return false
+    const ownDescriptor = Object.getOwnPropertyDescriptor(service, 'notifyChange')
+    const wrapper = function () {
+      // Registration/removal inside sync() is folded into its one explicit client
+      // refresh. All other registry changes are debounced as one host event.
+      if (applying) return
+      scheduleNotification('external')
+    }
+    try {
+      Object.defineProperty(service, 'notifyChange', {
+        configurable: true,
+        enumerable: ownDescriptor?.enumerable ?? false,
+        writable: true,
+        value: wrapper,
+      })
+    } catch {
+      return false
+    }
+    if (service.notifyChange !== wrapper) return false
+    commandService = service
+    originalNotify = notify
+    notifierWrapper = wrapper
+    notifierDescriptor = ownDescriptor
+    return true
+  }
+
+  const queueNotification = () => scheduleNotification('internal')
+
+  const restoreNotificationBatch = ({ flush = false } = {}) => {
+    if (notificationTimer !== undefined) clearTimeout(notificationTimer)
+    notificationTimer = undefined
+    if (flush && (pendingInternal || pendingExternal)) {
+      const notify = originalNotify
+      const service = commandService
+      pendingInternal = false
+      pendingExternal = false
+      if (typeof notify === 'function' && service !== undefined) {
+        internalDispatch = true
+        try { notify.call(service) } catch { /* the next generation will refresh */ }
+        finally { internalDispatch = false }
+      }
+    } else {
+      pendingInternal = false
+      pendingExternal = false
+    }
+    if (commandService !== undefined && commandService.notifyChange === notifierWrapper) {
+      if (notifierDescriptor === undefined) delete commandService.notifyChange
+      else Object.defineProperty(commandService, 'notifyChange', notifierDescriptor)
+    }
+    commandService = undefined
+    originalNotify = undefined
+    notifierWrapper = undefined
+    notifierDescriptor = undefined
   }
 
   const sync = (shield, force = false) => {
     const commands = shield.commands
     if (commands === undefined) return false
+    if (!ensureNotificationBatch(commands)) {
+      if (!warnedNotifier) {
+        warnedNotifier = true
+        rt.warn?.('ds-bot: command shielding is inactive because the DSH command registry cannot safely batch change notifications')
+      }
+      return false
+    }
     const nextCoverage = coverageKind(shield.sessionId)
     if (!force && nextCoverage === shield.coverage) return false
     shield.coverage = nextCoverage
     let changed = false
     // Every event makes the Web UI refetch /api/commands/list across all cached
-    // Sessions. Suppress each registration and queue one event for the whole team.
-    const notification = silenceNotifications(commands)
+    // Sessions. The root registry notifier is suppressed during these mutations.
     try {
     for (const lift of shield.lifts) {
       try { lift(); changed = true } catch { /* already lifted */ }
@@ -131,21 +195,18 @@ export function install(rt) {
       }
     }
     } finally {
-      notification.restore()
-      if (changed && !batching) queueNotification(commands, notification.notify)
+      if (changed && !batching) queueNotification()
     }
     return changed
   }
-  let batching = false
   const resync = (force = false, notifyClient = false) => {
-    if (applying) return
+    if (applying || internalDispatch) return
     applying = true
     batching = true
     let changed = false
     try { for (const shield of shields.values()) changed = sync(shield, force) || changed } finally { applying = false; batching = false }
     if (!notifyClient || !changed) return
-    const shield = [...shields.values()].find(candidate => candidate.commands !== undefined)
-    if (shield !== undefined) queueNotification(shield.commands, shield.commands.notifyChange)
+    queueNotification()
   }
 
   const mount = (agent) => {
@@ -202,12 +263,13 @@ export function install(rt) {
     const shield = shields.get(sessionId)
     if (shield === undefined) return
     shields.delete(sessionId)
-    const notification = silenceNotifications(shield.commands)
+    const wasApplying = applying
+    applying = true
     try {
       for (const lift of shield.lifts) { try { lift() } catch { /* already lifted */ } }
     } finally {
-      notification.restore()
-      if (shield.lifts.length > 0) queueNotification(shield.commands, notification.notify)
+      applying = wasApplying
+      if (shield.lifts.length > 0) queueNotification()
     }
     shield.lifts = []
     try { shield.fiber?.dispose?.() } catch { /* already gone */ }
@@ -221,13 +283,7 @@ export function install(rt) {
     applying = true
     offSaved?.()
     for (const sessionId of [...shields.keys()]) unmount(sessionId)
-    if (notificationTimer !== undefined) clearTimeout(notificationTimer)
-    notificationTimer = undefined
-    const pending = pendingNotification
-    pendingNotification = undefined
-    if (pending !== undefined) {
-      try { pending.notify.call(pending.commands) } catch { /* the next generation will refresh */ }
-    }
+    restoreNotificationBatch({ flush: true })
   }, 'ds-bot: command shield cleanup')
   // A reload can inherit live agents; agent/created will not fire for them again.
   for (const agent of ctx.get?.('agents')?.list?.() ?? []) void mountReady(agent)

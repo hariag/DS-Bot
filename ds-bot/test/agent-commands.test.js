@@ -19,10 +19,6 @@ function world({ config = {} } = {}) {
     for (const [name, definition] of scoped.get(sessionId) ?? []) map.set(name, definition)
     return map
   }
-  const registerGlobal = (name) => {
-    global.set(name, { name, description: `global ${name}`, handler: () => { dshRuns += 1; return { kind: 'success', text: 'DSH ran' } } })
-    notify()
-  }
   const service = {
     notifyChange: notify,
     list: agent => [...effective(agent.session.id).values()].sort((a, b) => (a.name < b.name ? -1 : 1)),
@@ -36,12 +32,19 @@ function world({ config = {} } = {}) {
       return { result: await definition.handler({ rawInput }) }
     },
   }
+  const registerGlobal = (name) => {
+    global.set(name, { name, description: `global ${name}`, handler: () => { dshRuns += 1; return { kind: 'success', text: 'DSH ran' } } })
+    service.notifyChange()
+  }
   // The child context a plugin mounted under an agent's context gets. The shield reads
   // a context-bound view of the shared host registry through reflection (`get`), as it
   // does in the real host. Views differ, but they all mutate/notify the same registry.
   const childOf = (sessionId) => {
+    const viewProperties = new Map()
     const commands = new Proxy(service, {
       get(target, property, receiver) {
+        if (property === Symbol.for('cordis.original')) return target
+        if (viewProperties.has(property)) return viewProperties.get(property)
         if (property === 'register') return definition => {
           const map = scoped.get(sessionId) ?? new Map()
           if (map.has(definition.name)) throw new Error(`duplicate command ${definition.name}`)
@@ -51,6 +54,12 @@ function world({ config = {} } = {}) {
           return () => { map.delete(definition.name); target.notifyChange() }
         }
         return Reflect.get(target, property, receiver)
+      },
+      set(_target, property, value) {
+        // Cordis traceable services keep a context-local property shadow. Mutating
+        // commands.notifyChange on this proxy does not alter the root registry.
+        viewProperties.set(property, value)
+        return true
       },
     })
     return { commands, get: name => (name === 'commands' ? commands : undefined) }
@@ -182,6 +191,7 @@ test('a team mount emits one global catalog change instead of one per agent', as
   // generating another global invalidation wave.
   const beforeNewCommand = w.changes()
   w.registerGlobal('new-command')
+  await new Promise(resolve => setTimeout(resolve, 80))
   assert.equal(w.changes() - beforeNewCommand, 1)
   for (const agent of agents) assert.match(w.service.find(agent, 'new-command').description, /Not available/)
 })
@@ -208,6 +218,7 @@ test('a command registered after the agent is covered by the next commands/chang
   const a = w.agent('a')
   w.emit('agent/created', { agent: a })
   w.registerGlobal('model')
+  await new Promise(resolve => setTimeout(resolve, 80))
   assert.match(w.service.find(a, 'model').description, /Not available/)
   const { result } = await w.service.execute(a, '/model cheap')
   assert.equal(result.kind, 'error')
