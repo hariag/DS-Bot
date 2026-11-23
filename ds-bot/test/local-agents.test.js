@@ -595,6 +595,52 @@ test('codex: the chosen thinking level reaches the turn', async (t) => {
   assert.match(none.text, /effort=none/)
 })
 
+test('codex: an unsupported thinking level retries once with the nearest advertised level', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsb-unsupported-effort-'))
+  const recordPath = join(dir, 'record.jsonl')
+  const adapter = makeAdapter({ codexArgs: ['--reject-xhigh', '--record', recordPath] })
+  t.after(async () => { await adapter.dispose(); rmSync(dir, { recursive: true, force: true }) })
+  const result = await collect(adapter.stream(options('s1', [user('m1', 'continue')], {
+    provider: 'local-codex-cli', model: 'gpt-5.1-codex', reasoningEffort: 'xhigh',
+  })))
+  assert.match(result.text, /effort=high/)
+  const requests = readFileSync(recordPath, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+    .filter(entry => entry.method === 'turn/start')
+  assert.deepEqual(requests.map(entry => entry.params.effort), ['xhigh', 'high'])
+})
+
+test('codex: concurrent unsupported thinking levels share one model catalog request', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsb-unsupported-effort-concurrent-'))
+  const recordPath = join(dir, 'record.jsonl')
+  const adapter = makeAdapter({ codexArgs: ['--reject-xhigh', '--record', recordPath] })
+  t.after(async () => { await adapter.dispose(); rmSync(dir, { recursive: true, force: true }) })
+  const request = (sessionId) => collect(adapter.stream(options(sessionId, [user('m1', 'continue')], {
+    provider: 'local-codex-cli', model: 'gpt-5.1-codex', reasoningEffort: 'xhigh',
+  })))
+  const [first, second] = await Promise.all([request('s1'), request('s2')])
+  assert.match(first.text, /effort=high/)
+  assert.match(second.text, /effort=high/)
+  const requests = readFileSync(recordPath, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+  assert.equal(requests.filter(entry => entry.method === 'model/list').length, 1)
+  const turns = requests.filter(entry => entry.method === 'turn/start').map(entry => entry.params.effort)
+  assert.equal(turns.filter(effort => effort === 'xhigh').length, 2)
+  assert.equal(turns.filter(effort => effort === 'high').length, 2)
+})
+
+test('codex: an unsupported level on an unlisted model falls back to the CLI default', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsb-unsupported-effort-unlisted-'))
+  const recordPath = join(dir, 'record.jsonl')
+  const adapter = makeAdapter({ codexArgs: ['--reject-xhigh', '--record', recordPath] })
+  t.after(async () => { await adapter.dispose(); rmSync(dir, { recursive: true, force: true }) })
+  const result = await collect(adapter.stream(options('s1', [user('m1', 'continue')], {
+    provider: 'local-codex-cli', model: 'gpt-6-luna', reasoningEffort: 'xhigh',
+  })))
+  assert.match(result.text, /effort=none/)
+  const requests = readFileSync(recordPath, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+  assert.equal(requests.filter(entry => entry.method === 'model/list').length, 1)
+  assert.deepEqual(requests.filter(entry => entry.method === 'turn/start').map(entry => entry.params.effort), ['xhigh', undefined])
+})
+
 // What the model catalog shows for a codex ref is what model/list advertises.
 test('the catalog carries the thinking levels a codex model serves', async (t) => {
   const adapter = makeAdapter()

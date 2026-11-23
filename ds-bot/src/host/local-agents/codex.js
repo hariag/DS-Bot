@@ -6,6 +6,24 @@ import { cleanEnv, findEngineExecutable, spawnAgent, terminateChild } from './di
 
 // The name the loopback MCP server is registered under in each thread's config.
 const MCP_SERVER = 'dsbot'
+const REASONING_EFFORT_ORDER = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+function unsupportedReasoningEffort(error) {
+  return /UNSUPPORTED_REASONING_EFFORT|does not support reasoning effort/i.test(
+    `${error?.code ?? ''} ${error?.message ?? ''} ${error?.data?.code ?? ''}`,
+  )
+}
+
+function nearestSupportedEffort(requested, supported = []) {
+  const index = REASONING_EFFORT_ORDER.indexOf(requested)
+  if (index < 0) return undefined
+  return supported
+    .filter(id => id !== requested && REASONING_EFFORT_ORDER.includes(id))
+    .sort((a, b) => {
+      const distance = Math.abs(REASONING_EFFORT_ORDER.indexOf(a) - index) - Math.abs(REASONING_EFFORT_ORDER.indexOf(b) - index)
+      return distance || REASONING_EFFORT_ORDER.indexOf(a) - REASONING_EFFORT_ORDER.indexOf(b)
+    })[0]
+}
 
 export class CodexEngine {
   constructor(route, engine, { findExecutable }) {
@@ -16,6 +34,8 @@ export class CodexEngine {
     this.peer = undefined
     this.starting = undefined
     this.threads = new Map()
+    this.reasoningEfforts = new Map()
+    this.modelListLoading = undefined
   }
 
   threadFor(dshSessionId) {
@@ -189,6 +209,7 @@ export class CodexEngine {
   async open(dshSessionId, { cwd, mcp, resumeId, mode, instructions, model, ephemeral }) {
     const peer = await this.ensure()
     const thread = this.threadFor(dshSessionId)
+    thread.model = model === 'default' ? undefined : model
     if (resumeId !== undefined) thread.threadId = resumeId
     // Codex 0.166 reads `ThreadStartParams` from the top level and takes the MCP
     // servers from `config`; it drops unknown keys without a word. So the fields keep
@@ -224,16 +245,42 @@ export class CodexEngine {
 
   async prompt(thread, blocks, { signal, effort }) {
     const peer = await this.ensure()
-    const reply = await peer.request('turn/start', {
+    const params = {
       threadId: thread.threadId,
       input: codexInput(blocks),
       // The app-server takes the level per turn and keeps it for the next ones.
       ...(effort === undefined ? {} : { effort }),
-    }, { signal, timeout: 0 })
+    }
+    let reply
+    try {
+      reply = await peer.request('turn/start', params, { signal, timeout: 0 })
+    } catch (error) {
+      if (effort === undefined || signal?.aborted || !unsupportedReasoningEffort(error)) throw error
+      const supported = thread.model === undefined ? [] : await this.advertisedReasoningEfforts(thread.model)
+      const fallback = nearestSupportedEffort(effort, supported)
+      if (thread.model !== undefined) this.reasoningEfforts.set(thread.model, supported.filter(id => id !== effort))
+      // The rejected level is removed before retry. If the CLI did not list usable
+      // alternatives, leave effort unset so its own per-model default can apply.
+      reply = await peer.request('turn/start', {
+        ...params,
+        ...(fallback === undefined ? { effort: undefined } : { effort: fallback }),
+      }, { signal, timeout: 0 })
+    }
     const turnId = reply?.turn?.id ?? reply?.id
     // Notifications in the response's stdout batch run before this continuation.
     thread.turnId = thread.completedTurnId === turnId ? undefined : turnId
     return turnId
+  }
+
+  async advertisedReasoningEfforts(model) {
+    if (!this.reasoningEfforts.has(model)) {
+      await this.listModels().catch(() => [])
+      // A model may be absent from model/list, or may advertise no overrideable
+      // levels. Cache that fact too, so simultaneous/future rejected turns do not
+      // each issue another catalog request.
+      if (!this.reasoningEfforts.has(model)) this.reasoningEfforts.set(model, [])
+    }
+    return this.reasoningEfforts.get(model)
   }
 
   // Codex's app-server refuses a steer that does not name the turn it steers, and
@@ -296,9 +343,20 @@ export class CodexEngine {
   }
 
   async listModels() {
+    if (this.modelListLoading !== undefined) return this.modelListLoading
+    const loading = this.loadModels()
+    this.modelListLoading = loading
+    try {
+      return await loading
+    } finally {
+      if (this.modelListLoading === loading) this.modelListLoading = undefined
+    }
+  }
+
+  async loadModels() {
     const peer = await this.ensure()
     const reply = await peer.request('model/list', {}, { timeout: 30_000 })
-    return (reply?.data ?? reply?.models ?? []).map((entry) => {
+    const models = (reply?.data ?? reply?.models ?? []).map((entry) => {
       const model = {
         id: String(entry.id ?? entry.model),
         name: String(entry.displayName ?? entry.name ?? entry.id ?? entry.model),
@@ -315,6 +373,9 @@ export class CodexEngine {
       if (efforts.length === 0) return model
       return { ...model, reasoning: { efforts } }
     })
+    this.reasoningEfforts = new Map(models
+      .map(model => [model.id, model.reasoning?.efforts?.map(entry => entry.id) ?? []]))
+    return models
   }
 
   async close() {
