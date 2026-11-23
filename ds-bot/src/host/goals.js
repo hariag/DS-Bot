@@ -500,14 +500,14 @@ export function passGoal(room, input, by, now = Date.now()) {
   const unfinished = stage.tasks.filter(task => !['reported', 'done'].includes(task.status))
   if (unfinished.length > 0) {
     const names = unfinished.slice(0, 5).map(task => task.task ?? task.id).join('; ')
-    return { error: `Stage ${goal.current} has ${unfinished.length} task(s) not reported yet (${names}); check each result before pass.` }
+    return { error: `Stage ${goal.current + 1} has ${unfinished.length} task(s) not reported yet (${names}); check each result before pass.` }
   }
   const unproven = stage.tasks.filter(task => task.status === 'reported'
     && !(task.goalBoardReplies ?? []).some(reply => String(reply.text ?? '').trim() !== '')
     && String(task.evidence ?? '').trim() === '')
   if (unproven.length > 0) {
     const names = unproven.slice(0, 5).map(task => task.task ?? task.id).join('; ')
-    return { error: `Stage ${goal.current} has ${unproven.length} task(s) without evidence (${names}); record each result before pass.` }
+    return { error: `Stage ${goal.current + 1} has ${unproven.length} task(s) without evidence (${names}); record each result before pass.` }
   }
   stage.status = 'passed'
   stage.evidence = evidence

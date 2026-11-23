@@ -375,6 +375,16 @@ export function install(rt) {
       // every command that mentions that home. Check directory arguments too.
       if (!blocked) {
         const words = shellWords(withoutHereDocuments(text))
+        const assignedLiteral = name => {
+          const values = [...text.matchAll(new RegExp(`(?:^|[\\s;&|(){}])${name}=([^\\s;&|()]+)`, 'g'))]
+            .map(found => found[1].replace(/^["']|["']$/g, ''))
+          if (values.length !== 1) return undefined
+          // A literal absolute prefix is enough: OUT=/tmp/run-$(date) still cd's
+          // below /tmp. Anything under the private Bot home stays refused.
+          const prefix = /^[^$`]*/.exec(values[0])?.[0] ?? ''
+          if (!prefix.startsWith('/') || prefix.startsWith(homedir() + '/.dsh')) return undefined
+          return prefix
+        }
         // Bash's nested quoting (e.g. awk -F'"' inside a double-quoted string)
         // can defeat this tokenizer even in ordinary, valid commands. Do not fail
         // closed wholesale: block when the raw text can still hide a dynamic cd or
@@ -415,16 +425,6 @@ export function install(rt) {
           // A cd through a variable is ordinary in scripts. Accept it only when
           // this command assigns that variable exactly once to a literal absolute
           // path; an unassigned or rebuilt variable still fails closed.
-          const assignedLiteral = name => {
-            const values = [...text.matchAll(new RegExp(`(?:^|[\\s;&|(){}])${name}=([^\\s;&|()]+)`, 'g'))]
-              .map(found => found[1].replace(/^["']|["']$/g, ''))
-            if (values.length !== 1) return undefined
-            // A literal absolute prefix is enough: OUT=/tmp/run-$(date) still cd's
-            // below /tmp. Anything under the private Bot home stays refused.
-            const prefix = /^[^$`]*/.exec(values[0])?.[0] ?? ''
-            if (!prefix.startsWith('/') || prefix.startsWith(homedir() + '/.dsh')) return undefined
-            return prefix
-          }
           const firstBase = requestedPath ? resolve(base ?? process.cwd(), requestedPath) : base
           if (!blocked && firstBase && await matches(firstBase, true)) blocked = true
           const bases = [firstBase].filter(Boolean)

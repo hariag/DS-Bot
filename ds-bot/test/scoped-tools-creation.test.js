@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { createRuntime } from '../index.js'
 import { TEAM_TOOLS } from '../src/host/constants.js'
-import { fakeContext } from './fake-ctx.js'
+import { fakeContext, partsPreStep } from './fake-ctx.js'
 import { BUILTIN_PACKS } from '../src/host/builtin-packs.js'
 
 // tools.js keeps the DSH names a Bot Session never serves in one place; the
@@ -463,7 +463,7 @@ test('a fresh part Session has the scoped tools before its first step', async (t
   const moved = await host.tool('update_bot', { work_dir: project }, 'b')
   assert.equal(String(moved).includes('From your next step on'), true)
   // The next step sees the folder change and switches to a fresh part.
-  const preStep = host.ctx.listeners.get('agent/pre-step').at(-1)
+  const preStep = partsPreStep(host.ctx)
   const answer = await preStep(
     { agent: host.agentOf('b'), messages: [{ role: 'user', content: [{ type: 'text', text: 'go on' }], source: { kind: 'user' } }], step: 2, signal: AbortSignal.timeout(60_000) },
     async () => 'next',

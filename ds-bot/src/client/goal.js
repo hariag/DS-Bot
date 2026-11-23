@@ -274,7 +274,7 @@ function GoalCompose({ room, roster, actions }) {
 // goal bar (or draft form) while closed, the active panel while open. For chats
 // with background tasks only (`taskHoverReveal`), the island stays a compact
 // single-row pill with an inline count chip until hovered or clicked open.
-export function GoalIsland({ room, goal, view, open, composing, approvalPod = null, approvalOpen = false, approvalsCount = 0, taskPod = null, taskOpen = false, taskCount = 0, taskHoverReveal = false, taskBadge = null, roomWork, roster, actions, pill, openReview }) {
+export function GoalIsland({ room, goal, view, open, composing, approvalPod = null, approvalOpen = false, approvalsCount = 0, taskPod = null, taskOpen = false, taskCount = 0, taskHoverReveal = false, taskBadge = null, roomWork, roster, actions, pill }) {
   const island = useRef(null)
   const leaveTimer = useRef(null)
   const [hovered, setHovered] = useState(false)

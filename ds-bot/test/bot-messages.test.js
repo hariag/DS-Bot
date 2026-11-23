@@ -8,7 +8,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { Session } from '@deepseek-ai/dsh-session'
 import TokenMeter from '@deepseek-ai/dsh-token-meter'
 import { createRuntime } from '../index.js'
-import { fakeAttachments, fakeContext } from './fake-ctx.js'
+import { fakeAttachments, fakeContext, partsPreStep } from './fake-ctx.js'
 import { install as installTurns } from '../src/host/turns.js'
 import { install as installParts } from '../src/host/parts.js'
 import { HANDOFF_ACK, SOURCE_KIND } from '../src/host/constants.js'
@@ -1375,7 +1375,7 @@ for (const id of ['b', 'gb']) {
     ctx.llm.resolveModelInfo = async () => ({ context: { contextWindow: 192_000 } })
     const preStep = async (agent) => {
       agent.session.requestHeader = () => ({ config: { provider: 'custom', model: 'model' } })
-      return ctx.listeners.get('agent/pre-step').at(-1)({ agent, messages: [], step: 1, signal: AbortSignal.timeout(60_000) }, async () => 'next')
+      return partsPreStep(ctx)({ agent, messages: [], step: 1, signal: AbortSignal.timeout(60_000) }, async () => 'next')
     }
     const overflow = agent => fire('agent/request-error', { agent, failure: { code: 'CONTEXT_WINDOW_EXCEEDED', message: 'Tools exceed the context window' }, signal: AbortSignal.timeout(60_000) })
     const waitForHandoff = async (sessionId) => {
@@ -1455,7 +1455,7 @@ for (const id of ['b', 'gb']) {
       assert.ok(ctx.get('tokenMeter').measure(agent.session).totalTokens + estimateTokens(textOf(input.content)) > 50_000, 'it overflows together with the handoff')
 
       if (pending) {
-        const decision = await ctx.listeners.get('agent/pre-step').at(-1)({ agent, messages: [input], step: 1, signal: AbortSignal.timeout(60_000) }, async () => 'next')
+        const decision = await partsPreStep(ctx)({ agent, messages: [input], step: 1, signal: AbortSignal.timeout(60_000) }, async () => 'next')
         assert.deepEqual(decision, { kind: 'enter', messages: [] })
       } else {
         record('user/message', input)

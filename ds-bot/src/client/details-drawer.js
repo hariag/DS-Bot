@@ -16,7 +16,6 @@ import { MemberApprovals, MemberState, StopMemberWork, StopRoomWork, useMemberWo
 import { canSetGoal, goalView, hasGoalAdmin } from './goal.js'
 import { PermissionPicker, presetDanger, presetName } from './permission-picker.js'
 import { GroupTaskBoard } from './group-task-board.js'
-import { TaskBoard } from './task-board.js'
 import { DetailsTaskList, isActiveTask, tasksForChat } from './bot-tasks.js'
 import { BotConnectors } from './connectors.js'
 import { ComputerView } from './computer.js'

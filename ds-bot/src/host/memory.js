@@ -25,7 +25,7 @@
 // provider's prefix cache holds; a fresh part, or a checkpoint (which breaks the cache
 // anyway), freezes it anew.
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, truncateSync, unlinkSync, watch, writeFileSync } from 'node:fs'
 import { appendFile, mkdir, rename, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { HarnessError, createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -171,6 +171,46 @@ export function install(rt) {
   // revision. The entries are shared between calls; callers must not change them.
   const recallCache = new Map()
   const mainCache = new Map()
+  const memoryWatchers = new Map()
+  const watchMemoryDir = dir => {
+    if (memoryWatchers.has(dir)) return memoryWatchers.get(dir) !== null
+    try {
+      const watcher = watch(dir, (_event, filename) => {
+        if (filename === null) {
+          recallCache.delete(dir)
+          mainCache.delete(dir)
+          return
+        }
+        const name = String(filename)
+        if (!name.endsWith('.md')) return
+        if (name === MAIN) mainCache.delete(dir)
+        else {
+          const topics = recallCache.get(dir)
+          topics?.delete(name.slice(0, -3))
+          if (topics?.size === 0) recallCache.delete(dir)
+        }
+      })
+      watcher.on('error', () => {
+        if (memoryWatchers.get(dir) === watcher) memoryWatchers.set(dir, null)
+        recallCache.delete(dir)
+        mainCache.delete(dir)
+        watcher.close()
+      })
+      watcher.unref?.()
+      memoryWatchers.set(dir, watcher)
+      return true
+    } catch (error) {
+      // A scope with no directory yet cannot be watched or cached. Retry when a
+      // later write creates it; other watch failures stay uncached for correctness.
+      if (error?.code !== 'ENOENT') memoryWatchers.set(dir, null)
+      return false
+    }
+  }
+  const flushMemoryWatchEvents = () => new Promise(resolve => setImmediate(resolve))
+  ctx.effect(() => () => {
+    for (const watcher of memoryWatchers.values()) watcher?.close()
+    memoryWatchers.clear()
+  }, 'ds-bot: memory cache watchers')
   const revisionOf = (path) => {
     try {
       const stat = statSync(path, { bigint: true, throwIfNoEntry: false })
@@ -191,13 +231,14 @@ export function install(rt) {
   }
   const recallEntries = (scope, names = topicNames(scope)) => {
     const dir = dirOf(scope)
-    const cached = recallCache.get(dir)
+    const cacheable = watchMemoryDir(dir)
+    const cached = cacheable ? recallCache.get(dir) : undefined
     const topics = new Map()
     for (const topic of names) {
       const parsed = parsedFile(dir, topic, cached?.get(topic))
       if (parsed !== undefined) topics.set(topic, parsed)
     }
-    if (topics.size === 0) recallCache.delete(dir)
+    if (!cacheable || topics.size === 0) recallCache.delete(dir)
     else recallCache.set(dir, topics)
     return [...topics.values()].flatMap(parsed => parsed.entries)
   }
@@ -206,8 +247,9 @@ export function install(rt) {
   const searchEntries = (scope) => {
     const dir = dirOf(scope)
     const names = topicNames(scope)
-    const main = parsedFile(dir, undefined, mainCache.get(dir))
-    if (main === undefined) mainCache.delete(dir)
+    const cacheable = watchMemoryDir(dir)
+    const main = parsedFile(dir, undefined, cacheable ? mainCache.get(dir) : undefined)
+    if (!cacheable || main === undefined) mainCache.delete(dir)
     else mainCache.set(dir, main)
     return [...(main?.entries ?? []), ...recallEntries(scope, names)]
   }
@@ -969,7 +1011,7 @@ export function install(rt) {
     if (snapshot !== undefined) front.push(snapshot)
     const update = memoryUpdate(agent.id, bot, member ? roomId : undefined)
     if (update !== undefined) front.push(update)
-    const recalled = autoRecall(agent, bot, member ? roomId : undefined, decision)
+    const recalled = await autoRecall(agent, bot, member ? roomId : undefined, decision)
     if (recalled !== undefined) front.push(recalled)
     return front.length === 0 ? decision : { ...decision, messages: [...front, ...decision.messages] }
   })
@@ -978,7 +1020,7 @@ export function install(rt) {
   // MEMORY.md is in view already. Off when the user turns it off.
   const isRecalled = message => message?.source?.kind === MEMORY_RECALL_SOURCE
   const SAID = new Set(['user', 'schedule', 'bot'])
-  function autoRecall(agent, bot, roomId, decision) {
+  async function autoRecall(agent, bot, roomId, decision) {
     if (state.prefs.memoryAutoRecall === false) return undefined
     const said = decision.messages.findLast(message => message?.role === 'user' && SAID.has(message.source?.kind))
     const query = said === undefined ? '' : textOf(said.content).slice(0, AUTO_RECALL_QUERY_MAX)
@@ -990,6 +1032,8 @@ export function install(rt) {
     const scopes = [own, ...(roomId === undefined ? [] : [groupScope(roomId)]), TEAM]
     let topicEntries
     try {
+      const watching = scopes.map(scope => watchMemoryDir(dirOf(scope)))
+      if (watching.some(Boolean)) await flushMemoryWatchEvents()
       topicEntries = scopes.flatMap(scope => recallEntries(scope).map(entry => ({ ...entry, tag: tagOf(scope, bot.id) })))
     } catch (error) {
       rt.warn('ds-bot: memory recall for %s not read: %s', bot.name, error?.message ?? error)
@@ -1260,6 +1304,10 @@ export function install(rt) {
       const wantsTopic = args.topic !== undefined && String(args.topic).trim() !== ''
       const query = String(args.query ?? '').trim().slice(0, 120)
       const searching = !wantsTopic && query !== ''
+      if (searching) {
+        const watching = scopes.map(scope => watchMemoryDir(dirOf(scope)))
+        if (watching.some(Boolean)) await flushMemoryWatchEvents()
+      }
       let loaded
       try {
         loaded = await settled(() => scopes.map(scope => ({ scope, tag: tagOf(scope, self), label: labelOf(scope, self), ...(searching ? { entries: searchEntries(scope) } : { files: loadScope(scope) }) })))

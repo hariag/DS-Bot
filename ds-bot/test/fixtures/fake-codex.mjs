@@ -150,6 +150,7 @@ process.stdin.on('data', (chunk) => {
       case 'initialize': reply(id, { userAgent: 'fake-codex' }); break
       case 'initialized': break
       case 'model/list':
+        record('model/list', params)
         reply(id, {
           data: [{
             id: 'gpt-5.1-codex',

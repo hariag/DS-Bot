@@ -175,13 +175,16 @@ test('a goal starts, passes its stages, and completes', async (t) => {
 
   assert.equal(await host.tool('group_goal', { action: 'pass' }, 'ga'), 'evidence is required for pass.')
   assert.equal(await host.tool('group_goal', { action: 'complete', evidence: 'e', summary: 's' }, 'ga'), 'Stage 1 "Draft" has not passed yet. Pass every stage before complete.')
+  assert.equal(await host.tool('group_goal', { action: 'pass', evidence: 'reviewed' }, 'ga'), 'Stage 1 has 1 task(s) not reported yet (write the draft); check each result before pass.')
 
+  await host.tool('group_goal', { action: 'task', bot: 'Writer', status: 'reported', note: 'Draft attached for review' }, 'ga')
   assert.match(await host.tool('group_goal', { action: 'pass', evidence: 'reviewed' }, 'ga'), /Stage 1 passed\. Stage 2 "Check" is current/)
   const second = goal(host)
   assert.deepEqual([second.current, second.stages.map(stage => stage.status)], [1, ['passed', 'active']])
   assert.equal(second.stages[0].tasks[0].status, 'done')
   assert.equal(second.stages[0].evidence, 'reviewed')
 
+  await host.tool('group_goal', { action: 'task', bot: 'Tester', status: 'reported', note: 'Checks passed' }, 'ga')
   assert.match(await host.tool('group_goal', { action: 'pass', evidence: 'green' }, 'ga'), /Every stage passed/)
   assert.equal(goal(host).current, 2)
   assert.equal(await host.tool('group_goal', { action: 'complete', summary: 's' }, 'ga'), 'evidence is required for complete.')
@@ -201,6 +204,7 @@ test('rework sends the current stage back; revise keeps passed stages and a matc
   assert.equal(back.stages[0].tasks[0].status, 'pending')
   assert.deepEqual([back.stages[0].reworks, back.stages[0].feedback], [1, 'missing tests'])
 
+  await host.tool('group_goal', { action: 'task', bot: 'Writer', status: 'reported', note: 'Revised draft ready' }, 'ga')
   await host.tool('group_goal', { action: 'pass', evidence: 'ok' }, 'ga')
   await host.tool('group_goal', { action: 'task', bot: 'Tester', status: 'working' }, 'ga')
   assert.equal(await host.tool('group_goal', { action: 'revise', stages: [STAGES[1]] }, 'ga'), 'reason is required for revise.')
@@ -213,7 +217,7 @@ test('rework sends the current stage back; revise keeps passed stages and a matc
     ],
   }, 'ga')
   const revised = goal(host)
-  assert.deepEqual(revised.stages.map(stage => [stage.id, stage.status]), [['s1', 'passed'], ['s3', 'active'], ['s4', 'pending']])
+  assert.deepEqual(revised.stages.map(stage => [stage.id, stage.status]), [['s1', 'passed'], ['s2', 'active'], ['s3', 'pending']])
   assert.equal(revised.current, 1)
   // The same member's same task in the replaced current stage kept its status.
   assert.equal(revised.stages[1].tasks[0].status, 'working')
@@ -252,7 +256,7 @@ test('only the admin or a Main Bot changes a goal; any member can show it', asyn
     'Only a Main Bot changes the goal of "Lab".')
 })
 
-test('events keep the newest 50 and pastGoals keep 5', async (t) => {
+test('events keep the newest 50 and pastGoals retain the newest 5 plus audited history', async (t) => {
   const host = await start(t)
   await startGoal(host)
   for (let i = 0; i < 60; i++) {
@@ -263,10 +267,12 @@ test('events keep the newest 50 and pastGoals keep 5', async (t) => {
     const id = goal(host).id
     await host.tool('group_goal', { action: 'stop', reason: `r${i}` }, 'ga')
     assert.equal((await host.call('goal-control', { roomId: 'r1', goalId: id, action: 'clear' })).ok, true)
-    await startGoal(host, { title: `g${i}` })
+    await host.tool('group_goal', { action: 'show' }, 'ga')
+    assert.match(await startGoal(host, { title: `g${i}` }), /Started\./)
   }
   const room = saved(host).rooms.r1
-  assert.equal(room.pastGoals.length, 5)
+  assert.equal(room.pastGoals.length, 6)
+  assert.equal(room.pastGoals[0].stages[0].tasks[0].goalBoardReplies.length, 60)
   assert.equal(room.pastGoals.at(-1).status, 'stopped')
 })
 
@@ -657,7 +663,10 @@ test('a refused revise changes nothing; the stage cap counts kept stages', async
   // A goal near the cap keeps its passed stages: revising past 20 is refused whole.
   const many = count => Array.from({ length: count }, (_, i) => ({ title: `S${i + 1}`, acceptance: 'x', tasks: [{ bot: 'Writer', task: `t${i}` }] }))
   await host.tool('group_goal', { action: 'revise', reason: 'grow', stages: many(19) }, 'ga')
-  for (let i = 0; i < 19; i++) await host.tool('group_goal', { action: 'pass', evidence: 'e' }, 'ga')
+  for (let i = 0; i < 19; i++) {
+    await host.tool('group_goal', { action: 'task', bot: 'Writer', status: 'reported', note: `Report ${i + 1}` }, 'ga')
+    await host.tool('group_goal', { action: 'pass', evidence: `evidence ${i + 1}` }, 'ga')
+  }
   assert.equal(goal(host).current, 19)
   const over = await host.tool('group_goal', { action: 'revise', reason: 'more', stages: many(3) }, 'ga')
   assert.equal(over, 'At most 20 stages.')
@@ -788,12 +797,16 @@ test('concurrent and admin-interleaved goalSettled calls stop at the idle limit 
   // A late task report clears idle and lets a subsequent settlement queue one check.
   room.goal.nudges = 2
   room.goal.idle = true
+  room.goal.idleReason = 'nudge-limit'
+  room.goal.idleRevision = room.goal.revision
   room.goal.stages[0].tasks[0].status = 'working'
   host.rt.goalTaskReported('r1', 'b')
+  await host.rt.save({ required: true })
   await host.rt.goalSettled(room)
-  assert.equal(nudges().length, 6)
+  assert.equal(nudges().length, 6, 'reported member progress wakes one further goal check')
+  assert.equal(goal(host).stages[0].tasks[0].status, 'reported')
   assert.equal(goal(host).nudges, 1)
-  assert.notEqual(goal(host).idle, true)
+  assert.equal(goal(host).idle, undefined)
 
   // Admin [PASS] on a goal-check round marks idle immediately; later settlements do not wake it.
   await host.rt.goalDrive(room, { goalNudge: true, stoppedOnly: false, slots: [{ id: 'a', status: 'passed' }] })

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { createRuntime } from '../index.js'
-import { fakeContext } from './fake-ctx.js'
+import { fakeContext, partsPreStep } from './fake-ctx.js'
 
 let rt
 
@@ -156,7 +156,7 @@ async function start({ fail = {}, services = {}, home: reuse, state: seed = TEAM
     method: 'POST', body: JSON.stringify({ endpoint, payload }),
   }))).json()
   const tool = (name, args, sessionId) => rt.teamTools.find(d => d.name === name).execute(args, { agent: agentOf(sessionId), name, callId: 'c1' })
-  const preStep = (sessionId, messages = [], step = 1) => ctx.listeners.get('agent/pre-step').at(-1)(
+  const preStep = (sessionId, messages = [], step = 1) => partsPreStep(ctx)(
     { agent: agentOf(sessionId), messages, step, signal: AbortSignal.timeout(60_000) }, async () => 'next')
   // A Session event as DSH emits it, on the Session the test's Agent holds.
   let seq = 0

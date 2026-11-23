@@ -105,29 +105,38 @@ export class LoopbackMcp {
     const callId = `mcp-${randomUUID()}`
     const progressToken = params?._meta?.progressToken ?? callId
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
-    const send = (value) => { try { response.write(`data: ${JSON.stringify(value)}\n\n`) } catch {} }
+    let active = true
+    const send = (value) => {
+      if (!active) return
+      try { response.write(`data: ${JSON.stringify(value)}\n\n`) } catch {}
+    }
+    const finish = (result) => {
+      if (!active) return
+      clearInterval(timer)
+      this.calls.delete(callId)
+      send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: result.text }], isError: result.isError === true } })
+      active = false
+      response.end()
+    }
+    const abandon = () => {
+      if (!active) return
+      active = false
+      clearInterval(timer)
+      this.calls.delete(callId)
+    }
     const entry = {
       progress: 0,
-      settle: (result) => {
-        clearInterval(timer)
-        this.calls.delete(callId)
-        send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: result.text }], isError: result.isError === true } })
-        response.end()
-      },
-      cancel: () => {
-        clearInterval(timer)
-        this.calls.delete(callId)
-        send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'the call was cancelled' }], isError: true } })
-        response.end()
-      },
+      settle: finish,
+      cancel: () => finish({ isError: true, text: 'the call was cancelled' }),
     }
     const timer = setInterval(() => {
       entry.progress += 1
       send({ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken, progress: entry.progress * KEEPALIVE_MS, message: 'waiting for the tool result' } })
     }, KEEPALIVE_MS)
     timer.unref?.()
+    response.once?.('close', () => { if (!response.writableEnded) abandon() })
     this.calls.set(callId, entry)
-    this.onCall({ name: params?.name, arguments: params?.arguments ?? {}, callId })
+    Promise.resolve().then(() => this.onCall({ name: params?.name, arguments: params?.arguments ?? {}, callId }))
       .then(entry.settle, error => entry.settle({ isError: true, text: error?.message ?? String(error) }))
   }
 }

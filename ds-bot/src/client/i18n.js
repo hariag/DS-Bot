@@ -214,6 +214,7 @@ const ZH = {
   'Check the card details and size limits.': '请检查卡片内容及大小限制。',
   'Checklist items do not complete the task or its dependencies.': '勾选清单不会完成任务或解除依赖。',
   'Not started': '未开始',
+  'Started': '已开始',
   'Goal marked done': '目标中标记完成',
   'Edit goal task': '编辑群目标任务',
   'Task description': '任务说明',

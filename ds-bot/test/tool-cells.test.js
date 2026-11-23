@@ -818,6 +818,14 @@ test('a PTC group relay shows its replies from the sub-call, live and after relo
   assert.deepEqual(JSON.parse(JSON.stringify(sets)), [{ replies: replies.slice(0, 1), speaking: ['chief'] }])
 })
 
+test('a finished ranged group relay initializes from the closed-row cache', () => {
+  const finished = program([call('group_relay', 'direct', { content: '{"from":3,"to":9,"passed":[]}' })])
+  const actions = { groupRows: async () => ({ rows: [], open: false, active: false }) }
+  const relay = find(ToolCell(props(finished, { sessionId: 'room', actions })), node => node.type?.name === 'GroupReplies')
+  effects = []
+  assert.doesNotThrow(() => relay.type(relay.props))
+})
+
 // #105: the secret and question cards of a PTC program showed nowhere.
 test('PTC secret and question cards show at their sub-calls and act on their own requests', async () => {
   const roster = team({ questions: { chief: question('call-1-2:ptc:1') }, secretRequests: { chief: [request('call-2-1:ptc:1')] } })

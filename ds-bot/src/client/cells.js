@@ -1130,7 +1130,6 @@ function GroupReplies({ sessionId, turn, callId, done, content, roster, actions,
   const reads = groupReads(actions)
   const cursor = roster.groupRowKeys?.[roomId]
   const hasCursor = typeof cursor === 'string'
-  const epoch = hasCursor ? cursor.split('|', 1)[0] : null
   const [live, setLive] = useState({ replies: [], speaking: [] })
   useEffect(() => {
     if (done) return undefined
@@ -1168,7 +1167,7 @@ function GroupReplies({ sessionId, turn, callId, done, content, roster, actions,
     return () => { stop = true }
   }, [sessionId, preview])
   const rowsKey = range === undefined ? undefined : `${sessionId}:${range.from}:${range.to ?? ''}:${range.anchor ?? ''}`
-  const [view, setView] = useState(() => (rowsKey === undefined ? null : settledRows.get(rowsKey) ?? null))
+  const [view, setView] = useState(() => (rowsKey === undefined ? null : reads.closed(rowsKey) ?? null))
   // An open cell that is quiet is read again when the team changes, not on a clock.
   const quietKey = view?.open === true && view.active !== true ? roster.revision : undefined
 

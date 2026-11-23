@@ -135,6 +135,7 @@ function convertHostErrors(pairs) {
 
 // src/client/locales/ja.js
 var JA = {
+  "Started": "開始済み",
   "Always on": "常時有効",
   "In catalog": "カタログ内",
   "In catalog: the Bot loads this only when it needs it.": "カタログ内：Bot が必要なときにのみ読み込みます。",
@@ -2829,6 +2830,7 @@ Object.assign(JA, {
 
 // src/client/locales/ko.js
 var KO = {
+  "Started": "시작됨",
   "Always on": "항상 켜짐",
   "In catalog": "카탈로그에 포함",
   "In catalog: the Bot loads this only when it needs it.": "카탈로그에 포함: Bot이 필요할 때만 로드합니다.",
@@ -5568,6 +5570,7 @@ Object.assign(KO, {
 
 // src/client/locales/es.js
 var ES = {
+  "Started": "Iniciado",
   "Always on": "Siempre activo",
   "In catalog": "En el catálogo",
   "In catalog: the Bot loads this only when it needs it.": "En el catálogo: el Bot solo lo carga cuando lo necesita.",
@@ -8307,6 +8310,7 @@ Object.assign(ES, {
 
 // src/client/locales/fr.js
 var FR = {
+  "Started": "Démarré",
   "Always on": "Toujours actif",
   "In catalog": "Dans le catalogue",
   "In catalog: the Bot loads this only when it needs it.": "Dans le catalogue : le Bot le charge uniquement en cas de besoin.",
@@ -11001,6 +11005,7 @@ Object.assign(FR, {
 
 // src/client/locales/de.js
 var DE = {
+  "Started": "Gestartet",
   "Always on": "Immer aktiv",
   "In catalog": "Im Katalog",
   "In catalog: the Bot loads this only when it needs it.": "Im Katalog: Der Bot lädt dies nur bei Bedarf.",
@@ -13943,6 +13948,7 @@ var ZH = {
   "Check the card details and size limits.": "请检查卡片内容及大小限制。",
   "Checklist items do not complete the task or its dependencies.": "勾选清单不会完成任务或解除依赖。",
   "Not started": "未开始",
+  "Started": "已开始",
   "Goal marked done": "目标中标记完成",
   "Edit goal task": "编辑群目标任务",
   "Task description": "任务说明",
@@ -21678,7 +21684,7 @@ function GoalCompose({ room: room2, roster, actions }) {
     )
   );
 }
-function GoalIsland({ room: room2, goal, view, open, composing, approvalPod = null, approvalOpen = false, approvalsCount = 0, taskPod = null, taskOpen = false, taskCount = 0, taskHoverReveal = false, taskBadge = null, roomWork, roster, actions, pill, openReview }) {
+function GoalIsland({ room: room2, goal, view, open, composing, approvalPod = null, approvalOpen = false, approvalsCount = 0, taskPod = null, taskOpen = false, taskCount = 0, taskHoverReveal = false, taskBadge = null, roomWork, roster, actions, pill }) {
   const island = (0, import_react7.useRef)(null);
   const leaveTimer = (0, import_react7.useRef)(null);
   const [hovered, setHovered] = (0, import_react7.useState)(false);
@@ -32798,7 +32804,6 @@ function GroupReplies({ sessionId, turn, callId, done, content, roster, actions,
   const reads = groupReads(actions);
   const cursor = roster.groupRowKeys?.[roomId];
   const hasCursor = typeof cursor === "string";
-  const epoch = hasCursor ? cursor.split("|", 1)[0] : null;
   const [live, setLive] = (0, import_react34.useState)({ replies: [], speaking: [] });
   (0, import_react34.useEffect)(() => {
     if (done) return void 0;
@@ -32843,7 +32848,7 @@ function GroupReplies({ sessionId, turn, callId, done, content, roster, actions,
     };
   }, [sessionId, preview]);
   const rowsKey = range === void 0 ? void 0 : `${sessionId}:${range.from}:${range.to ?? ""}:${range.anchor ?? ""}`;
-  const [view, setView] = (0, import_react34.useState)(() => rowsKey === void 0 ? null : settledRows.get(rowsKey) ?? null);
+  const [view, setView] = (0, import_react34.useState)(() => rowsKey === void 0 ? null : reads.closed(rowsKey) ?? null);
   const quietKey = view?.open === true && view.active !== true ? roster.revision : void 0;
   (0, import_react34.useEffect)(() => {
     if (!range || view?.open === false) return void 0;

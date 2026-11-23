@@ -1,6 +1,7 @@
 // French (fr) localization for DS Bot client and DSH settings namespaces.
 
 export const FR = {
+  'Started': 'Démarré',
   'Always on': 'Toujours actif',
   'In catalog': 'Dans le catalogue',
   'In catalog: the Bot loads this only when it needs it.': 'Dans le catalogue : le Bot le charge uniquement en cas de besoin.',

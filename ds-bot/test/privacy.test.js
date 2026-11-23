@@ -169,6 +169,7 @@ test('board guard allows the ordinary workspace and rejects explicit board alias
   // A worktree script resolves its own literal cd target; only unexplained
   // variables keep failing closed.
   assert.deepEqual(await run('bash', { command: 'set +e\nWT=/tmp/worktrees/fe-lazy01\necho "exists=$(test -d "$WT" && echo yes || echo no)"\ncd "$WT" 2>/dev/null && pwd\n', workdir: team }, 'b'), { ran: true })
+  assert.deepEqual(await run('bash', { command: 'OUT=/tmp/ordinary\ncd "$OUT"\necho "unterminated', workdir: team }, 'b'), { ran: true })
   // PM verify scripts assign OUT=$(date) and cd below it; the literal prefix is
   // enough to see that the target stays outside the private board.
   assert.deepEqual(await run('bash', { command: 'set -u\ncd /data2t/working/aios\nOUT=/tmp/pm-inst-verify-$(date +%H%M%S)\nmkdir -p "$OUT"\ncd "$OUT/Ground/backend"\n', workdir: team }, 'b'), { ran: true })

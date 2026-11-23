@@ -9,7 +9,7 @@ import { createRuntime } from '../index.js'
 import { ROOM_NOTICE_MAX, SOURCE_KIND, TEXT_KEPT } from '../src/host/constants.js'
 import { dshHomeOf } from '../src/host/folders.js'
 import { escapeRegExp } from '../src/host/text.js'
-import { fakeApproval, fakeContext } from './fake-ctx.js'
+import { fakeApproval, fakeContext, partsPreStep } from './fake-ctx.js'
 
 let rt
 
@@ -113,8 +113,9 @@ async function start({ services = {}, workspaces = [], llm, team: saved = TEAM, 
     method: 'POST', body: JSON.stringify({ endpoint, payload }),
   }))).json()
   const tool = (name, args, sessionId) => rt.teamTools.find(d => d.name === name).execute(args, { agent: agentOf(sessionId), name, callId: 'c1' })
-  // Runs the parts check, registered last; 'next' means the step goes on.
-  const preStep = (sessionId, messages = [], step = 1) => ctx.listeners.get('agent/pre-step').at(-1)(
+  // Run parts.js directly. Other modules may register pre-step hooks after it.
+  const partsStep = partsPreStep(ctx)
+  const preStep = (sessionId, messages = [], step = 1) => partsStep(
     { agent: agentOf(sessionId), messages, step, signal: AbortSignal.timeout(60_000) }, async () => 'next')
   const state = () => JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
   // Waits until the Bot's own chat runs in `dir` and its move has finished.
@@ -1018,7 +1019,7 @@ test('a change out of the working folder that is not allowed changes nothing', a
   t.after(stop)
   assert.deepEqual(await changeDirectory(ctx, service, agentOf('b'), project), { error: notAllowed(project), ran: false })
   const guarded = await changeDirectory(ctx, service, agentOf('b'), dsh)
-  assert.match(guarded.error, /holds DeepSeek Harness data, so Bots cannot work there/)
+  assert.match(guarded.error, /instance user task board is private to the user/)
   assert.equal(guarded.ran, false)
   assert.equal(state().bots.b.workDir, undefined)
 })

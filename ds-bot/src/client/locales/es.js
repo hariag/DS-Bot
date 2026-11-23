@@ -1,6 +1,7 @@
 // Spanish (es) localization for DS Bot client and DSH settings namespaces.
 
 export const ES = {
+  'Started': 'Iniciado',
   'Always on': 'Siempre activo',
   'In catalog': 'En el catálogo',
   'In catalog: the Bot loads this only when it needs it.': 'En el catálogo: el Bot solo lo carga cuando lo necesita.',

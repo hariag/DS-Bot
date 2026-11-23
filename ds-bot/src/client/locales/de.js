@@ -1,6 +1,7 @@
 // German (de) localization for DS Bot client and DSH settings namespaces.
 
 export const DE = {
+  'Started': 'Gestartet',
   'Always on': 'Immer aktiv',
   'In catalog': 'Im Katalog',
   'In catalog: the Bot loads this only when it needs it.': 'Im Katalog: Der Bot lädt dies nur bei Bedarf.',
