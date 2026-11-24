@@ -349,8 +349,12 @@ function decide(body) {
     // highest one said so far.
     const block = /(?:^|\n)This round so far[^\n]*:\n([\s\S]*?)(?:\n\n|$)/.exec(userText)?.[1] ?? ''
     const lines = block.split('\n').filter(Boolean)
-    const userAt = lines.map(line => line.startsWith('User:')).lastIndexOf(true)
-    const openAt = userAt === -1 && /starting with the new message/.test(userText) ? 0 : userAt
+    // Schedule-change notices are user-shaped system events, not a new request. Prefer
+    // the latest actionable user line so a notice appended to the round cannot hide it.
+    const firstUserAt = lines.findIndex(line => line.startsWith('User:'))
+    const userAt = lines.findLastIndex(line => line.startsWith('User:') && !line.startsWith('User: [SCHEDULE CHANGE]'))
+    const latestUserAt = userAt === -1 ? firstUserAt : userAt
+    const openAt = latestUserAt === -1 && /starting with the new message/.test(userText) ? 0 : latestUserAt
     const userLine = openAt === -1 ? '' : lines[openAt]
     const said = lines.slice(openAt + 1)
       .map(line => /^[^:\n]{1,40}: \D*?(\d+)/.exec(line)?.[1])
@@ -360,6 +364,7 @@ function decide(body) {
     const room = /^\[Group chat "([^"]+)"/.exec(userText)?.[1] ?? ''
     const leads = /^Members: .* and you \(admin\)\./m.test(userText)
     let ask
+    if (userLine.startsWith('User: [SCHEDULE CHANGE]')) return [text('[PASS]')]
     if ((ask = /把\s*(\S+?)\s*拉进群/.exec(userLine))) return [tool('update_group', { group: room, add_members: [ask[1]] })]
     if ((ask = /把\s*(\S+?)\s*踢出群/.exec(userLine))) return [tool('update_group', { group: room, remove_members: [ask[1]] })]
     if ((ask = /群名改成\s*(\S+)/.exec(userLine))) return [tool('update_group', { group: room, name: ask[1] })]
