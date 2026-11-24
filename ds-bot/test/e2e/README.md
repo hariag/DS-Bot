@@ -45,7 +45,13 @@ The current scenarios cover:
    the card cover;
 8. reload persistence for the card, lane, labels, due date, checklist, comment, image and
    description;
-9. no uncaught page errors and no console errors.
+9. a 60-second idle browser monitor, checking request volume, repeated command-catalog
+   fetches, request failures, HTTP errors, WebSocket reconnects and the open `remote.mux`;
+10. no uncaught page errors and no console errors.
+
+Set `BOARD_E2E_IDLE_MONITOR_MS` to change the idle sample duration. The monitor fails on more
+than 30 requests total, more than 10 in any 10-second bucket, repeated command-catalog fetches,
+failed requests, HTTP 4xx/5xx responses, a closed `remote.mux`, or a reconnect during the sample.
 
 The separate browser fixture (`npm run test:board:browser`) mounts `task-board.js` against
 synthetic requests; it covers recovery/review panels, read-only, capacity, personal

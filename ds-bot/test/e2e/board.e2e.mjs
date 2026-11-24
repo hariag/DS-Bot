@@ -75,6 +75,7 @@ let cookie
 let seed
 const consoleErrors = []
 const pageErrors = []
+const network = { requests: [], failures: [], httpErrors: [], websockets: [] }
 let shotIndex = 0
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -349,6 +350,18 @@ async function main() {
   page = await context.newPage()
   page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()) })
   page.on('pageerror', error => pageErrors.push(error.message))
+  page.on('request', request => {
+    try { network.requests.push({ at:Date.now(), path:new URL(request.url()).pathname }) } catch {}
+  })
+  page.on('requestfailed', request => network.failures.push({ at:Date.now(), url:request.url(), error:request.failure()?.errorText ?? 'unknown' }))
+  page.on('response', response => {
+    if (response.status() >= 400) network.httpErrors.push({ at:Date.now(), url:response.url(), status:response.status() })
+  })
+  page.on('websocket', socket => {
+    const record = { url:socket.url(), openedAt:Date.now(), closedAt:null }
+    network.websockets.push(record)
+    socket.on('close', () => { record.closedAt = Date.now() })
+  })
   await page.goto(seed.loginUrl, { waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(2500)
 
@@ -766,6 +779,41 @@ async function main() {
   } else {
     results.push({ name: 'downstream board scenarios', status: 'SKIP', evidence: { message: 'board open failed' }, ms: 0 })
   }
+
+  const idleMonitorMs = Number(process.env.BOARD_E2E_IDLE_MONITOR_MS || 60_000)
+  await step(`network: idle monitor for ${idleMonitorMs}ms`, async () => {
+    const from = Date.now()
+    const requestOffset = network.requests.length
+    const failureOffset = network.failures.length
+    const httpErrorOffset = network.httpErrors.length
+    const websocketOffset = network.websockets.length
+    await sleep(idleMonitorMs)
+    const durationMs = Date.now() - from
+    const requests = network.requests.slice(requestOffset).filter(item => item.at >= from)
+    const failures = network.failures.slice(failureOffset).filter(item => item.at >= from)
+    const httpErrors = network.httpErrors.slice(httpErrorOffset).filter(item => item.at >= from)
+    const newSockets = network.websockets.slice(websocketOffset).filter(item => item.openedAt >= from)
+    const requestsByPath = Object.fromEntries([...new Set(requests.map(item => item.path))]
+      .sort().map(path => [path, requests.filter(item => item.path === path).length]))
+    const commandCatalogCalls = requests.filter(item => item.path.endsWith('/api/commands/list')).length
+    const buckets = Array(Math.max(1, Math.ceil(durationMs / 10_000))).fill(0)
+    for (const request of requests) buckets[Math.min(buckets.length - 1, Math.floor((request.at - from) / 10_000))] += 1
+    const remoteSockets = network.websockets.filter(item => item.url.includes('/api/remote.mux'))
+    const evidence = {
+      durationMs, requestCount:requests.length, requestsByPath,
+      maxRequestsPer10s:Math.max(...buckets), commandCatalogCalls,
+      failedRequests:failures.length, httpErrors:httpErrors.length,
+      remoteMuxOpen:remoteSockets.some(item => item.closedAt === null),
+      websocketReconnects:newSockets.filter(item => item.url.includes('/api/remote.mux')).length,
+    }
+    if (evidence.requestCount > 30 || evidence.maxRequestsPer10s > 10 || commandCatalogCalls > 1
+      || failures.length || httpErrors.length || !evidence.remoteMuxOpen || evidence.websocketReconnects) {
+      throw new StepError('idle browser network monitor exceeded its limits', {
+        ...evidence, failures:failures.slice(0, 10), httpErrors:httpErrors.slice(0, 10),
+      })
+    }
+    return evidence
+  })
 
   await step('console: no uncaught page errors and no console errors', async () => {
     if (pageErrors.length || consoleErrors.length) {
