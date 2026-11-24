@@ -209,7 +209,7 @@ export function install(rt) {
   // A failed delivery leaves the note (the next start sends it again) but not this
   // entry, so a retry in this run really sends it.
   const sending = new Map()
-  rt.deliver = async (args) => {
+  rt.deliver = async (args, observation) => {
     const noted = { ...args, exchangeId: args.exchangeId ?? randomUUID() }
     const sessionId = noted.sessionId ?? rt.chatOf(noted.toId)
     const repeat = noted.deferred === true && noted.resent !== true
@@ -228,7 +228,7 @@ export function install(rt) {
     persist()
     const run = (async () => {
       try {
-        return await deliver(noted)
+        return await deliver(noted, observation)
       } catch (error) {
         // A delivery that never reached the inbox stays noted: the next start sends
         // it again. One whose Bot is gone is dropped, since it can never be sent.

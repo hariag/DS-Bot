@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { install } from '../../src/host/delivery.js'
+import { install as installResume } from '../../src/host/resume.js'
 
 function fixture() {
   const sent = [], session = {}, agent = {session, followup:message => sent.push(message), steer:message => sent.push(message)}
@@ -46,4 +47,21 @@ test('the admission receipt callback runs after queueing but before delivery flu
     afterAdmission:(agent,message)=>{assert.equal(sent[0],message);order.push('receipt')},
   })
   assert.deepEqual(order,['receipt','flush'])
+})
+
+test('resume delivery preserves the admission observers used by durable board tasks', async () => {
+  const {rt, sent, agent} = fixture()
+  rt.home = `/tmp/dsbot-resume-delivery-${process.pid}-${Date.now()}`
+  rt.readOnly = () => 'test fixture'
+  rt.isBotSession = () => false
+  rt.ctx.on = () => {}
+  rt.ctx.effect = () => {}
+  installResume(rt)
+  const order = []
+  const result = await rt.deliver({toId:'bot',role:'request',text:'Do the task',exchangeId:'board-exchange'}, {
+    beforeAdmission:target=>{ assert.equal(sent.length,0); assert.equal(target,agent); order.push('before') },
+    afterAdmission:(target,message)=>{ assert.equal(sent[0],message); assert.equal(target,agent); order.push('after') },
+  })
+  assert.equal(result, 'board-exchange')
+  assert.deepEqual(order, ['before','after'])
 })

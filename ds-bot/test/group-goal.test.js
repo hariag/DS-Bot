@@ -134,6 +134,16 @@ const startGoal = (host, extra = {}) => host.tool('group_goal', {
   action: 'start', title: 'Ship it', objective: 'Ship the thing', acceptance: 'it is shipped', stages: STAGES, ...extra,
 }, 'ga')
 
+test('group task admission creates and persists a member Session and rejects nonmembers', async t => {
+  const host = await start(t, { sessions:{ a:'ga', c:'gc' } })
+  const sessionId = await host.rt.ensureGroupTaskSession('r1', 'b')
+  assert.equal(sessionId, 's1')
+  assert.equal(host.rt.state.rooms.r1.sessions.b, sessionId)
+  assert.deepEqual(host.rt.groupOwners.get(sessionId), { botId:'b', roomId:'r1' })
+  assert.equal(typeof host.rt.state.rooms.r1.seen, 'object')
+  assert.equal(await host.rt.ensureGroupTaskSession('r1', 'missing'), undefined)
+})
+
 test('a scheduled review retries the same occurrence after a busy result', async t => {
   const host = await start(t)
   await startGoal(host)

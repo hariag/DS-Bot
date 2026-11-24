@@ -149,7 +149,6 @@ const zh = {
   deleteComment: /^(删除|Delete)$/,
   confirmDelete: /^(确认删除|Confirm delete)$/,
   chooseImages: /^(选择图片|Choose images)$/,
-  uploadImages: /^(上传文件|Upload files)$/,
   chooseFiles: /^(选择文件|Choose files)$/,
   setCover: /^(Set as cover|Set cover|设为封面)$/,
   draft: /^(Save as draft|保存起草|保存为起草)$/,
@@ -648,6 +647,8 @@ async function main() {
 
       await step('attachments: unsupported file rejected, valid PNG uploaded and rendered', async () => {
         const png = PNG.sync.write({ width: 16, height: 16, data: Buffer.alloc(16 * 16 * 4, 128) })
+        const pngName = 'e2e-' + opts.runId + '.png'
+        const pdfName = 'e2e-spec-' + opts.runId + '.pdf'
         let rejectedText = ''
         await withCard(createdTask.id, async dialog => {
           const attachments = dialog.locator('.bt-card-attachments').first()
@@ -658,28 +659,22 @@ async function main() {
           rejectedText = alerts.join(' | ')
           if (!/PNG|JPEG|支持|PDF/.test(rejectedText)) throw new StepError('unsupported file was not rejected with an attachment message', { alerts: rejectedText })
           if (await attachments.locator('.bt-attachment-queue img').count()) throw new StepError('unsupported file was queued as an image')
-          await input.setInputFiles({ name: 'e2e-' + opts.runId + '.png', mimeType: 'image/png', buffer: png })
-          await page.waitForTimeout(500)
-          const upload = attachments.getByRole('button', { name: zh.uploadImages }).first()
-          if (!await upload.count()) throw new StepError('no Upload images button after choosing a PNG')
-          await upload.click()
-          await waitFor('uploaded image in board-list', async () => {
+          await input.setInputFiles({ name: pngName, mimeType: 'image/png', buffer: png })
+          const withPng = await waitFor('PNG uploaded to board-list', async () => {
             const current = await taskByTitle(title)
-            return (current?.images ?? []).length ? current : undefined
+            return current && (current.images ?? []).some(item => item.name === pngName) ? current : undefined
           }, 30_000)
           const image = attachments.locator('.bt-attachment-grid img').first()
           await image.waitFor({ state: 'visible', timeout: 10_000 })
           const natural = await image.evaluate(node => ({ width: node.naturalWidth, height: node.naturalHeight }))
           if (!natural.width || !natural.height) throw new StepError('uploaded image is not decoded by the browser', { natural })
-          await input.setInputFiles({ name: 'e2e-spec-' + opts.runId + '.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\nE2E attachment\n') })
-          await page.waitForTimeout(300)
-          await attachments.getByRole('button', { name: zh.uploadImages }).first().click()
+          await input.setInputFiles({ name: pdfName, mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\nE2E attachment\n') })
           const withPdf = await waitFor('PDF attachment in board-list', async () => {
             const current = await taskByTitle(title)
-            return (current?.images ?? []).some(item => item.mediaType === 'application/pdf') ? current : undefined
+            return current && (current.images ?? []).some(item => item.name === pdfName && item.mediaType === 'application/pdf') ? current : undefined
           }, 30_000)
-          await attachments.locator('.bt-attachment-file').filter({ hasText: 'e2e-spec-' + opts.runId }).waitFor({ state:'visible', timeout:10_000 })
-          return { images: withPdf.images.length, natural, rejectedText, screenshot: await shot('image-uploaded') }
+          await attachments.locator('.bt-attachment-file').filter({ hasText: pdfName }).waitFor({ state:'visible', timeout:10_000 })
+          return { images: withPdf.images.length, png:pngName, pdf:pdfName, pngPresent:withPng.images.some(item => item.name === pngName), natural, rejectedText, screenshot: await shot('image-uploaded') }
         })
         return { rejectedText }
       })

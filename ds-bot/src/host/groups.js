@@ -845,6 +845,7 @@ export function install(rt) {
   // first message, so it stays fixed and the prefix stays cacheable.
   async function groupSessionFor(room, member) {
     room.sessions ??= {}
+    room.seen ??= {}
     const known = room.sessions[member.id]
     if (known !== undefined) {
       await rt.ensureCapabilities(known)
@@ -877,6 +878,16 @@ export function install(rt) {
       .catch(error => rt.warn('ds-bot: scoped tools for %s in %s not applied: %s', member.name, room.name, error))
     await rt.ensureCapabilities(id)
     return { id, brief: await rt.ownChatBrief(member) }
+  }
+
+  // Board and scheduled work may address a room member before that member has
+  // taken a turn in the group. Reuse the same creation path as a normal group
+  // turn so the Session is persisted, scoped, and owned before delivery.
+  rt.ensureGroupTaskSession = async (roomId, botId) => {
+    const room = rt.roomOf(roomId)
+    const member = rt.botOf(botId)
+    if (room === undefined || member === undefined || !room.members.includes(botId)) return undefined
+    return (await groupSessionFor(room, member))?.id
   }
 
   // Lines from before the round's opening message are kept apart from this round, so
