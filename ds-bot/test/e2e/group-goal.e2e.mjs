@@ -53,72 +53,99 @@ async function main() {
       if (!found) fail('Bot was not created: ' + name)
       return found
     }
-    const admin = await bot('Goal E2E Admin', 'Project Manager', 'Coordinate group tasks, check evidence, and complete the goal.')
-    const writer = await bot('Goal E2E Writer', 'Backend Developer', 'Prepare the assigned draft and report verifiable evidence.')
-    const tester = await bot('Goal E2E Tester', 'Test Engineer', 'Verify the assigned draft and report the check evidence.')
+    const groups = []
+    for (const suffix of ['A', 'B']) {
+      const admin = await bot(`Goal E2E ${suffix} Admin`, 'Project Manager', 'Coordinate group tasks, check evidence, and complete the goal.')
+      const writer = await bot(`Goal E2E ${suffix} Writer`, 'Backend Developer', 'Prepare the assigned draft and report verifiable evidence.')
+      const tester = await bot(`Goal E2E ${suffix} Tester`, 'Test Engineer', 'Verify the assigned draft and report the check evidence.')
+      groups.push({ suffix, admin, writer, tester })
+    }
     await waitFor('Bot setup turns to finish', async () => {
       const state = await api('state')
       return Object.keys(state.activity ?? {}).length === 0 ? state : undefined
     })
-    const room = await api('create-room', {
-      name:'Group Goal Lifecycle E2E', members:[admin.id, writer.id, tester.id], admin:admin.id, greet:false,
+    for (const group of groups) {
+      group.room = await api('create-room', {
+        name:`Group Goal Lifecycle E2E ${group.suffix}`,
+        members:[group.admin.id, group.writer.id, group.tester.id], admin:group.admin.id, greet:false,
+      })
+    }
+    await waitFor('created groups', async () => {
+      const current = rooms(await api('state'))
+      return groups.every(group => current.some(item => item.id === group.room.id))
     })
-    await waitFor('created group', async () => rooms(await api('state')).find(item => item.id === room.id))
 
-    const start = {
-      action:'start',
-      title:'Two-stage group-goal lifecycle',
-      objective:'Prepare a draft, independently verify it, and complete the group goal.',
-      acceptance:'Both stages pass with member evidence and the administrator records a completion summary.',
-      stages:[
-        { title:'Draft', acceptance:'The writer provides the draft and evidence.', tasks:[{ bot:writer.name, task:'Prepare the lifecycle draft and report its evidence.' }] },
-        { title:'Independent check', acceptance:'The tester verifies the draft and reports evidence.', tasks:[{ bot:tester.name, task:'Independently verify the lifecycle draft and report the result.' }] },
-      ],
+    for (const group of groups) {
+      const start = {
+        action:'start',
+        title:`Two-stage group-goal lifecycle ${group.suffix}`,
+        objective:'Prepare a draft, independently verify it, and complete the group goal.',
+        acceptance:'Both stages pass with member evidence and the administrator records a completion summary.',
+        stages:[
+          { title:'Draft', acceptance:'The writer provides the draft and evidence.', tasks:[{ bot:group.writer.name, task:'Prepare the lifecycle draft and report its evidence.' }] },
+          { title:'Independent check', acceptance:'The tester verifies the draft and reports evidence.', tasks:[{ bot:group.tester.name, task:'Independently verify the lifecycle draft and report the result.' }] },
+        ],
+      }
+      group.start = start
+      await api('send', { sessionId:group.room.id, text:'调用 group_goal ' + JSON.stringify(start) })
     }
-    await api('send', { sessionId:room.id, text:'调用 group_goal ' + JSON.stringify(start) })
 
-    const trace = []
     const observe = state => {
-      const goal = activeGoal(state, room.id)
-      if (goal) trace.push({ status:goal.status, idle:goal.idle === true, revision:goal.revision,
-        current:goal.current, tasks:goal.stages?.map(stage => stage.tasks?.map(task => task.status)) })
-      return goal
+      for (const group of groups) {
+        const goal = activeGoal(state, group.room.id)
+        if (!goal) continue
+        group.trace ??= []
+        group.trace.push({ status:goal.status, idle:goal.idle === true, revision:goal.revision,
+          current:goal.current, tasks:goal.stages?.map(stage => stage.tasks?.map(task => task.status)) })
+        group.observedReports ??= new Set()
+        goal.stages?.forEach((stage, index) => {
+          if (stage.tasks.some(task => task.status === 'reported' && task.statusSource === 'automatic')) group.observedReports.add(index)
+        })
+      }
     }
-    const waitTask = async (stage, status) => waitFor(`stage ${stage + 1} task ${status}`, async () => {
+    const waitTask = async (group, stage, status) => waitFor(`group ${group.suffix} stage ${stage + 1} task ${status}`, async () => {
       const state = await api('state')
-      const goal = observe(state)
+      observe(state)
+      const goal = activeGoal(state, group.room.id)
       const task = goal?.stages?.[stage]?.tasks?.[0]
       return task?.status === status ? { goal, task } : undefined
     })
 
-    let { goal, task } = await waitTask(0, 'working')
-    console.log(`stage 1 assigned: ${task.botId} status=${task.status}; goal=${goal.status}, idle=${goal.idle ?? false}`)
-    ;({ goal, task } = await waitTask(0, 'reported'))
-    if (task.statusSource !== 'automatic') fail('stage 1 member report was not recorded automatically', { task })
-    console.log(`stage 1 reported: source=${task.statusSource}`)
-
-    await waitFor('stage 1 pass and stage 2 assignment', async () => {
-      const state = await api('state')
-      const current = observe(state)
-      if (current?.stages?.[0]?.status === 'passed' && current.current === 1) return current
-      return undefined
-    })
-    ;({ goal, task } = await waitTask(1, 'working'))
-    console.log(`stage 2 assigned: ${task.botId} status=${task.status}; goal=${goal.status}, idle=${goal.idle ?? false}`)
-    ;({ goal, task } = await waitTask(1, 'reported'))
-    if (task.statusSource !== 'automatic') fail('stage 2 member report was not recorded automatically', { task })
-    console.log(`stage 2 reported: source=${task.statusSource}`)
-
-    const completed = await waitFor('administrator completion', async () => {
-      const state = await api('state')
-      const current = observe(state)
-      return current?.status === 'complete' ? current : undefined
-    })
-    if (completed.stages.length !== 2 || completed.stages.some(stage => stage.status !== 'passed'
-      || stage.tasks.some(item => item.status !== 'done'))) {
-      fail('the full group-goal evidence chain was not completed', { goal:completed })
+    const stage1Assigned = await Promise.all(groups.map(group => waitTask(group, 0, 'working')))
+    for (const [index, result] of stage1Assigned.entries()) {
+      const group = groups[index]
+      console.log(`group ${group.suffix} stage 1 assigned: ${result.task.botId} status=${result.task.status}; goal=${result.goal.status}, idle=${result.goal.idle ?? false}`)
     }
-    if (!completed.summary || !completed.events.some(event => event.kind === 'complete')) fail('completion summary or event is missing', { goal:completed })
+    const stage1Reported = await Promise.all(groups.map(group => waitTask(group, 0, 'reported')))
+    for (const [index, result] of stage1Reported.entries()) {
+      if (result.task.statusSource !== 'automatic') fail(`group ${groups[index].suffix} stage 1 report was not recorded automatically`, { task:result.task })
+      console.log(`group ${groups[index].suffix} stage 1 reported: source=${result.task.statusSource}`)
+    }
+
+    await waitFor('both groups pass stage 1 and assign stage 2', async () => {
+      const state = await api('state')
+      observe(state)
+      return groups.every(group => activeGoal(state, group.room.id)?.stages?.[0]?.status === 'passed')
+    })
+    const completedState = await waitFor('both administrators complete their group goals', async () => {
+      const state = await api('state')
+      observe(state)
+      return groups.every(group => activeGoal(state, group.room.id)?.status === 'complete') ? state : undefined
+    })
+    const completedGoals = groups.map(group => activeGoal(completedState, group.room.id))
+    for (const [index, completed] of completedGoals.entries()) {
+      const group = groups[index]
+      if (completed.stages.length !== 2 || completed.stages.some(stage => stage.status !== 'passed'
+        || stage.tasks.some(item => item.status !== 'done'))) {
+        fail(`group ${group.suffix} full evidence chain was not completed`, { goal:completed })
+      }
+      if (!completed.summary || !completed.events.some(event => event.kind === 'complete')) fail(`group ${group.suffix} completion summary or event is missing`, { goal:completed })
+      const sawWorking = stage => (group.trace ?? []).some(sample => sample.tasks?.[stage]?.[0] === 'working')
+      const sawReported = stage => group.observedReports?.has(stage)
+      if (![0, 1].every(stage => sawWorking(stage) && sawReported(stage))) {
+        fail(`group ${group.suffix} missed an automatic task transition`, { trace:group.trace, reportedStages:[...(group.observedReports ?? [])] })
+      }
+    }
 
     const mockLog = readFileSync(join(HOME, 'mock.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
     const fixtureErrors = mockLog.filter(entry => entry.out?.some(block => block.type === 'text' && /Group-goal fixture (?:could not|found)/.test(block.text)))
@@ -130,17 +157,23 @@ async function main() {
     benchStopped = stopped.webPortFree && stopped.mockPortFree
     if (!benchStopped) fail('E2E bench ports are still occupied after completion', stopped)
     const saved = JSON.parse(readFileSync(join(HOME, 'bot', 'state.json'), 'utf8'))
-    const group = rooms(saved).find(item => item.id === room.id)
-    if (!group || !group.log?.some(line => line.text?.includes('@' + writer.name))
-      || !group.log?.some(line => line.text?.includes('@' + tester.name))
-      || !group.log?.some(line => line.who === writer.name && /Assigned work completed/.test(line.text ?? ''))
-      || !group.log?.some(line => line.who === tester.name && /Assigned work completed/.test(line.text ?? ''))) {
-      fail('the saved group transcript is missing one or more owner dispatches', { log:group?.log })
+    const savedGroups = groups.map(group => rooms(saved).find(item => item.id === group.room.id))
+    for (const [index, savedGroup] of savedGroups.entries()) {
+      const group = groups[index]
+      if (!savedGroup || !savedGroup.log?.some(line => line.text?.includes('@' + group.writer.name))
+        || !savedGroup.log?.some(line => line.text?.includes('@' + group.tester.name))
+        || !savedGroup.log?.some(line => line.who === group.writer.name && /Assigned work completed/.test(line.text ?? ''))
+        || !savedGroup.log?.some(line => line.who === group.tester.name && /Assigned work completed/.test(line.text ?? ''))) {
+        fail(`group ${group.suffix} saved transcript is missing one or more owner dispatches`, { log:savedGroup?.log })
+      }
     }
 
-    console.log(`complete: status=${completed.status}, stages=${completed.stages.length}, tasks=${completed.stages.reduce((n, stage) => n + stage.tasks.length, 0)}, activeSamples=${trace.length}, idleSamples=${trace.filter(item => item.idle).length}`)
-    console.log(`evidence: group=${room.id}; historyEvents=${completed.events.map(event => event.kind).join(',')}; mockRequests=${mockLog.length}; bench=${bench.base}`)
-    console.log(`stopped: webPortFree=${stopped.webPortFree}, mockPortFree=${stopped.mockPortFree}; savedTranscriptLines=${group.log.length}`)
+    const activeSamples = groups.reduce((count, group) => count + (group.trace?.length ?? 0), 0)
+    const idleSamples = groups.reduce((count, group) => count + (group.trace ?? []).filter(sample => sample.idle).length, 0)
+    const taskCount = completedGoals.reduce((count, goal) => count + goal.stages.reduce((stageCount, stage) => stageCount + stage.tasks.length, 0), 0)
+    console.log(`complete: groups=${groups.length}, stages=${completedGoals.reduce((count, goal) => count + goal.stages.length, 0)}, tasks=${taskCount}, activeSamples=${activeSamples}, idleSamples=${idleSamples}`)
+    console.log(`evidence: groups=${groups.map((group, index) => `${group.room.id}:${completedGoals[index].events.map(event => event.kind).join(',')}`).join(';')}; mockRequests=${mockLog.length}; bench=${bench.base}`)
+    console.log(`stopped: webPortFree=${stopped.webPortFree}, mockPortFree=${stopped.mockPortFree}; savedTranscriptLines=${savedGroups.map(group => group.log.length).join(',')}`)
   } finally {
     if (!benchStopped) {
       const stopped = await stopBench({ home:HOME, webPort:WEB_PORT, mockPort:MOCK_PORT })
