@@ -9,7 +9,7 @@ import { dirname } from 'node:path'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { goalNoteContext, validGoalTime } from '../shared/goal-note.js'
-import { GOAL_IDLE_NUDGES, SOURCE_KIND } from './constants.js'
+import { GOAL_NUDGE_BURST, SOURCE_KIND } from './constants.js'
 import { headOf } from './text.js'
 import { output } from './tools.js'
 import { currentGoalBoardTaskId } from './legacy-goal.js'
@@ -638,9 +638,10 @@ export function markTasks(room, botId, from, to, note, now = Date.now()) {
 
 const DUTY_ACTIVE = "You run this goal. First check current task states, existing owners and work in other conversations, dependencies, authorization, resource locks and available capacity. Call only members whose tasks are ready and need assignment; members named in one message start together. Do not redispatch working or reported work without a concrete reason. Review every task in the current stage and every stage acceptance item with evidence; group_goal pass marks every stage task done, so pass only when each task to be marked done is actually complete and verified. If a task is no longer applicable, first record the authorized scope decision and safely reconcile the stage; never falsely mark it done just to advance. If a specific member must redo work, first verify that member has an affected task in the current stage, preserve evidence and the affected task notes before group_goal rework with that bot; targeted rework also clears that member's affected task notes, while leaving bot out resets every task and clears all task notes. If the member has no current task, track the work on the project board or use a safe scoped revision. Record external blockers and work on independent authorized actions rather than treating waiting as rework. Revise this goal for an explicit user correction, or for necessary task or dependency adjustments within its existing authorized objective and acceptance; never materially change the user objective or acceptance scope or weaken its standard without explicit user direction; refine verification details within the authorized original acceptance and record the change. Use task to update one member status without passing stages. Revising constraints replaces the entire list. Revising stages rebuilds current and future stages and loses task notes, stage rework and feedback, and original IDs; show omits complete future task definitions. Before such a replacement, retrieve and preserve the complete current and future definitions, task states, notes, feedback and evidence from verifiable records; if unavailable, do not guess or rebuild, and track the work on the project board. When calling revise, supply only fields that need changing and reconcile all affected work after the revision. Track independent new user goals separately without overwriting this goal. Each stage should have at most one aggregated task per Bot; track separate acceptance items on the project board. Pause or resume this goal only on an explicit user request; an external blocker is not a pause, and do not attribute a Bot action to the user. Stop can stop other group members and their work; use it only for an explicit request to stop this whole goal after assessing impact. Keep all work within applicable user authorization and rules. Ask the user only for decisions you cannot make."
 const OWNER_REVIEW = 'Read the current group goal and this group’s task board first. Reuse original cards, items, owners, recent evidence and handoff receipts. When the group is idle and the goal is incomplete, take concrete authorized next steps this cycle for every independent eligible task; do not stop after moving only one Bot when other independent tasks can proceed. In one group reply, give each distinct owner a separate line starting with the exact plain-text @Name, followed by task ID, requested action or evidence, and a feedback deadline. Keep active mentions outside backticks, code blocks and Markdown links; those are literal text and are neither highlighted nor dispatched. Respect dependencies by waiting for a prerequisite result before calling its dependent owner. Make at most one effective follow-up per owner for the same task in this cycle. Record progress, blocker owner, and next check on the original item. Do not duplicate an outstanding or uncertain assignment; query its original recipient for receipt/status without restarting the work. Do not repeat a follow-up before its deadline. If the deadline is missed or two scheduled checks pass without confirmation, escalate to the specific person authorized to unblock or decide and continue independent authorized work. Do not leave an incomplete goal in an ownerless or open-ended wait. Honor explicit user pause/stop and do not mark reported work done without acceptance evidence.'
+const DUTY_CONTINUITY = 'Keep an unfinished goal active until its acceptance is verified, or the user explicitly pauses or stops it. A lack of progress is not itself a user blocker. If a real user decision is the only way forward, report the exact question, recommendation, impact and next check time; continue independent authorized work and do not repeat an unchanged decision request.'
 const DUTY_PASSED = 'Every stage passed. Check the overall "done when", then call group_goal complete with the evidence and a summary for the user.'
 const DUTY_PAUSED = "This group goal is paused. Do not assume who paused it without evidence, assign new work or pass stages for it. Continue unrelated user-authorized work that does not depend on the paused goal. Resume only on an explicit user request."
-const dutyOf = goal => (goal.status === 'paused' ? DUTY_PAUSED : goal.stages[goal.current] === undefined ? DUTY_PASSED : `${DUTY_ACTIVE} ${OWNER_REVIEW}`)
+const dutyOf = goal => (goal.status === 'paused' ? DUTY_PAUSED : goal.stages[goal.current] === undefined ? DUTY_PASSED : `${DUTY_ACTIVE} ${OWNER_REVIEW} ${DUTY_CONTINUITY}`)
 
 const DUTY_DRAFT = [
   'Establish the goal from the user request and available facts; follow goal-grill when available and ask only for decisions genuinely needed:',
@@ -1391,14 +1392,12 @@ export function install(rt) {
     return { error: 'Nothing to do', code: 'bot/invalid' }
   }
 
-  const parkAutomatically = (goal, reason, now = Date.now()) => {
-    goal.idle = true
-    goal.idleReason = reason
-    goal.reviewAt = now + GOAL_REVIEW_INTERVAL_MS
-    if (goal.reviewAttempt) goal.ownerReviewAt = now + GOAL_REVIEW_INTERVAL_MS
+  const scheduleNextGoalReview = (goal, now = Date.now()) => {
+    clearAutomaticIdle(goal)
     delete goal.reviewAttempt
+    goal.ownerReviewAt = now + GOAL_REVIEW_INTERVAL_MS
+    goal.nudges = GOAL_NUDGE_BURST
     goal.revision += 1
-    goal.idleRevision = goal.revision
     goal.updatedAt = now
   }
 
@@ -1467,7 +1466,7 @@ export function install(rt) {
         goal.inspectionBackoff = { fingerprint, count }
       }
       if (!current) rt.noteFailure?.({ level: 'warn', source: 'goal', code: 'GOAL_INSPECTION_INCOMPLETE', text: `Goal inspection ${attempt.id} did not produce a current goal ledger; owner checks remain pending.` })
-      if (!inspectionOnlyIdle(goal)) parkAutomatically(goal, reason, now)
+      if (!inspectionOnlyIdle(goal)) scheduleNextGoalReview(goal, now)
       else {
         delete goal.reviewAttempt
         goal.ownerReviewAt = now + GOAL_REVIEW_INTERVAL_MS
@@ -1477,7 +1476,7 @@ export function install(rt) {
       return
     }
     if (!inspectionOnlyIdle(goal)) {
-      parkAutomatically(goal, reason, now)
+      scheduleNextGoalReview(goal, now)
       if (!remaining.length) {
         goal.lastOwnerReview = { ...goal.ownerReview, completedAt: now }
         delete goal.ownerReview
@@ -1539,7 +1538,7 @@ export function install(rt) {
   // Work can outlive its round, so settlement checks an otherwise quiet room.
   // A settlement event is not evidence of progress: turn/end and subagent/end
   // also fire after an admin [PASS] or a failed turn. Keep the slot non-empty
-  // to allow the check, but do not reset the idle check budget.
+  // to allow the check, but do not reset the immediate check budget.
   const SETTLE_ROUND = Object.freeze({ stoppedOnly: false, slots: Object.freeze([{ id: '', worked: false }]) })
 
   async function goalSettled(room) {
@@ -1720,6 +1719,7 @@ export function install(rt) {
       const message = nativeOpening && Object.freeze({ ...goalRelayMessage(room, 'nudge', '[Scheduled group board review]', 'DS Bot', options), id:openingMessageId })
       if (message && attempt.inspectOnly) attempt.nativeOpening = { id:openingMessageId,
         inputHash:inspectionMessageHash(nativeOpening), relayHash:inspectionMessageHash(message) }
+      if (automaticIdle(goal)) clearAutomaticIdle(goal)
       goal.reviewAttempt = attempt
       goal.revision += 1
       if (goal.idle) goal.idleRevision = goal.revision
@@ -1770,7 +1770,7 @@ export function install(rt) {
         // An attempt may be stuck in admitting/uncertain after a failed delivery;
         // runScheduledRoomReview's reconcile path is what recovers it, so do not
         // skip the room just because an attempt exists.
-        if (!goal || goal.status !== 'active' || goal.idle !== true) continue
+        if (!goal || goal.status !== 'active') continue
         if (inspectionOnlyIdle(goal) || !reviewEligible(goal) || !reviewIsDue(goal)) continue
         if (Date.now() - (room.scheduledReviewOccurrence?.at ?? 0) < 10 * 60e3) continue
         const sessionId = rt.sessionOfRoom(room)
@@ -1816,31 +1816,25 @@ export function install(rt) {
     }
     if (goal?.reviewAttempt || goal?.status !== 'active' || goal.idle || !admin) return
     if (!room.members.includes(admin.id)) return
-    // The idle driver from 0.3.9: once a round ends with nothing running, wake the
-    // admin for a goal check. Progress only resets the check count; two checks without
-    // progress mark the goal idle until something happens. The AIOS scheduled-review
-    // cadence above stays in charge when a review is already open.
+    // Wake the admin for a bounded burst of immediate checks. An unfinished goal
+    // stays active after the burst and is revisited by the periodic review sweep.
     if (round.stoppedOnly === true || round.slots.length === 0) return
     if (round.userMessage === true || round.slots.some(slot => slot.worked === true && slot.id !== admin.id)) goal.nudges = 0
     if (round.goalNudge === true && round.slots.some(slot => slot.id === admin.id && slot.status === 'passed')) {
-      goal.idle = true
-      goal.idleReason = 'admin-pass'
-      goal.idleRevision = goal.revision + 1
-      goal.revision += 1
-      goal.updatedAt = Date.now()
-      await rt.save()
+      scheduleNextGoalReview(goal)
+      await rt.save({ required: true })
       return
     }
     if ((rt.workingInRoom?.(room) ?? []).length > 0) return
     if (rt.roomBatchPending?.(room.id) === true) return
     if ((rt.roomInbox.get(room.id)?.length ?? 0) > 0) return
-    if (goal.nudges >= GOAL_IDLE_NUDGES) {
-      goal.idle = true
-      goal.idleReason = 'nudge-limit'
-      goal.idleRevision = goal.revision + 1
-      goal.revision += 1
-      goal.updatedAt = Date.now()
-      await rt.save()
+    if (goal.nudges >= GOAL_NUDGE_BURST) {
+      if (!Number.isFinite(goal.ownerReviewAt) || goal.ownerReviewAt <= Date.now()) {
+        goal.ownerReviewAt = Date.now() + GOAL_REVIEW_INTERVAL_MS
+        goal.revision += 1
+        goal.updatedAt = Date.now()
+        await rt.save({ required: true })
+      }
       return
     }
     goal.nudges += 1

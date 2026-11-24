@@ -160,6 +160,24 @@ test('a scheduled review retries the same occurrence after a busy result', async
   assert.equal(await host.rt.runScheduledRoomReview(room, key, agent), 'admitted')
   assert.equal(room.scheduledReviewOccurrence.outcome, 'admitted')
   assert.ok(room.goal.reviewAttempt)
+  assert.equal(room.goal.idle, undefined, 'active goals can be reviewed without entering an idle state')
+})
+
+test('a completed periodic review leaves an unfinished goal active and schedules the next check', async t => {
+  const host = await start(t)
+  await startGoal(host)
+  const room = host.rt.roomOf('r1')
+  host.rt.roomBusyForPatrol = () => false
+  room.goal.ownerReviewAt = 0
+  await host.rt.save({ required:true })
+  const key = JSON.stringify(['managed', new Date().toISOString()])
+  assert.equal(await host.rt.runScheduledRoomReview(room, key, host.agentOf('r1')), 'admitted')
+  const reviewId = room.goal.reviewAttempt.id
+  await host.rt.goalDrive(room, { goalReviewId:reviewId, stoppedOnly:false, slots:[{ id:'a', status:'passed' }] })
+  assert.equal(room.goal.status, 'active')
+  assert.equal(room.goal.idle, undefined)
+  assert.equal(room.goal.reviewAttempt, undefined)
+  assert.ok(room.goal.ownerReviewAt > Date.now())
 })
 
 test('group_goal start validates the goal with the contract refusals', async (t) => {
@@ -344,7 +362,7 @@ test('a group with no admin refuses a goal draft', async (t) => {
   assert.equal(result.error.message, 'This group has no admin. Set one in the group settings first.')
 })
 
-test('an idle round wakes the admin for a goal check; [PASS] waits for the user', async (t) => {
+test('an idle round wakes the admin for a goal check; [PASS] keeps an unfinished goal active', async (t) => {
   const host = await start(t)
   await startGoal(host)
   // A user-message round ends with nothing running: the goal check queues once.
@@ -362,14 +380,17 @@ test('an idle round wakes the admin for a goal check; [PASS] waits for the user'
   const prompt = text(host.agentOf('ga').calls[1])
   assert.match(prompt, /goal check/)
   assert.match(prompt, /Goal check from DS Bot/)
+  assert.match(prompt, /A lack of progress is not itself a user blocker/)
   host.begin('ga')
   host.finish('ga', '[PASS]')
   await settle(() => check() !== undefined)
-  assert.equal(goal(host).idle, true)
+  assert.equal(goal(host).status, 'active')
+  assert.equal(goal(host).idle, undefined)
+  assert.ok(goal(host).ownerReviewAt > Date.now(), 'a bounded periodic review is scheduled')
   assert.equal(host.agentOf('r1').calls.filter(call => call.source?.role === 'goal' && call.source.goal === 'nudge').length, 0)
 })
 
-test('two goal checks without progress mark the goal idle; a user message clears it', async (t) => {
+test('two goal checks without progress back off to periodic review; a user message resets the burst', async (t) => {
   const host = await start(t)
   await startGoal(host)
   const first = host.round('c1', host.say('@Chief go'))
@@ -386,20 +407,23 @@ test('two goal checks without progress mark the goal idle; a user message clears
   host.finish('ga', 'waiting on the user')
   await settle(() => one() !== undefined)
   assert.equal(goal(host).nudges, 2)
-  // The second check: same, so the goal waits for the user instead.
+  // The second check: same, so immediate checks back off without idling the goal.
   const two = host.round('c3', host.takeGoal())
   await settle(() => host.agentOf('ga').calls.length === 3)
   host.begin('ga')
   host.finish('ga', 'still waiting')
   await settle(() => two() !== undefined)
-  assert.equal(goal(host).idle, true)
-  // A user message clears the idle wait and the count starts over.
+  assert.equal(goal(host).idle, undefined)
+  assert.ok(goal(host).ownerReviewAt > Date.now())
+  // A user message clears the backoff count and starts another bounded burst.
   const third = host.round('c4', host.say('@Chief new ask'))
   await settle(() => host.agentOf('ga').calls.length === 4)
   host.begin('ga')
   host.finish('ga', '[PASS]')
   await settle(() => third() !== undefined)
-  assert.deepEqual([goal(host).idle, goal(host).nudges], [undefined, 1])
+  assert.equal(goal(host).status, 'active')
+  assert.equal(goal(host).idle, undefined)
+  assert.equal(goal(host).nudges, 1, 'the user-message round does not count as an automatic goal check')
 })
 
 test('a paused goal and a room at work do not get a goal check', async (t) => {
@@ -628,10 +652,10 @@ test('a batch member that finishes first is reported while its peer still works'
   assert.equal(taskOf('c').status, 'working')
 })
 
-test('a member call while the goal waits brings it back', async (t) => {
+test('member work after the immediate check backoff restarts goal progress', async (t) => {
   const host = await start(t)
   await startGoal(host)
-  // Drive the goal to idle: a user round, then two checks the admin passes on.
+  // Exhaust the immediate check burst without idling the unfinished goal.
   const first = host.round('c1', host.say('@Chief go'))
   await settle(() => host.agentOf('ga').calls.length === 1)
   host.begin('ga')
@@ -647,8 +671,9 @@ test('a member call while the goal waits brings it back', async (t) => {
   host.begin('ga')
   host.finish('ga', 'still waiting')
   await settle(() => two() !== undefined)
-  assert.equal(goal(host).idle, true)
-  // The admin's own post calling a member clears the wait through the task hook.
+  assert.equal(goal(host).idle, undefined)
+  assert.ok(goal(host).ownerReviewAt > Date.now())
+  // The admin's own post calling a member is new progress and resets the burst.
   await host.tool('post_to_group', { group: 'Ops', message: '@Writer write the draft' }, 'a')
   const third = host.round('c4', host.takePost())
   await settle(() => host.agentOf('gb').calls.length === 1)
@@ -750,7 +775,7 @@ test('a member still working at round end wakes the admin when its work settles'
   assert.equal(host.takeGoal(), undefined)
 })
 
-test('repeated turn settlements without member progress respect the idle check budget (#1330)', async (t) => {
+test('repeated turn settlements without member progress respect the immediate check budget (#1330)', async (t) => {
   const host = await start(t)
   await startGoal(host)
   const nudges = () => host.agentOf('r1').calls.filter(call => call.source?.role === 'goal' && call.source.goal === 'nudge')
@@ -772,10 +797,12 @@ test('repeated turn settlements without member progress respect the idle check b
 
   assert.equal(nudges().length, 2, 'PASS-only settlements must stop after 2 goal checks')
   assert.equal(goal(host).nudges, 2)
-  assert.equal(goal(host).idle, true)
+  assert.equal(goal(host).status, 'active')
+  assert.equal(goal(host).idle, undefined)
+  assert.ok(goal(host).ownerReviewAt > Date.now())
 })
 
-test('concurrent and admin-interleaved goalSettled calls stop at the idle limit (#1330)', async (t) => {
+test('concurrent and admin-interleaved goalSettled calls back off at the immediate check limit (#1330)', async (t) => {
   const host = await start(t)
   await startGoal(host)
   const room = host.rt.roomOf('r1')
@@ -784,9 +811,10 @@ test('concurrent and admin-interleaved goalSettled calls stop at the idle limit 
   await Promise.all(Array.from({ length: 6 }, () => host.rt.goalSettled(room)))
   assert.equal(nudges().length, 2)
   assert.equal(goal(host).nudges, 2)
-  assert.equal(goal(host).idle, true)
+  assert.equal(goal(host).idle, undefined)
+  assert.ok(goal(host).ownerReviewAt > Date.now())
 
-  // User message clears idle, then admin-only rounds + settlements still stop at 2 more checks.
+  // User message resets the burst, then admin-only rounds + settlements stop at 2 more checks.
   host.rt.goalUserMessage('r1')
   for (let i = 0; i < 6; i += 1) {
     await host.rt.goalDrive(room, { stoppedOnly: false, slots: [{ id: 'a', status: 'posted', worked: true }] })
@@ -794,7 +822,8 @@ test('concurrent and admin-interleaved goalSettled calls stop at the idle limit 
   }
   assert.equal(nudges().length, 4)
   assert.equal(goal(host).nudges, 2)
-  assert.equal(goal(host).idle, true)
+  assert.equal(goal(host).idle, undefined)
+  assert.ok(goal(host).ownerReviewAt > Date.now())
 
   // Real non-admin member work in a round still resets the check budget once idle is cleared.
   host.rt.goalUserMessage('r1')
@@ -818,9 +847,10 @@ test('concurrent and admin-interleaved goalSettled calls stop at the idle limit 
   assert.equal(goal(host).nudges, 1)
   assert.equal(goal(host).idle, undefined)
 
-  // Admin [PASS] on a goal-check round marks idle immediately; later settlements do not wake it.
+  // Admin [PASS] on a goal-check round schedules a periodic review; later settlements do not wake it.
   await host.rt.goalDrive(room, { goalNudge: true, stoppedOnly: false, slots: [{ id: 'a', status: 'passed' }] })
   for (let i = 0; i < 4; i += 1) await host.rt.goalSettled(room)
   assert.equal(nudges().length, 6)
-  assert.equal(goal(host).idle, true)
+  assert.equal(goal(host).idle, undefined)
+  assert.ok(goal(host).ownerReviewAt > Date.now())
 })
