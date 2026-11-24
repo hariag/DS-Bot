@@ -13,8 +13,9 @@
 // Environment: MOCK_PORT, MOCK_LOG, MOCK_DELAY_MS, MOCK_JITTER_MS (random extra latency),
 // MOCK_LOG_CHARS (prompt length kept per log entry), MOCK_SUMMARY_DELAY_MS (handoff notes
 // and backend compaction only), MOCK_BOARD_AUTORUN=1 (drive the board_task lifecycle
-// protocol for the isolated release E2E), MOCK_NATIVE_SEARCH=off (ignore web_search_* tools and
-// answer like an endpoint without search), MOCK_REJECT_IMAGES=1 (reject requests with images).
+// protocol for the isolated release E2E), MOCK_GROUP_GOAL_AUTORUN=1 (drive an isolated
+// group-goal lifecycle), MOCK_NATIVE_SEARCH=off (ignore web_search_* tools and answer like
+// an endpoint without search), MOCK_REJECT_IMAGES=1 (reject requests with images).
 //
 // Commands to a Bot:
 //   建群 名: A, B · 群发[回报] 名: 消息 · 改群 名 公告|管理员|模式|加|踢: 值 · 删群 名
@@ -107,6 +108,11 @@ const SUMMARY_PROMPTS = [['handoff', 'You are now writing a handoff note'], ['ch
 const summaryKind = value => SUMMARY_PROMPTS.find(([, prompt]) => value.trimStart().startsWith(prompt))?.[0]
 const textBlocks = content => (typeof content === 'string' ? [content]
   : Array.isArray(content) ? content.filter(block => block.type === 'text').map(block => block.text) : [])
+const goalBinding = value => {
+  const match = /^room_id=(\S+) goal_id=(\S+) expected_revision=(\d+)/m.exec(value)
+  return match ? { room_id:match[1], goal_id:match[2], expected_revision:Number(match[3]) } : undefined
+}
+const goalAssignments = tasks => (tasks ?? []).map(task => `@${task.bot} ${task.task}`).join('\n')
 function isSummary(body) {
   const last = textBlocks(body.messages?.at(-1)?.content).at(-1)
   return last === undefined ? undefined : summaryKind(last)
@@ -201,12 +207,52 @@ function decide(body) {
   }
 
   // A stopped call's result can share a message with the next group turn, which wins.
-  const fresh = textBlocks(last?.content).some(value => value.trimStart().startsWith('[Group chat'))
+  const fresh = textBlocks(last?.content).some(value => value.trimStart().startsWith('[Group chat')
+    || process.env.MOCK_GROUP_GOAL_AUTORUN === '1' && /(?:^|\n)\[Group chat "[^"]*" · [^\]\n]+\]/.test(value))
   const result = fresh ? undefined : blocks.find(block => block.type === 'tool_result')
   if (result) {
     const resultText = typeof result.content === 'string' ? result.content : textOf(result.content)
     const call = [...messages].reverse().find(m => m.role === 'assistant' && Array.isArray(m.content) && m.content.some(b => b.type === 'tool_use'))
     const used = call?.content.find(b => b.type === 'tool_use' && b.id === result.tool_use_id) ?? call?.content.find(b => b.type === 'tool_use')
+    if (process.env.MOCK_GROUP_GOAL_AUTORUN === '1' && used?.name === 'group_goal') {
+      const action = used.input?.action
+      if (result.is_error) return [text(`Group-goal fixture could not advance ${action ?? 'unknown'}: ${resultText.slice(0, 240)}`)]
+      const binding = goalBinding(resultText)
+      const started = messages.flatMap(message => Array.isArray(message.content) ? message.content : [])
+        .findLast(block => block.type === 'tool_use' && block.name === 'group_goal' && block.input?.action === 'start')?.input
+      if (action === 'start') {
+        const tasks = started?.stages?.[0]?.tasks
+        return tasks?.length ? [text(goalAssignments(tasks))] : [text('Group-goal fixture has no stage-one tasks to assign.')]
+      }
+      if (action === 'show') {
+        const current = /^\[current\]\s+(\d+)\.[^\n]*\n((?:\s+- .*\n?)+)/m.exec(resultText)
+        const taskLines = current?.[2]?.split('\n').filter(line => /^\s+- /.test(line)) ?? []
+        if (!binding || !taskLines.length || taskLines.some(line => !/\[(?:reported|done)\]/.test(line))) {
+          return [text(`Group-goal fixture found an unfinished current-stage report: ${resultText.slice(0, 240)}`)]
+        }
+        const report = /^\s+- (.+?): .* \[reported\]/.exec(taskLines[0])
+        if (!report) return [text(`Group-goal fixture could not identify the reporting owner: ${taskLines[0]}`)]
+        return [tool('group_goal', { action:'task', ...binding, bot:report[1], status:'reported',
+          note:'Administrator checked the member report and its evidence against the assigned acceptance.' })]
+      }
+      if (action === 'task' && used.input?.status === 'reported') {
+        if (!binding) return [text(`Group-goal fixture could not read the post-review binding: ${resultText.slice(0, 240)}`)]
+        return [tool('group_goal', { action:'pass', ...binding,
+          evidence:'The member report and its evidence were checked against the current stage acceptance.' })]
+      }
+      if (action === 'pass') {
+        if (!binding) return [text(`Group-goal fixture could not read the current binding: ${resultText.slice(0, 240)}`)]
+        if (/Every stage passed/.test(resultText)) {
+          return [tool('group_goal', { action:'complete', ...binding,
+            evidence:'Every stage report passed its acceptance check.',
+            summary:'The group completed both assigned stages and the administrator recorded the evidence.' })]
+        }
+        const current = /^\[current\]\s+(\d+)\./m.exec(resultText)
+        const tasks = current && started?.stages?.[Number(current[1]) - 1]?.tasks
+        return tasks?.length ? [text(goalAssignments(tasks))] : [text(`Group-goal fixture could not find the next stage: ${resultText.slice(0, 240)}`)]
+      }
+      if (action === 'complete') return [text(resultText.startsWith('Goal ') ? resultText : `Group-goal fixture complete: ${resultText.slice(0, 240)}`)]
+    }
     if (process.env.MOCK_BOARD_AUTORUN === '1' && used?.name === 'board_task') {
       let response
       try { response = JSON.parse(resultText) } catch {}
@@ -327,6 +373,8 @@ function decide(body) {
   }
 
   const userText = textOf(last?.content).trim()
+  const groupAt = userText.indexOf('[Group chat "')
+  const groupText = groupAt === -1 ? userText : userText.slice(groupAt).trimStart()
   // "撑爆": the provider rejects the request as past its window.
   if (userText.startsWith('撑爆')) return 'overflow'
   // A file in the message (a long Bot message, a file the user sent): DSH gives its saved
@@ -371,19 +419,24 @@ function decide(body) {
     }
     return [text(`Hi, I'm ${me}. Where should I start?`)]
   }
-  if (/^\[Group chat "[^"]*" · replies to your post\]/.test(userText)) {
-    const replies = userText.split('\n').filter(line => /^[^:\n]{1,40}: /.test(line)).length
+  if (process.env.MOCK_GROUP_GOAL_AUTORUN === '1'
+    && /^\[Group chat "[^"]*" · replies to your post\]/.test(groupText)
+    && /<group_goal status="active">/.test(userText) && tools.has('group_goal')) {
+    return [tool('group_goal', { action:'show' })]
+  }
+  if (/^\[Group chat "[^"]*" · replies to your post\]/.test(groupText)) {
+    const replies = groupText.split('\n').filter(line => /^[^:\n]{1,40}: /.test(line)).length
     return [text(`群里回完了，一共 ${replies} 条回复。`)]
   }
-  if (userText.startsWith('[Group chat') && userText.includes('The user just created this group')) return [text('群建好了，这个群要一起做点什么？')]
-  if (/^\[Group chat "[^"]*" · your tool call did not run\]/.test(userText) || userText.startsWith('[Your last reply wrote a tool call as text')) {
+  if (groupText.startsWith('[Group chat') && groupText.includes('The user just created this group')) return [text('群建好了，这个群要一起做点什么？')]
+  if (/^\[Group chat "[^"]*" · your tool call did not run\]/.test(groupText) || groupText.startsWith('[Your last reply wrote a tool call as text')) {
     return [text('这次真的调用了，目录看完了。')]
   }
-  if (userText.startsWith('[Group chat')) {
+  if (groupText.startsWith('[Group chat')) {
     // Reads only this round's transcript block. The opener is the user's last line, or
     // a Bot's post that started the round. Count-off says the next number after the
     // highest one said so far.
-    const block = /(?:^|\n)This round so far[^\n]*:\n([\s\S]*?)(?:\n\n|$)/.exec(userText)?.[1] ?? ''
+    const block = /(?:^|\n)This round so far[^\n]*:\n([\s\S]*?)(?:\n\n|$)/.exec(groupText)?.[1] ?? ''
     const lines = block.split('\n').filter(Boolean)
     // Schedule-change notices are user-shaped system events, not a new request. Prefer
     // the latest actionable user line so a notice appended to the round cannot hide it.
@@ -395,11 +448,20 @@ function decide(body) {
     const said = lines.slice(openAt + 1)
       .map(line => /^[^:\n]{1,40}: \D*?(\d+)/.exec(line)?.[1])
       .filter(Boolean).map(Number)
-    const mentioner = /^\[Group chat [^\]]*· (\S+) mentioned you\]/.exec(userText)?.[1]
+    const mentioner = /^\[Group chat [^\]]*· (.+?) mentioned you\]/.exec(groupText)?.[1]
     const peer = /^Members: the user, ([^,\n]+?)(?:,| and you)/m.exec(userText)?.[1]?.replace(/ \(admin\)$/, '')
-    const room = /^\[Group chat "([^"]+)"/.exec(userText)?.[1] ?? ''
+    const room = /^\[Group chat "([^"]+)"/.exec(groupText)?.[1] ?? ''
     const leads = /^Members: .* and you \(admin\)\./m.test(userText)
     let ask
+    if (process.env.MOCK_GROUP_GOAL_AUTORUN === '1' && leads
+      && /^\[Group chat "[^"]*" · goal check\]/.test(groupText)
+      && /<group_goal status="active"/.test(userText) && tools.has('group_goal')) {
+      return [tool('group_goal', { action:'show' })]
+    }
+    if (process.env.MOCK_GROUP_GOAL_AUTORUN === '1' && mentioner && !leads
+      && /<group_goal status="active"/.test(userText)) {
+      return [text('Assigned work completed. Evidence: the requested draft and its acceptance check are recorded in this isolated group-goal run.')]
+    }
     if (userLine.startsWith('User: [SCHEDULE CHANGE]')) return [text('[PASS]')]
     if ((ask = /把\s*(\S+?)\s*拉进群/.exec(userLine))) return [tool('update_group', { group: room, add_members: [ask[1]] })]
     if ((ask = /把\s*(\S+?)\s*踢出群/.exec(userLine))) return [tool('update_group', { group: room, remove_members: [ask[1]] })]

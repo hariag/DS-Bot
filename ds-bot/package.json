@@ -48,6 +48,7 @@
     "build": "node scripts/build-client.mjs && node scripts/build-link.mjs",
     "test": "node --import ./test/harness-resolve.mjs --test --test-timeout=120000 --test-force-exit \"test/*.test.js\"",
     "test:board-host": "node --import ./test/harness-resolve.mjs --test --test-timeout=120000 --test-force-exit \"test/board-host/*.test.mjs\"",
+    "test:group-goal:e2e": "node test/e2e/group-goal.e2e.mjs",
     "test:browser": "node --import ./test/harness-resolve.mjs --test --test-concurrency=1 --test-timeout=120000 --test-force-exit \"test/browser/*.test.js\"",
     "lint": "node scripts/lint.mjs",
     "harness": "npm install --prefix dev/harness --legacy-peer-deps=false --no-package-lock --no-fund --no-audit",

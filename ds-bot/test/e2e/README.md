@@ -59,3 +59,15 @@ release, lets the PM import an 11-task TDD lifecycle through `board_task plan`, 
 release, verifies board edits reach the release group, waits for the periodic release
 monitor to publish after all four gates pass, and checks the generated Markdown/HTML
 summary report. Set `MOCK_BOARD_AUTORUN=1` for this run; the script sets it itself.
+
+## Group-goal lifecycle
+
+`npm run test:group-goal:e2e -- --fresh` starts an isolated DSH bench and runs a two-stage
+group goal through the real group Sessions and `group_goal` tool. The opt-in mock assigns
+each current-stage task by `@Name`, returns member evidence, has the administrator inspect
+the ledger, pass each stage, and complete the goal. The script checks automatic task
+transitions (`working` → `reported` → `done`), stage and completion history, owner dispatches,
+and that an unfinished goal never enters `idle` during sampled runtime states.
+
+Set `GROUP_GOAL_E2E_HOME`, `GROUP_GOAL_E2E_WEB_PORT`, and `GROUP_GOAL_E2E_MOCK_PORT` to use a
+throwaway home under `/tmp` and free ports. The script stops the bench on exit.
