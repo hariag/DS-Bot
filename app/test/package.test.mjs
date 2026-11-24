@@ -85,7 +85,7 @@ test('Linux leaves the Host and its dependencies readable by plain Node', () => 
 // version with the one in the release's latest.yml.
 test('the app has the version of ds-bot', () => {
   const version = file => JSON.parse(readFileSync(new URL(file, import.meta.url), 'utf8')).version
-  assert.equal(version('../package.json'), version('../../ds-bot/package.json'))
+  assert.equal(version('../package.json'), version('../../ds-bot/package.json').split('+', 1)[0])
 })
 
 // Tool processes (bash, scripts a Bot runs) connect to devices on the local network;
