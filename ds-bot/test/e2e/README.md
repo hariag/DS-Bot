@@ -23,6 +23,10 @@ or:
 npm run test:board:e2e -- --fresh
 ```
 
+The runner uses the standard Chrome path on Windows. On macOS and Linux it searches common
+system Chrome/Chromium paths, then falls back to Playwright's Chromium path. Set
+`BOARD_E2E_CHROME` to choose a specific browser executable.
+
 The mock model must be reachable on `BOARD_E2E_MOCK_PORT` (default 8797); `dsh web` uses
 `BOARD_E2E_WEB_PORT` (default 3097). Stop every bench the run started; the script does this
 unless `--keep` is given.
@@ -45,7 +49,13 @@ The current scenarios cover:
    the card cover;
 8. reload persistence for the card, lane, labels, due date, checklist, comment, image and
    description;
-9. no uncaught page errors and no console errors.
+9. a 60-second idle browser monitor, checking request volume, repeated command-catalog
+   fetches, request failures, HTTP errors, WebSocket reconnects and the open `remote.mux`;
+10. no uncaught page errors and no console errors.
+
+Set `BOARD_E2E_IDLE_MONITOR_MS` to change the idle sample duration. The monitor fails on more
+than 30 requests total, more than 10 in any 10-second bucket, repeated command-catalog fetches,
+failed requests, HTTP 4xx/5xx responses, a closed `remote.mux`, or a reconnect during the sample.
 
 The separate browser fixture (`npm run test:board:browser`) mounts `task-board.js` against
 synthetic requests; it covers recovery/review panels, read-only, capacity, personal
@@ -59,3 +69,15 @@ release, lets the PM import an 11-task TDD lifecycle through `board_task plan`, 
 release, verifies board edits reach the release group, waits for the periodic release
 monitor to publish after all four gates pass, and checks the generated Markdown/HTML
 summary report. Set `MOCK_BOARD_AUTORUN=1` for this run; the script sets it itself.
+
+## Group-goal lifecycle
+
+`npm run test:group-goal:e2e -- --fresh` starts an isolated DSH bench and runs two group goals
+concurrently through the real DSH group Sessions and the `group_goal` tool. The opt-in mock assigns
+each current-stage task by `@Name`, returns member evidence, has each administrator inspect
+the ledger, pass each stage, and complete the goal. The script checks automatic task
+transitions (`working` → `reported` → `done`) in both groups, stage and completion history,
+owner dispatches, and that neither unfinished goal enters `idle` during sampled runtime states.
+
+Set `GROUP_GOAL_E2E_HOME`, `GROUP_GOAL_E2E_WEB_PORT`, and `GROUP_GOAL_E2E_MOCK_PORT` to use a
+throwaway home under `/tmp` and free ports. The script stops the bench on exit.

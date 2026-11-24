@@ -31,7 +31,7 @@
 
 - 记忆工具更名为 `bot_remember/bot_forget/bot_recall`（已生效）
 - 启动/聊天/搜索/Usage/手机传输性能组：`usage.js`、`chat-index.js` 等与上游逐字节一致
-- 草稿随会话保留（`DraftKeeper`）、102 条主机错误翻译
+- 未发送文本随会话保留（`DraftKeeper`）、102 条主机错误翻译
 
 修复项：以文件级合并为准，全部随 147 个修改文件与 132 个新增文件进入本仓库；本地语义差异见第四节。
 

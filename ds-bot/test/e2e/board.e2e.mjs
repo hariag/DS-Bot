@@ -19,7 +19,7 @@
 // BOARD_E2E_CHROME (installed Chrome path), BOARD_E2E_NODE (node executable for the bench children).
 import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DEFAULTS, PLUGIN, boardApi, loginToken, startBench, stopBench } from './bench.mjs'
@@ -30,6 +30,10 @@ const { PNG } = require('pngjs')
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ARTIFACTS_ROOT = join(HERE, 'artifacts')
+const systemChrome = process.platform === 'darwin'
+  ? ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', chromium.executablePath()]
+  : ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', chromium.executablePath()]
+const defaultChrome = process.platform === 'win32' ? DEFAULTS.chrome : systemChrome.find(existsSync) ?? chromium.executablePath()
 
 function parseArgs(argv) {
   const options = {
@@ -40,7 +44,7 @@ function parseArgs(argv) {
     home: process.env.BOARD_E2E_HOME || DEFAULTS.home,
     webPort: Number(process.env.BOARD_E2E_WEB_PORT || DEFAULTS.webPort),
     mockPort: Number(process.env.BOARD_E2E_MOCK_PORT || DEFAULTS.mockPort),
-    chrome: process.env.BOARD_E2E_CHROME || DEFAULTS.chrome,
+    chrome: process.env.BOARD_E2E_CHROME || defaultChrome,
     baseUrl: process.env.BOARD_E2E_BASE_URL || '',
     loginUrl: process.env.BOARD_E2E_LOGIN_URL || '',
     runId: process.env.BOARD_E2E_RUN_ID || '',
@@ -75,6 +79,7 @@ let cookie
 let seed
 const consoleErrors = []
 const pageErrors = []
+const network = { requests: [], failures: [], httpErrors: [], websockets: [] }
 let shotIndex = 0
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -149,7 +154,6 @@ const zh = {
   deleteComment: /^(删除|Delete)$/,
   confirmDelete: /^(确认删除|Confirm delete)$/,
   chooseImages: /^(选择图片|Choose images)$/,
-  uploadImages: /^(上传文件|Upload files)$/,
   chooseFiles: /^(选择文件|Choose files)$/,
   setCover: /^(Set as cover|Set cover|设为封面)$/,
   draft: /^(Save as draft|保存起草|保存为起草)$/,
@@ -350,6 +354,18 @@ async function main() {
   page = await context.newPage()
   page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()) })
   page.on('pageerror', error => pageErrors.push(error.message))
+  page.on('request', request => {
+    try { network.requests.push({ at:Date.now(), path:new URL(request.url()).pathname }) } catch {}
+  })
+  page.on('requestfailed', request => network.failures.push({ at:Date.now(), url:request.url(), error:request.failure()?.errorText ?? 'unknown' }))
+  page.on('response', response => {
+    if (response.status() >= 400) network.httpErrors.push({ at:Date.now(), url:response.url(), status:response.status() })
+  })
+  page.on('websocket', socket => {
+    const record = { url:socket.url(), openedAt:Date.now(), closedAt:null }
+    network.websockets.push(record)
+    socket.on('close', () => { record.closedAt = Date.now() })
+  })
   await page.goto(seed.loginUrl, { waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(2500)
 
@@ -648,6 +664,8 @@ async function main() {
 
       await step('attachments: unsupported file rejected, valid PNG uploaded and rendered', async () => {
         const png = PNG.sync.write({ width: 16, height: 16, data: Buffer.alloc(16 * 16 * 4, 128) })
+        const pngName = 'e2e-' + opts.runId + '.png'
+        const pdfName = 'e2e-spec-' + opts.runId + '.pdf'
         let rejectedText = ''
         await withCard(createdTask.id, async dialog => {
           const attachments = dialog.locator('.bt-card-attachments').first()
@@ -658,28 +676,22 @@ async function main() {
           rejectedText = alerts.join(' | ')
           if (!/PNG|JPEG|支持|PDF/.test(rejectedText)) throw new StepError('unsupported file was not rejected with an attachment message', { alerts: rejectedText })
           if (await attachments.locator('.bt-attachment-queue img').count()) throw new StepError('unsupported file was queued as an image')
-          await input.setInputFiles({ name: 'e2e-' + opts.runId + '.png', mimeType: 'image/png', buffer: png })
-          await page.waitForTimeout(500)
-          const upload = attachments.getByRole('button', { name: zh.uploadImages }).first()
-          if (!await upload.count()) throw new StepError('no Upload images button after choosing a PNG')
-          await upload.click()
-          await waitFor('uploaded image in board-list', async () => {
+          await input.setInputFiles({ name: pngName, mimeType: 'image/png', buffer: png })
+          const withPng = await waitFor('PNG uploaded to board-list', async () => {
             const current = await taskByTitle(title)
-            return (current?.images ?? []).length ? current : undefined
+            return current && (current.images ?? []).some(item => item.name === pngName) ? current : undefined
           }, 30_000)
           const image = attachments.locator('.bt-attachment-grid img').first()
           await image.waitFor({ state: 'visible', timeout: 10_000 })
           const natural = await image.evaluate(node => ({ width: node.naturalWidth, height: node.naturalHeight }))
           if (!natural.width || !natural.height) throw new StepError('uploaded image is not decoded by the browser', { natural })
-          await input.setInputFiles({ name: 'e2e-spec-' + opts.runId + '.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\nE2E attachment\n') })
-          await page.waitForTimeout(300)
-          await attachments.getByRole('button', { name: zh.uploadImages }).first().click()
+          await input.setInputFiles({ name: pdfName, mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\nE2E attachment\n') })
           const withPdf = await waitFor('PDF attachment in board-list', async () => {
             const current = await taskByTitle(title)
-            return (current?.images ?? []).some(item => item.mediaType === 'application/pdf') ? current : undefined
+            return current && (current.images ?? []).some(item => item.name === pdfName && item.mediaType === 'application/pdf') ? current : undefined
           }, 30_000)
-          await attachments.locator('.bt-attachment-file').filter({ hasText: 'e2e-spec-' + opts.runId }).waitFor({ state:'visible', timeout:10_000 })
-          return { images: withPdf.images.length, natural, rejectedText, screenshot: await shot('image-uploaded') }
+          await attachments.locator('.bt-attachment-file').filter({ hasText: pdfName }).waitFor({ state:'visible', timeout:10_000 })
+          return { images: withPdf.images.length, png:pngName, pdf:pdfName, pngPresent:withPng.images.some(item => item.name === pngName), natural, rejectedText, screenshot: await shot('image-uploaded') }
         })
         return { rejectedText }
       })
@@ -771,6 +783,41 @@ async function main() {
   } else {
     results.push({ name: 'downstream board scenarios', status: 'SKIP', evidence: { message: 'board open failed' }, ms: 0 })
   }
+
+  const idleMonitorMs = Number(process.env.BOARD_E2E_IDLE_MONITOR_MS || 60_000)
+  await step(`network: idle monitor for ${idleMonitorMs}ms`, async () => {
+    const from = Date.now()
+    const requestOffset = network.requests.length
+    const failureOffset = network.failures.length
+    const httpErrorOffset = network.httpErrors.length
+    const websocketOffset = network.websockets.length
+    await sleep(idleMonitorMs)
+    const durationMs = Date.now() - from
+    const requests = network.requests.slice(requestOffset).filter(item => item.at >= from)
+    const failures = network.failures.slice(failureOffset).filter(item => item.at >= from)
+    const httpErrors = network.httpErrors.slice(httpErrorOffset).filter(item => item.at >= from)
+    const newSockets = network.websockets.slice(websocketOffset).filter(item => item.openedAt >= from)
+    const requestsByPath = Object.fromEntries([...new Set(requests.map(item => item.path))]
+      .sort().map(path => [path, requests.filter(item => item.path === path).length]))
+    const commandCatalogCalls = requests.filter(item => item.path.endsWith('/api/commands/list')).length
+    const buckets = Array(Math.max(1, Math.ceil(durationMs / 10_000))).fill(0)
+    for (const request of requests) buckets[Math.min(buckets.length - 1, Math.floor((request.at - from) / 10_000))] += 1
+    const remoteSockets = network.websockets.filter(item => item.url.includes('/api/remote.mux'))
+    const evidence = {
+      durationMs, requestCount:requests.length, requestsByPath,
+      maxRequestsPer10s:Math.max(...buckets), commandCatalogCalls,
+      failedRequests:failures.length, httpErrors:httpErrors.length,
+      remoteMuxOpen:remoteSockets.some(item => item.closedAt === null),
+      websocketReconnects:newSockets.filter(item => item.url.includes('/api/remote.mux')).length,
+    }
+    if (evidence.requestCount > 30 || evidence.maxRequestsPer10s > 10 || commandCatalogCalls > 1
+      || failures.length || httpErrors.length || !evidence.remoteMuxOpen || evidence.websocketReconnects) {
+      throw new StepError('idle browser network monitor exceeded its limits', {
+        ...evidence, failures:failures.slice(0, 10), httpErrors:httpErrors.slice(0, 10),
+      })
+    }
+    return evidence
+  })
 
   await step('console: no uncaught page errors and no console errors', async () => {
     if (pageErrors.length || consoleErrors.length) {

@@ -162,3 +162,13 @@ export function fakeContext({ services = {} } = {}) {
   }
   return ctx
 }
+
+// The fake context records plain listeners in registration order instead of
+// running a DSH middleware chain. Select the parts hook by behavior so tests do
+// not depend on which unrelated module registered a later pre-step listener.
+export function partsPreStep(ctx) {
+  const listener = (ctx.listeners.get('agent/pre-step') ?? [])
+    .find(candidate => /folderMove\(agent,/.test(String(candidate)))
+  if (!listener) throw new Error('parts.js agent/pre-step listener was not registered')
+  return listener
+}

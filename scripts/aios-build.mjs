@@ -3,8 +3,9 @@
 //
 //   node scripts/aios-build.mjs --build aios-YYYYMMDD.N [--out DIR] [--no-commit]
 //
-// The stamp edits ds-bot/package.json (version and dsBot build fields) and commits
-// it unless --no-commit is given, then packs the plugin and writes
+// The stamp updates ds-bot/package.json (version and dsBot build fields) and the
+// root version fields in ds-bot/package-lock.json. It commits both unless
+// --no-commit is given, then packs the plugin and writes
 // <tarball>.provenance.json next to it. Pass --build-client to rebuild the bundles
 // first; without it the committed bundles ship, so a machine without the client's
 // dev dependencies can still produce a byte-identical release artifact. It never installs or restarts
@@ -39,13 +40,18 @@ if (git('status', '--porcelain', '--untracked-files=no') !== '') fail('commit or
 const head = git('rev-parse', 'HEAD')
 const pkgPath = join(dsBot, 'package.json')
 const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
+const lockPath = join(dsBot, 'package-lock.json')
+const lock = JSON.parse(readFileSync(lockPath, 'utf8'))
 // Build metadata keeps the dotted form used by earlier artifacts: 0.3.8+aios.20261120.7,
 // while the build field keeps the dashed one: aios-20261120.7.
 pkg.version = `${String(pkg.version).split('+')[0]}+${build.replace(/^aios-/, 'aios.')}`
 pkg.dsBot = { ...pkg.dsBot, build, fork: 'hariag/DS-Bot', forkCommit: head, upstreamCommit: pkg.dsBot?.upstreamCommit ?? '' }
+lock.version = pkg.version
+if (lock.packages?.['']) lock.packages[''].version = pkg.version
 writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`)
+writeFileSync(lockPath, `${JSON.stringify(lock, null, 2)}\n`)
 if (commit) {
-  execFileSync('git', ['-C', root, 'add', 'ds-bot/package.json'])
+  execFileSync('git', ['-C', root, 'add', 'ds-bot/package.json', 'ds-bot/package-lock.json'])
   execFileSync('git', ['-C', root, 'commit', '-m', `chore: stamp fork commit ${head.slice(0, 12)} for build ${build}`])
 }
 

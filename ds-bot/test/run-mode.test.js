@@ -11,7 +11,7 @@ import { AcpEngine } from '../src/host/local-agents/acp.js'
 import { probeSignIn } from '../src/host/local-agents/discover.js'
 import { agentAvatar, badgeOf, isLocalRoute, modelsFor } from '../src/client/agent-routes.js'
 import { avatarAfter, createPayload, runModeNotes, startModel } from '../src/client/bot-draft.js'
-import { fakeContext } from './fake-ctx.js'
+import { fakeContext, partsPreStep } from './fake-ctx.js'
 
 const FIXTURE = name => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url))
 const settle = () => new Promise(resolve => setTimeout(resolve, 20))
@@ -182,7 +182,7 @@ async function start(t, { saved = team() } = {}) {
   }))).json()
   const tool = (name, args, sessionId) => rt.teamTools.find(def => def.name === name).execute(args, { agent: agentOf(sessionId), name, callId: 'c1' })
   // `modelSelection`: where the step is about to go, as DSH captured it for the step.
-  const preStep = (sessionId, messages = [], step = 1, modelSelection) => ctx.listeners.get('agent/pre-step').at(-1)(
+  const preStep = (sessionId, messages = [], step = 1, modelSelection) => partsPreStep(ctx)(
     { agent: agentOf(sessionId), messages, step, signal: AbortSignal.timeout(60_000), ...(modelSelection === undefined ? {} : { modelSelection }) }, async () => 'next')
   const state = () => JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
   const handoffOf = sessionId => agentOf(sessionId).calls.filter(([kind, message]) => kind === 'followup' && message.source?.role === 'handoff').map(([, message]) => textOf(message)).at(-1)

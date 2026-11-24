@@ -19,6 +19,7 @@
 import { appendFileSync } from 'node:fs'
 const exitAfterTurn = process.argv.includes('--exit-after-turn')
 const textOnly = process.argv.includes('--text-only')
+const rejectXhigh = process.argv.includes('--reject-xhigh')
 const holdCompact = process.argv.includes('--hold-compact')
 const recordAt = process.argv.indexOf('--record')
 const recordPath = recordAt === -1 ? undefined : process.argv[recordAt + 1]
@@ -149,6 +150,7 @@ process.stdin.on('data', (chunk) => {
       case 'initialize': reply(id, { userAgent: 'fake-codex' }); break
       case 'initialized': break
       case 'model/list':
+        record('model/list', params)
         reply(id, {
           data: [{
             id: 'gpt-5.1-codex',
@@ -184,6 +186,10 @@ process.stdin.on('data', (chunk) => {
       case 'thread/inject_items': reply(id, {}); break
       case 'turn/start': {
         record('turn/start', params)
+        if (rejectXhigh && params.effort === 'xhigh') {
+          send({ jsonrpc: '2.0', id, error: { code: 'UNSUPPORTED_REASONING_EFFORT', message: 'provider "local-codex-cli" model "gpt-5.1-codex" does not support reasoning effort "xhigh"' } })
+          break
+        }
         const input = params.input ?? []
         const badImage = input.find(item => item.type === 'image' && typeof item.url !== 'string' && typeof item.fileId !== 'string')
         if (badImage !== undefined) { replyError(id, 'Invalid image input: missing url or fileId'); break }

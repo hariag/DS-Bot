@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { install } from '../src/host/agent-commands.js'
 
+const waitForCatalogRefresh = () => new Promise(resolve => setTimeout(resolve, 300))
+
 // A small host `commands` registry with the same contract the real one gives the
 // shield: global definitions, per-agent scoped definitions that shadow them, a merged
 // list(agent), find/execute, and a `commands/change` event on every registration.
@@ -110,7 +112,7 @@ test('the shield shadows every command a Bot sees and refuses a typed command wi
   const a = w.agent('a')
   w.emit('agent/created', { agent: a })
 
-  assert.equal(w.service.find(a, 'plan').description, 'Not available in a Bot chat — use the Bot’s own controls')
+  assert.equal(w.service.find(a, 'plan').description, 'global plan', 'the shadow keeps the cached catalog descriptor')
   assert.equal(w.service.list(a).length, 2, 'every command the Bot sees has a shadow')
   return w.service.execute(a, '/plan 明天上线').then(({ result }) => {
     assert.equal(result.kind, 'error')
@@ -128,7 +130,7 @@ test('one Bot\u2019s shadow stays out of another Bot\u2019s commands', async () 
   const b = w.agent('b')
   // Only a's agent is mounted, so only a is shadowed; b's scope is untouched.
   w.emit('agent/created', { agent: a })
-  assert.match(w.service.find(a, 'plan').description, /Not available/)
+  assert.equal(w.service.find(a, 'plan').description, 'global plan')
   assert.equal(w.service.find(b, 'plan').description, 'global plan')
   const { result } = await w.service.execute(b, '/plan 明天上线')
   assert.equal(result.kind, 'success')
@@ -149,8 +151,8 @@ test('two mounted agents are both shielded, each with its own Session\u2019s ref
   w.emit('agent/created', { agent: a })
   w.emit('agent/created', { agent: room })
 
-  assert.match(w.service.find(a, 'plan').description, /Bot chat/)
-  assert.match(w.service.find(room, 'plan').description, /group chat/)
+  assert.equal(w.service.find(a, 'plan').description, 'global plan')
+  assert.equal(w.service.find(room, 'plan').description, 'global plan')
 
   const fromBot = await w.service.execute(a, '/plan 明天上线')
   const fromGroup = await w.service.execute(room, '/goal 明天上线')
@@ -165,14 +167,14 @@ test('two mounted agents are both shielded, each with its own Session\u2019s ref
   assert.equal(w.runs(), 0)
 })
 
-test('a team mount emits one global catalog change instead of one per agent', async () => {
+test('200 scoped sessions keep catalogs stable and host command changes emit one invalidation', async () => {
   const w = world()
   for (let i = 0; i < 15; i += 1) w.registerGlobal(`command-${i}`)
   install(w.rt)
 
   const baseline = w.changes()
   const agents = []
-  for (let i = 0; i < 13; i += 1) {
+  for (let i = 0; i < 200; i += 1) {
     const sessionId = `bot-${i}`
     w.rt.chatOwners.set(sessionId, sessionId)
     const agent = w.agent(sessionId)
@@ -182,18 +184,34 @@ test('a team mount emits one global catalog change instead of one per agent', as
 
   for (const agent of agents) {
     assert.equal(w.service.list(agent).length, 15)
-    assert.match(w.service.find(agent, 'command-0').description, /Not available/)
+    assert.equal(w.service.find(agent, 'command-0').description, 'global command-0')
   }
-  await new Promise(resolve => setTimeout(resolve, 80))
-  assert.equal(w.changes() - baseline, 1, 'one event invalidates all command catalogs')
+  await waitForCatalogRefresh()
+  assert.equal(w.changes() - baseline, 0, 'scoped handler changes do not invalidate every client catalog')
 
-  // One real host command change must update every shield without recursively
-  // generating another global invalidation wave.
+  // A real host command change updates every shield and emits one global invalidation.
   const beforeNewCommand = w.changes()
   w.registerGlobal('new-command')
-  await new Promise(resolve => setTimeout(resolve, 80))
+  await waitForCatalogRefresh()
   assert.equal(w.changes() - beforeNewCommand, 1)
-  for (const agent of agents) assert.match(w.service.find(agent, 'new-command').description, /Not available/)
+  for (const agent of agents) assert.equal(w.service.find(agent, 'new-command').description, 'global new-command')
+})
+
+test('a burst of host command registrations sends one catalog invalidation', async () => {
+  const w = world()
+  install(w.rt)
+  w.rt.chatOwners.set('a', 'a')
+  const a = w.agent('a')
+  w.emit('agent/created', { agent: a })
+
+  const baseline = w.changes()
+  for (let i = 0; i < 10; i += 1) w.registerGlobal(`late-${i}`)
+  await waitForCatalogRefresh()
+
+  assert.equal(w.changes() - baseline, 1)
+  for (let i = 0; i < 10; i += 1) {
+    assert.equal(w.service.find(a, `late-${i}`).description, `global late-${i}`)
+  }
 })
 
 test('a group chat\u2019s own Session is covered and its /goal points at the group goal', async () => {
@@ -203,7 +221,7 @@ test('a group chat\u2019s own Session is covered and its /goal points at the gro
   w.registerGlobal('goal')
   const room = w.agent('r1')
   w.emit('agent/created', { agent: room })
-  assert.match(w.service.find(room, 'goal').description, /group chat/)
+  assert.equal(w.service.find(room, 'goal').description, 'global goal')
   const { result } = await w.service.execute(room, '/goal 明天上线')
   assert.equal(result.kind, 'error')
   assert.match(result.text, /Use the group Goal in the group details panel instead/)
@@ -218,8 +236,8 @@ test('a command registered after the agent is covered by the next commands/chang
   const a = w.agent('a')
   w.emit('agent/created', { agent: a })
   w.registerGlobal('model')
-  await new Promise(resolve => setTimeout(resolve, 80))
-  assert.match(w.service.find(a, 'model').description, /Not available/)
+  await waitForCatalogRefresh()
+  assert.equal(w.service.find(a, 'model').description, 'global model')
   const { result } = await w.service.execute(a, '/model cheap')
   assert.equal(result.kind, 'error')
   assert.equal(w.runs(), 0)
@@ -238,12 +256,12 @@ test('a Bot whose agent arrives before its state entry gets the shield on the ne
   w.rt.chatOwners.set('a', 'a')
   const beforeFirstSave = w.changes()
   for (const listener of w.rt.saved) listener()
-  assert.match(w.service.find(a, 'plan').description, /Not available/)
-  await new Promise(resolve => setTimeout(resolve, 80))
-  assert.equal(w.changes() - beforeFirstSave, 1)
+  assert.equal(w.service.find(a, 'plan').description, 'global plan')
+  await waitForCatalogRefresh()
+  assert.equal(w.changes() - beforeFirstSave, 0)
   for (const listener of w.rt.saved) listener()
-  await new Promise(resolve => setTimeout(resolve, 80))
-  assert.equal(w.changes() - beforeFirstSave, 1, 'unchanged saves do not invalidate command catalogs')
+  await waitForCatalogRefresh()
+  assert.equal(w.changes() - beforeFirstSave, 0, 'scoped coverage changes keep the client catalog valid')
   const { result } = await w.service.execute(a, '/plan 明天上线')
   assert.equal(result.kind, 'error')
   assert.equal(w.runs(), 0)
@@ -270,11 +288,11 @@ test('unloading the plugin lifts commands from agents that stay alive', async ()
   w.registerGlobal('plan')
   const a = w.agent('a')
   w.emit('agent/created', { agent: a })
-  assert.match(w.service.find(a, 'plan').description, /Not available/)
+  assert.equal(w.service.find(a, 'plan').description, 'global plan')
   const beforeCleanup = w.changes()
   for (const cleanup of w.cleanups) cleanup?.()
   assert.equal(w.service.find(a, 'plan').description, 'global plan')
-  assert.equal(w.changes() - beforeCleanup, 1, 'cleanup tells the client to refresh once')
+  assert.equal(w.changes() - beforeCleanup, 0, 'unmounting a shadow keeps the client catalog descriptor valid')
   for (const saved of w.rt.saved) saved()
   assert.equal((await w.service.execute(a, '/plan')).result.kind, 'success')
 })

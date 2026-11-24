@@ -20,7 +20,7 @@
 
 | 状态 | 谁写入 | 谁读取 / 依赖它 | 去掉会怎样 | 结论 |
 |---|---|---|---|---|
-| `draft` 起草中 | 创建时 `draft:true`（`board-api.create` 自动补 owner/reviewer/acceptance） | `submit`、`cancel` 只在这里可用；快速捕获路径 | 失去“先记标题、后补细节”的草稿；创建必须一次填完整 | **必要**（产品功能） |
+| `draft` 起草中 | 创建时 `draft:true`（`board-api.create` 自动补 owner/reviewer/acceptance） | `submit`、`cancel` 只在这里可用；快速捕获路径 | 失去“先记标题、后补细节”的分步录入能力；创建必须一次填完整 | **必要**（产品功能） |
 | `proposed` 待准备 | 创建默认；`submit`、`restore`、`unschedule`、活跃任务编辑回退 | 只有这里出现 `Schedule Bot`；`edit` 允许；Release start 从 draft/proposed 进入 waiting | 需要一个额外标志才能区分“可排期”与“已排期”，否则排期入口和编辑规则失据 | **必要**（可排期态） |
 | `waiting` 等待中 | `register`、从 proposed `schedule`、review rework、`ready` 被 block、Release start、change 任务创建 | `schedule`（依赖完成后转 ready）、`unschedule`、调度器不派发（无 action） | 无法表达“已授权但依赖未完成 / 返工 / 阻塞”；会把未就绪任务误派发 | **必要**（已授权未可执行） |
 | `ready` 就绪 | 依赖完成且 authority 就绪时 `ready()` 创建 execute action | 调度器 claim/admit；`start` 要求 ready + accepted 回执；`unschedule`、`block`；Release 活跃检查 | 调度器失去“可 claim”的权威标记；start 无法校验回执；投递队列状态无处表达 | **内部必要**；用户价值低，可由投递 chip 代替 |
@@ -44,7 +44,7 @@
 ### 3.2 备选
 
 - **只合并就绪**：7 列；旧目标卡仍按需多出 1–2 列。
-- **再合并起草与待准备**：6 列；但失去“先记标题、后补细节”的草稿路径，不建议。
+- **再合并起草与待准备**：6 列；但失去“先记标题、后补细节”的分步录入路径，不建议。
 - **保持现状**：8–10 列，各状态语义完整，但列数多、横向空间紧张。
 
 ### 3.3 实施影响（已按推荐方案实施）

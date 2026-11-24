@@ -25,7 +25,7 @@
 // provider's prefix cache holds; a fresh part, or a checkpoint (which breaks the cache
 // anyway), freezes it anew.
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, truncateSync, unlinkSync, watch, writeFileSync } from 'node:fs'
 import { appendFile, mkdir, rename, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { HarnessError, createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -60,6 +60,7 @@ const UPDATE_TEXT_MAX = 4_000
 // The changes kept in memory for update messages, and how far back a start reads them.
 const RECENT_ROWS_MAX = 2_000
 const RECENT_TAIL_CHARS = 512 * 1024
+const JOURNAL_TAIL_BYTES = 64 * 1024
 const QUERY_TERMS_MAX = 6
 const SOURCE_READ_MS = 5_000
 const MODEL_TIMEOUT_MS = 120_000
@@ -164,11 +165,52 @@ export function install(rt) {
       return { topic, file, path: join(dir, file), content, ...parseMemory(content) }
     })
   }
-  // Recall runs on every step, so it keeps each topic parsed and tokenized until the
-  // file changes. The file is looked at before it is read: a write in between is read
-  // again on the next step instead of being kept under the old revision. The entries
-  // are shared between steps; callers must not change them.
+  // Recall runs on every step, and a Bot may search on every turn, so each file is kept
+  // parsed and tokenized until it changes. The file is looked at before it is read: a
+  // write in between is read again on the next call instead of being kept under the old
+  // revision. The entries are shared between calls; callers must not change them.
   const recallCache = new Map()
+  const mainCache = new Map()
+  const memoryWatchers = new Map()
+  const watchMemoryDir = dir => {
+    if (memoryWatchers.has(dir)) return memoryWatchers.get(dir) !== null
+    try {
+      const watcher = watch(dir, (_event, filename) => {
+        if (filename === null) {
+          recallCache.delete(dir)
+          mainCache.delete(dir)
+          return
+        }
+        const name = String(filename)
+        if (!name.endsWith('.md')) return
+        if (name === MAIN) mainCache.delete(dir)
+        else {
+          const topics = recallCache.get(dir)
+          topics?.delete(name.slice(0, -3))
+          if (topics?.size === 0) recallCache.delete(dir)
+        }
+      })
+      watcher.on('error', () => {
+        if (memoryWatchers.get(dir) === watcher) memoryWatchers.set(dir, null)
+        recallCache.delete(dir)
+        mainCache.delete(dir)
+        watcher.close()
+      })
+      watcher.unref?.()
+      memoryWatchers.set(dir, watcher)
+      return true
+    } catch (error) {
+      // A scope with no directory yet cannot be watched or cached. Retry when a
+      // later write creates it; other watch failures stay uncached for correctness.
+      if (error?.code !== 'ENOENT') memoryWatchers.set(dir, null)
+      return false
+    }
+  }
+  const flushMemoryWatchEvents = () => new Promise(resolve => setImmediate(resolve))
+  ctx.effect(() => () => {
+    for (const watcher of memoryWatchers.values()) watcher?.close()
+    memoryWatchers.clear()
+  }, 'ds-bot: memory cache watchers')
   const revisionOf = (path) => {
     try {
       const stat = statSync(path, { bigint: true, throwIfNoEntry: false })
@@ -177,25 +219,39 @@ export function install(rt) {
       return unreadable(path, error)
     }
   }
-  const recallEntries = (scope) => {
+  const parsedFile = (dir, topic, cached) => {
+    const file = topic === undefined ? MAIN : `${topic}.md`
+    const path = join(dir, file)
+    const revision = revisionOf(path)
+    if (revision === undefined) return undefined
+    if (cached?.revision === revision) return cached
+    const content = readText(path)
+    const parsed = { topic, file, path, content, ...parseMemory(content) }
+    return { revision, entries: parsed.entries.map(entry => ({ ...entry, file: parsed })).map(entry => ({ ...entry, words: entryWords(entry) })) }
+  }
+  const recallEntries = (scope, names = topicNames(scope)) => {
     const dir = dirOf(scope)
-    const cached = recallCache.get(dir)
+    const cacheable = watchMemoryDir(dir)
+    const cached = cacheable ? recallCache.get(dir) : undefined
     const topics = new Map()
-    for (const topic of topicNames(scope)) {
-      const path = join(dir, `${topic}.md`)
-      const revision = revisionOf(path)
-      if (revision === undefined) continue
-      let parsed = cached?.get(topic)
-      if (parsed?.revision !== revision) {
-        const content = readText(path)
-        const file = { topic, file: `${topic}.md`, path, content, ...parseMemory(content) }
-        parsed = { revision, entries: file.entries.map(entry => ({ ...entry, file })).map(entry => ({ ...entry, words: entryWords(entry) })) }
-      }
-      topics.set(topic, parsed)
+    for (const topic of names) {
+      const parsed = parsedFile(dir, topic, cached?.get(topic))
+      if (parsed !== undefined) topics.set(topic, parsed)
     }
-    if (topics.size === 0) recallCache.delete(dir)
+    if (!cacheable || topics.size === 0) recallCache.delete(dir)
     else recallCache.set(dir, topics)
     return [...topics.values()].flatMap(parsed => parsed.entries)
+  }
+  // Every entry of a scope, MEMORY.md first, read in loadScope's order so an unreadable
+  // file fails the same way.
+  const searchEntries = (scope) => {
+    const dir = dirOf(scope)
+    const names = topicNames(scope)
+    const cacheable = watchMemoryDir(dir)
+    const main = parsedFile(dir, undefined, cacheable ? mainCache.get(dir) : undefined)
+    if (!cacheable || main === undefined) mainCache.delete(dir)
+    else mainCache.set(dir, main)
+    return [...(main?.entries ?? []), ...recallEntries(scope, names)]
   }
   const mainLimit = scope => state.prefs.memoryLimits?.[scope.kind] ?? MEMORY_LIMITS[scope.kind]
   const fileName = file => (file.topic === undefined ? MAIN : `topic [[${file.topic}]]`)
@@ -253,6 +309,42 @@ export function install(rt) {
     }
   }
 
+  // The end of the change log, from where it starts in bytes: at least its last whole
+  // row and what follows it. Every write finishes an interrupted change first, so the
+  // row of a change that is finished twice is the last one in its log, and a half row
+  // can only be at the end. The log only grows, so a write does not read all of it.
+  function journalTail(path) {
+    let fd
+    try {
+      fd = openSync(path, 'r')
+    } catch (error) {
+      if (error?.code === 'ENOENT') return { start: 0, text: '' }
+      unreadable(path, error)
+    }
+    try {
+      const size = fstatSync(fd).size
+      for (let length = JOURNAL_TAIL_BYTES; ; length *= 2) {
+        const start = Math.max(0, size - length)
+        const bytes = Buffer.alloc(size - start)
+        for (let at = 0; at < bytes.length;) {
+          const read = readSync(fd, bytes, at, bytes.length - at, start + at)
+          if (read === 0) break
+          at += read
+        }
+        const last = bytes.lastIndexOf(0x0a)
+        // A newline byte is never part of a longer character, so cutting after one
+        // keeps the text and its offset in bytes whole.
+        if (start > 0 && !(last > 0 && bytes.lastIndexOf(0x0a, last - 1) >= 0)) continue
+        const from = start === 0 ? 0 : bytes.indexOf(0x0a) + 1
+        return { start: start + from, text: bytes.subarray(from).toString('utf8') }
+      }
+    } catch (error) {
+      unreadable(path, error)
+    } finally {
+      closeSync(fd)
+    }
+  }
+
   // Whether the change log already holds the row of a change. Only a row that parses
   // counts: a half-written row is not proof that anything was done.
   function journalled(text, id) {
@@ -282,7 +374,7 @@ export function install(rt) {
   // are whole, and the row after it starts on a line of its own.
   async function journalRow(row) {
     const { path, torn } = journalFor(row.scope, row.op)
-    const text = readJournal(path)
+    const { start, text } = journalTail(path)
     if (journalled(text, row.id)) return false
     const cut = text.lastIndexOf('\n') + 1
     const half = text.slice(cut)
@@ -300,7 +392,7 @@ export function install(rt) {
       return true
     }
     await appendFile(torn, `${half}\n`, 'utf8')
-    truncateSync(path, Buffer.byteLength(text.slice(0, cut), 'utf8'))
+    truncateSync(path, start + Buffer.byteLength(text.slice(0, cut), 'utf8'))
     await appendFile(path, `${line}\n`, 'utf8')
     return true
   }
@@ -919,7 +1011,7 @@ export function install(rt) {
     if (snapshot !== undefined) front.push(snapshot)
     const update = memoryUpdate(agent.id, bot, member ? roomId : undefined)
     if (update !== undefined) front.push(update)
-    const recalled = autoRecall(agent, bot, member ? roomId : undefined, decision)
+    const recalled = await autoRecall(agent, bot, member ? roomId : undefined, decision)
     if (recalled !== undefined) front.push(recalled)
     return front.length === 0 ? decision : { ...decision, messages: [...front, ...decision.messages] }
   })
@@ -928,7 +1020,7 @@ export function install(rt) {
   // MEMORY.md is in view already. Off when the user turns it off.
   const isRecalled = message => message?.source?.kind === MEMORY_RECALL_SOURCE
   const SAID = new Set(['user', 'schedule', 'bot'])
-  function autoRecall(agent, bot, roomId, decision) {
+  async function autoRecall(agent, bot, roomId, decision) {
     if (state.prefs.memoryAutoRecall === false) return undefined
     const said = decision.messages.findLast(message => message?.role === 'user' && SAID.has(message.source?.kind))
     const query = said === undefined ? '' : textOf(said.content).slice(0, AUTO_RECALL_QUERY_MAX)
@@ -940,6 +1032,8 @@ export function install(rt) {
     const scopes = [own, ...(roomId === undefined ? [] : [groupScope(roomId)]), TEAM]
     let topicEntries
     try {
+      const watching = scopes.map(scope => watchMemoryDir(dirOf(scope)))
+      if (watching.some(Boolean)) await flushMemoryWatchEvents()
       topicEntries = scopes.flatMap(scope => recallEntries(scope).map(entry => ({ ...entry, tag: tagOf(scope, bot.id) })))
     } catch (error) {
       rt.warn('ds-bot: memory recall for %s not read: %s', bot.name, error?.message ?? error)
@@ -1207,13 +1301,20 @@ export function install(rt) {
       const self = caller.bot.id
       const { scopes, error } = readScopes(args.scope, self, caller.roomId)
       if (error) return error
+      const wantsTopic = args.topic !== undefined && String(args.topic).trim() !== ''
+      const query = String(args.query ?? '').trim().slice(0, 120)
+      const searching = !wantsTopic && query !== ''
+      if (searching) {
+        const watching = scopes.map(scope => watchMemoryDir(dirOf(scope)))
+        if (watching.some(Boolean)) await flushMemoryWatchEvents()
+      }
       let loaded
       try {
-        loaded = await settled(() => scopes.map(scope => ({ scope, tag: tagOf(scope, self), label: labelOf(scope, self), files: loadScope(scope) })))
+        loaded = await settled(() => scopes.map(scope => ({ scope, tag: tagOf(scope, self), label: labelOf(scope, self), ...(searching ? { entries: searchEntries(scope) } : { files: loadScope(scope) }) })))
       } catch (failure) {
         return failure.message
       }
-      if (args.topic !== undefined && String(args.topic).trim() !== '') {
+      if (wantsTopic) {
         const topic = cleanTopic(args.topic)
         for (const { scope, label, files } of loaded) {
           const file = files.find(item => item.topic === topic)
@@ -1223,8 +1324,7 @@ export function install(rt) {
         return `No topic [[${String(args.topic).slice(0, 60)}]] there. Topics: ${known.join(', ') || 'none yet'}.`
       }
       const where = (tag, file) => `${tag} · ${file.topic === undefined ? MAIN : `[[${file.topic}]]`}`
-      const query = String(args.query ?? '').trim().slice(0, 120)
-      if (query === '') {
+      if (!searching) {
         return loaded.map(({ scope, tag, label, files }) => {
           const [main, ...topics] = files
           return [
@@ -1246,7 +1346,7 @@ export function install(rt) {
         for (const run of word.match(/[\u4e00-\u9fff]{2,}/g) ?? []) for (let at = 0; at + 1 < run.length; at += 1) parts.add(run.slice(at, at + 2))
         return [word, ...parts]
       }))]
-      const scored = loaded.flatMap(({ tag, files }) => allEntries(files).map((entry) => {
+      const scored = loaded.flatMap(({ tag, entries }) => entries.map((entry) => {
         const hay = squash(`${entry.text} ${entry.file.topic ?? ''}`)
         return { entry, tag, count: terms.filter(term => hay.includes(term)).length }
       })).filter(hit => hit.count > 0)

@@ -818,6 +818,14 @@ test('a PTC group relay shows its replies from the sub-call, live and after relo
   assert.deepEqual(JSON.parse(JSON.stringify(sets)), [{ replies: replies.slice(0, 1), speaking: ['chief'] }])
 })
 
+test('a finished ranged group relay initializes from the closed-row cache', () => {
+  const finished = program([call('group_relay', 'direct', { content: '{"from":3,"to":9,"passed":[]}' })])
+  const actions = { groupRows: async () => ({ rows: [], open: false, active: false }) }
+  const relay = find(ToolCell(props(finished, { sessionId: 'room', actions })), node => node.type?.name === 'GroupReplies')
+  effects = []
+  assert.doesNotThrow(() => relay.type(relay.props))
+})
+
 // #105: the secret and question cards of a PTC program showed nowhere.
 test('PTC secret and question cards show at their sub-calls and act on their own requests', async () => {
   const roster = team({ questions: { chief: question('call-1-2:ptc:1') }, secretRequests: { chief: [request('call-2-1:ptc:1')] } })
@@ -856,6 +864,19 @@ test('a goal round draws nothing, while another unknown trigger keeps its event 
   }))
   assert.ok(emptied(trigger({ kind: 'goal', goalId: 'goal-1', revision: 1, round: 1 })))
   assert.match(text(trigger({ kind: 'webhook' })), /<goal_round>Keep going/)
+})
+
+test('a computer handback trigger draws nothing instead of a Bot relay event', () => {
+  const out = expand(TriggerCell({
+    node: { key: 'node', data: { source: { kind: 'bot', role: 'handback' }, turn: 3, content: text$('The user handed the computer back. Look at the app again before you go on.') }, location: { turn: { turn: 3 } } },
+    sessionId: chief.id,
+    useRoster: select => select(team()),
+    useSessions: select => select({ byId: {} }),
+    useTurnClock: select => select({}),
+    useUi: select => select({ visits: {} }),
+    actions: { openExchange: () => { throw new Error('must not open an exchange') } },
+  }))
+  assert.ok(emptied(out))
 })
 
 // #212: the chat hands a trigger its event (seq, content, source) but no turn, so every post

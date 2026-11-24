@@ -78,12 +78,11 @@ export const TEAM_TOOLS = [
   'request_secret', 'list_secrets', 'group_relay', 'read_own_chat',
   'read_group_chat', 'bot_remember', 'bot_forget', 'bot_recall', 'read_browser', 'read_document',
   'list_capabilities', 'save_capability', 'delete_capability',
-  'attach_capability', 'detach_capability', 'group_goal', 'board_task', 'project_coordination', 'group_task', 'list_connectors', 'request_connector', 'sync_shared_repository',
+  'attach_capability', 'detach_capability', 'use_pack', 'drop_pack', 'group_goal', 'board_task', 'project_coordination', 'group_task', 'list_connectors', 'request_connector', 'sync_shared_repository',
   'task_start', 'task_send', 'task_stop', 'task_list', 'task_read',
 ]
-// Consecutive automatic admin wakes with no goal progress before the goal waits
-// for the user instead of waking the admin again.
-export const GOAL_IDLE_NUDGES = 2
+// Immediate automatic admin wakes before backing off to the periodic review.
+export const GOAL_NUDGE_BURST = 2
 // How long a Bot's own chat waits for a shell call before it goes on as a background
 // job and the step moves on (settings can change it; 0 hands every call over).
 export const BACKGROUND_WAIT_MS = 5_000

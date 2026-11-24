@@ -3,7 +3,9 @@ const { readFileSync } = require('node:fs')
 const { join } = require('node:path')
 const { test } = require('node:test')
 const { applyArchs, sign } = require('./android-release-signing.js')
-const { versionCode } = require('../app.config.js')
+const appConfig = require('../app.config.js')
+const { versionCode } = appConfig
+const { version: pluginVersion } = require('../../ds-bot/package.json')
 
 // app/build.gradle as `expo prebuild` of Expo 58 writes it.
 const gradle = readFileSync(join(__dirname, 'fixtures', 'expo-58-app-build.gradle'), 'utf8')
@@ -34,7 +36,16 @@ test('versionCode grows with the version, and a pre-release stays below its rele
   const codes = order.map(versionCode)
   assert.deepEqual([...codes].sort((a, b) => a - b), codes)
   assert.equal(versionCode('0.3.2'), 300299)
+  assert.equal(versionCode('0.3.10+aios.20261123.2'), versionCode('0.3.10'))
+  assert.equal(versionCode('0.4.0-rc.1+aios.20261123.2'), versionCode('0.4.0-rc.1'))
   assert.throws(() => versionCode('0.3'), /cannot make/)
+})
+
+test('the phone app strips build metadata from its store version and default iOS build number', () => {
+  const config = appConfig({ config: {} })
+  const storeVersion = pluginVersion.split('+', 1)[0]
+  assert.equal(config.version, storeVersion)
+  assert.equal(config.ios.buildNumber, storeVersion)
 })
 
 test('applyArchs preserves debug architectures while enabling uncompressed 16KB packaging', () => {
