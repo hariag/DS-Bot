@@ -62,13 +62,14 @@ export function install(rt) {
   }
   const taskMessage = ({toId, sessionId, roomId, text, messageId, exchangeId, actionId, taskRevision, actionRevision}) => {
     const bot = rt.botOf(toId), room = roomId ? rt.roomOf(roomId) : undefined
-    const role = roomId ? 'room' : 'request'
+    // Room-scoped work executes privately. Keep roomId as provenance, while
+    // request starts the owner's ordinary private turn.
+    const role = 'request'
     if (!bot || bot.private === true || typeof text !== 'string' || text.length === 0 || typeof messageId !== 'string' || !messageId
       || typeof exchangeId !== 'string' || !exchangeId || typeof actionId !== 'string' || !actionId
       || !Number.isSafeInteger(taskRevision) || !Number.isSafeInteger(actionRevision)) throw new Error('Invalid task delivery')
-    if (roomId && (!room || !room.members?.includes(toId) || room.sessions?.[toId] !== sessionId
-      || rt.groupOwners.get(sessionId)?.botId !== toId || rt.groupOwners.get(sessionId)?.roomId !== roomId)) throw new Error('Task recipient left the group')
-    if (!roomId && sessionId !== rt.chatOf(toId)) throw new Error('Task recipient Session changed')
+    if (roomId && (!room || !room.members?.includes(toId))) throw new Error('Task recipient left the group')
+    if (sessionId !== rt.chatOf(toId)) throw new Error('Task recipient Session changed')
     const source = { kind:SOURCE_KIND, form:'relay', role, exchangeId, senderName:'You',
       ...(roomId ? {roomId} : {}), taskAction:{id:actionId, taskRevision, actionRevision} }
     const message = createUserMessage({source, content:[{type:'text',text:`${headerFor(role,'You',room?.name,undefined,roomId?'task from Trello':'new message')}\n${text}`}]})

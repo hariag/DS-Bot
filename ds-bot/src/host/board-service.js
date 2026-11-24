@@ -436,7 +436,9 @@ export function install(rt) {
       prepare: async (action, task) => {
         if (!allowedAction(task, action)) return undefined
         const roomId = taskRoomId(task)
-        const sessionId = roomId ? await rt.ensureGroupTaskSession(roomId, action.actor) : rt.chatOf(action.actor)
+        // Board work runs in the owner's private Session. A room Session is for
+        // goal rounds; routing a durable task there can leave its accepted action idle.
+        const sessionId = rt.chatOf(action.actor)
         if (typeof sessionId !== 'string' || !sessionId || busySession(sessionId, action.id)) return undefined
         if (!allowedAction(store.get(task.id), action)) return undefined
         const messageId = randomUUID(), exchangeId = randomUUID()
@@ -454,7 +456,7 @@ export function install(rt) {
           exchangeId:source.exchangeId, taskAction:source.taskAction }, {
           preparedMessage:intent.payload,
           beforeAdmission: (agent, message) => {
-            const target = source.roomId ? rt.roomOf(source.roomId)?.sessions?.[action.actor] : rt.chatOf(action.actor)
+            const target = rt.chatOf(action.actor)
             if (target !== intent.targetSessionId || !sameMessage(agent, message) || !revalidateNow()) throw new Error('Task authorization changed before DSH admission')
           },
           afterAdmission: (agent, message) => {

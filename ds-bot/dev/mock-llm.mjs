@@ -12,7 +12,8 @@
 //
 // Environment: MOCK_PORT, MOCK_LOG, MOCK_DELAY_MS, MOCK_JITTER_MS (random extra latency),
 // MOCK_LOG_CHARS (prompt length kept per log entry), MOCK_SUMMARY_DELAY_MS (handoff notes
-// and backend compaction only), MOCK_NATIVE_SEARCH=off (ignore web_search_* tools and
+// and backend compaction only), MOCK_BOARD_AUTORUN=1 (drive the board_task lifecycle
+// protocol for the isolated release E2E), MOCK_NATIVE_SEARCH=off (ignore web_search_* tools and
 // answer like an endpoint without search), MOCK_REJECT_IMAGES=1 (reject requests with images).
 //
 // Commands to a Bot:
@@ -188,6 +189,17 @@ function decide(body) {
     return [text(note(sections))]
   }
 
+  // The lifecycle E2E uses a scripted model, but still exercises the real task
+  // prompt, tool authorization, journal transitions, owner handoff and reviewer
+  // dispatch. Keep this opt-in so ordinary mock scenarios remain unchanged.
+  if (process.env.MOCK_BOARD_AUTORUN === '1' && tools.has('board_task') && last?.role === 'user') {
+    const taskText = textBlocks(last.content).join('\n')
+    const taskHeader = /^Task ID: ([^\s]+) \(revision \d+\)$/m.exec(taskText)
+    if (taskHeader && (/Use board_task show first/.test(taskText) || /Owner report:/.test(taskText))) {
+      return [tool('board_task', { action:'show', task_id:taskHeader[1] })]
+    }
+  }
+
   // A stopped call's result can share a message with the next group turn, which wins.
   const fresh = textBlocks(last?.content).some(value => value.trimStart().startsWith('[Group chat'))
   const result = fresh ? undefined : blocks.find(block => block.type === 'tool_result')
@@ -195,6 +207,30 @@ function decide(body) {
     const resultText = typeof result.content === 'string' ? result.content : textOf(result.content)
     const call = [...messages].reverse().find(m => m.role === 'assistant' && Array.isArray(m.content) && m.content.some(b => b.type === 'tool_use'))
     const used = call?.content.find(b => b.type === 'tool_use' && b.id === result.tool_use_id) ?? call?.content.find(b => b.type === 'tool_use')
+    if (process.env.MOCK_BOARD_AUTORUN === '1' && used?.name === 'board_task') {
+      let response
+      try { response = JSON.parse(resultText) } catch {}
+      const task = response?.task
+      if (result.is_error || !task || typeof task.id !== 'string' || !Number.isSafeInteger(task.revision)) {
+        return [text(`Lifecycle fixture could not advance board_task ${used.input?.action ?? 'unknown'}: ${resultText.slice(0, 240)}`)]
+      }
+      const roomId = task.roomId ?? (typeof task.scope === 'string' && task.scope.startsWith('room:') ? task.scope.slice(5) : undefined)
+      const common = { task_id:task.id, ...(roomId ? {room_id:roomId} : {}) }
+      if (used.input?.action === 'show' && task.status === 'ready') {
+        return [tool('board_task', { ...common, action:'start', operation_id:`e2e:${task.id}:start`, expected_revision:task.revision })]
+      }
+      if (used.input?.action === 'start' && task.status === 'working') {
+        return [tool('board_task', { ...common, action:'report', operation_id:`e2e:${task.id}:report`, expected_revision:task.revision,
+          value:{ kind:'personal', environment:'isolated lifecycle E2E mock fixture', evidence:`Completed the assigned task and checked its acceptance criteria: ${task.acceptance}` } })]
+      }
+      if (used.input?.action === 'show' && task.status === 'reported') {
+        return [tool('board_task', { ...common, action:'review', operation_id:`e2e:${task.id}:review`, expected_revision:task.revision,
+          value:{ result:'pass', evidence:`Independently checked the recorded acceptance evidence: ${task.evidence?.evidence ?? 'owner report present'}` } })]
+      }
+      if (used.input?.action === 'report' && task.status === 'reported') return [text(`Owner report recorded for ${task.id}; awaiting independent review.`)]
+      if (used.input?.action === 'review' && task.status === 'done') return [text(`Independently reviewed and completed ${task.id}.`)]
+      return [text(`Lifecycle fixture left ${task.id} in ${task.status} after ${used.input?.action ?? 'unknown'}; no automatic transition applies.`)]
+    }
     // "长任务 N [K]": N steps in one turn, each adding about K thousand characters (default 4).
     const openerAt = messages.findLastIndex(m => m.role === 'user' && !isResults(m) && /^长任务\s*\d+/.test(textOf(m.content).trimStart()))
     if (openerAt !== -1 && used?.name === 'list_bots') {

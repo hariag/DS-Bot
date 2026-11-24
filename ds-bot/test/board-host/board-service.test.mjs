@@ -134,7 +134,7 @@ test('actual task journal backs the five instance-user endpoints with isolated g
   assert.equal(readdirSync(join(rt.home, 'board-v1', 'images')).length, 2)
 })
 
-test('a scheduled task enters the real DSH Session once with a revision-bound message', async t => {
+test('a scheduled room task starts in the owner private Session with room provenance', async t => {
   const {rt,deliveries}=fixture(t), scope={kind:'room',id:'group'}
   const created=await rt.boardCall('board-command',{scope,operationId:'scheduled-create',taskId:'scheduled-task',type:'create',value:{
     title:'Run the task',owner:'one',reviewer:'two',acceptance:'Independent evidence',dependencies:[],
@@ -146,8 +146,10 @@ test('a scheduled task enters the real DSH Session once with a revision-bound me
   while(!deliveries.length&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,10))
   assert.equal(deliveries.length,1)
   const {sessionId,message}=deliveries[0]
-  assert.equal(sessionId,'group-one');assert.equal(message.role,'user')
-  assert.equal(message.source.roomId,'group');assert.equal(message.source.role,'room')
+  assert.equal(sessionId,'chat-one');assert.equal(message.role,'user')
+  assert.equal(message.source.roomId,'group');assert.equal(message.source.role,'request')
+  assert.equal(rt.state.rooms.group.sessions.one, undefined, 'board execution must not create a group task Session')
+  assert.equal(rt.groupOwners.size, 0, 'board execution must not depend on a group round')
   assert.equal(message.source.taskAction.id.length,64);assert.equal(message.source.taskAction.taskRevision,scheduled.revision)
   assert.equal(message.source.taskAction.actionRevision,scheduled.actionRevision)
   assert.match(message.content[0].text,/Independent evidence/)
@@ -166,40 +168,40 @@ test('scheduled owner and reviewer receive their exact evidence fields and can c
   await settle(async () => deliveries.length === 1)
   assert.match(deliveries[0].message.content[0].text, /report, send value exactly as \{"kind":"personal","environment":".+?","evidence":"/)
   const tool = rt.teamTools.find(item => item.name === 'board_task')
-  const call = async (sessionId, args) => JSON.parse(await tool.execute({ task_id:card.id, ...args }, { agent:{ id:sessionId } }))
-  const {task:working} = await call('group-one', { action:'start', operation_id:'owner-start', expected_revision:ready.revision })
+  const call = async (sessionId, args) => JSON.parse(await tool.execute({ task_id:card.id, room_id:'group', ...args }, { agent:{ id:sessionId } }))
+  const {task:working} = await call('chat-one', { action:'start', operation_id:'owner-start', expected_revision:ready.revision })
   const report = { action:'report', operation_id:'owner-report', expected_revision:working.revision }
   const personal = {kind:'personal', environment:'repository checkout', evidence:'Compared the original and updated objects'}
-  await assert.rejects(call('group-one', {...report, operation_id:'owner-extra', value:{...personal, result:'pass'}}),
+  await assert.rejects(call('chat-one', {...report, operation_id:'owner-extra', value:{...personal, result:'pass'}}),
     /invalid fields.*Unexpected value fields result.*"kind":"personal"/)
-  await assert.rejects(call('group-two', {...report, operation_id:'wrong-owner', value:{...personal, result:'pass'}}),
+  await assert.rejects(call('chat-two', {...report, operation_id:'wrong-owner', value:{...personal, result:'pass'}}),
     /not authorized$/)
   const oid = 'a'.repeat(40)
-  await assert.rejects(call('group-one', {...report, operation_id:'git-report', value:{
+  await assert.rejects(call('chat-one', {...report, operation_id:'git-report', value:{
     ...personal, kind:'git', targetCommit:oid, targetBlob:oid, acceptanceBlob:oid,
   }}), /report evidence unverified.*"kind":"personal"/)
-  const {task:reported} = await call('group-one', {...report, value:personal})
+  const {task:reported} = await call('chat-one', {...report, value:personal})
   assert.equal(reported.status, 'reported')
   await settle(async () => deliveries.length === 2)
-  assert.equal(deliveries[1].sessionId, 'group-two')
+  assert.equal(deliveries[1].sessionId, 'chat-two')
   assert.match(deliveries[1].message.content[0].text, /review, send value exactly as \{"result":"pass","evidence":".+?"\}.*"rework"/)
   const review = { action:'review', operation_id:'reviewer-review', expected_revision:reported.revision }
   const decision = { result:'pass', evidence:'Independently verified the acceptance criteria' }
-  await assert.rejects(call('group-two', {...review, operation_id:'review-extra', value:{...decision, environment:'fixture'}}),
+  await assert.rejects(call('chat-two', {...review, operation_id:'review-extra', value:{...decision, environment:'fixture'}}),
     /invalid fields.*Unexpected value fields environment.*"result":"pass"/)
-  const {task:done} = await call('group-two', {...review, value:decision})
+  const {task:done} = await call('chat-two', {...review, value:decision})
   assert.equal(done.status, 'done')
 
   const change = await rt.boardCall('board-command', { scope, taskId:card.id, type:'card-details',
     expectedRevision:done.revision, operationId:'changed-description', value:{description:'Cover a new case'} })
   const changePrompt = sessionId => settle(async () => deliveries.find(entry => entry.sessionId === sessionId
     && entry.message.source?.taskAction && entry.message.content[0].text.includes('Task ID: '+change.id+' (revision '))?.message.content[0].text)
-  const ownerPrompt = await changePrompt('group-one')
+  const ownerPrompt = await changePrompt('chat-one')
   assert.match(ownerPrompt, /Before:.*\nAfter:.*Cover a new case/)
   assert.match(ownerPrompt, /adjust what is needed or explicitly reassign it/)
-  const {task:startedChange} = await call('group-one', { task_id:change.id, action:'start', operation_id:'changed-start', expected_revision:change.revision })
-  await call('group-one', { task_id:change.id, action:'report', operation_id:'changed-report', expected_revision:startedChange.revision, value:personal })
-  const reviewerPrompt = await changePrompt('group-two')
+  const {task:startedChange} = await call('chat-one', { task_id:change.id, action:'start', operation_id:'changed-start', expected_revision:change.revision, room_id:'group' })
+  await call('chat-one', { task_id:change.id, action:'report', operation_id:'changed-report', expected_revision:startedChange.revision, value:personal, room_id:'group' })
+  const reviewerPrompt = await changePrompt('chat-two')
   assert.match(reviewerPrompt, /Before:.*\nAfter:.*Cover a new case/)
   assert.match(reviewerPrompt, /Independently compare the before and after requirements/)
   assert.match(reviewerPrompt, /board_task review/)
