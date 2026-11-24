@@ -23,6 +23,10 @@ or:
 npm run test:board:e2e -- --fresh
 ```
 
+The runner uses the standard Chrome path on Windows. On macOS and Linux it searches common
+system Chrome/Chromium paths, then falls back to Playwright's Chromium path. Set
+`BOARD_E2E_CHROME` to choose a specific browser executable.
+
 The mock model must be reachable on `BOARD_E2E_MOCK_PORT` (default 8797); `dsh web` uses
 `BOARD_E2E_WEB_PORT` (default 3097). Stop every bench the run started; the script does this
 unless `--keep` is given.

@@ -19,7 +19,7 @@
 // BOARD_E2E_CHROME (installed Chrome path), BOARD_E2E_NODE (node executable for the bench children).
 import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DEFAULTS, PLUGIN, boardApi, loginToken, startBench, stopBench } from './bench.mjs'
@@ -30,6 +30,10 @@ const { PNG } = require('pngjs')
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ARTIFACTS_ROOT = join(HERE, 'artifacts')
+const systemChrome = process.platform === 'darwin'
+  ? ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', chromium.executablePath()]
+  : ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', chromium.executablePath()]
+const defaultChrome = process.platform === 'win32' ? DEFAULTS.chrome : systemChrome.find(existsSync) ?? chromium.executablePath()
 
 function parseArgs(argv) {
   const options = {
@@ -40,7 +44,7 @@ function parseArgs(argv) {
     home: process.env.BOARD_E2E_HOME || DEFAULTS.home,
     webPort: Number(process.env.BOARD_E2E_WEB_PORT || DEFAULTS.webPort),
     mockPort: Number(process.env.BOARD_E2E_MOCK_PORT || DEFAULTS.mockPort),
-    chrome: process.env.BOARD_E2E_CHROME || DEFAULTS.chrome,
+    chrome: process.env.BOARD_E2E_CHROME || defaultChrome,
     baseUrl: process.env.BOARD_E2E_BASE_URL || '',
     loginUrl: process.env.BOARD_E2E_LOGIN_URL || '',
     runId: process.env.BOARD_E2E_RUN_ID || '',
