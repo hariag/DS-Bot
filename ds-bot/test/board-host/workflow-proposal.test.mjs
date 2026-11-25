@@ -276,3 +276,41 @@ test('A mentioned participant can comment on a blocked room card; outsiders cann
   await assert.rejects(call({action:'comment',task_id:'c1',room_id:'g',operation_id:'cm3',expected_revision:store.get('c1').revision,note:'x'.repeat(3000)}, 'g-three'), /2048 bytes/)
   assert.ok(sent.task)
 })
+
+test('child updates report current parent status and Main Bot can list and comment on personal:user cards', async t => {
+  const {store, rt, workflow} = fixture(t)
+  const rooms = {g:{id:'g',members:['one','two']}}
+  rt.state = {rooms,bots:{one:{},two:{},main:{}}}
+  rt.roomOf = id => rooms[id]
+  rt.botOf = id => ['one','two','main'].includes(id) ? {id,name:id} : undefined
+  rt.isMain = id => id === 'main'
+  rt.chatOf = id => `chat-${id}`
+  rt.selfOf = id => ({'chat-one':'one','chat-two':'two','chat-main':'main','g-one':'one'})[id]
+  rt.groupOwners.set('g-one', {roomId:'g'})
+  rt.teamTools = []
+  const tool = installTaskTool(rt, workflow, value => value)
+  const call = async (args, sid) => JSON.parse(await tool.execute(args, {agent:{id:sid}}))
+
+  store.create({actor:'user',operationId:'new-p',task:{id:'T-FE-0010',title:'Parent',scope:'room:g',owner:'one',reviewer:'two',acceptance:'proof',dependencies:[],type:'feature'}})
+  store.create({actor:'user',operationId:'new-c',task:{id:'T-SUB-FE-0001',title:'Child',scope:'room:g',owner:'one',reviewer:'two',acceptance:'proof',dependencies:[],type:'development',parentTaskId:'T-FE-0010'}})
+  for (const id of ['T-FE-0010', 'T-SUB-FE-0001']) {
+    store.command({operationId:`reg-${id}`,actor:'user',taskId:id,expectedRevision:store.get(id).revision,type:'register',value:{kind:'personal',reference:`board:${id}:1`}})
+    store.command({operationId:`sch-${id}`,actor:'user',taskId:id,expectedRevision:store.get(id).revision,type:'schedule'})
+  }
+  const cAction = store.listActions('T-SUB-FE-0001').find(a => a.state === 'pending')
+  const msgId = 'msg-c1'
+  store.claimAction({actionId:cAction.id,actor:'scheduler',intent:{admissionId:'adm-c1',messageId:msgId,targetBotId:'one',targetSessionId:'chat-one',payload:{id:msgId,role:'user',content:[{type:'text',text:'go'}],source:{kind:'bot'}}}})
+  store.markAction({actionId:cAction.id,actor:'scheduler',expectedState:'claimed',state:'accepted',receipt:'ok'})
+  const started = await call({action:'start',task_id:'T-SUB-FE-0001',room_id:'g',operation_id:'start-c',expected_revision:store.get('T-SUB-FE-0001').revision}, 'g-one')
+  assert.deepEqual(started.parent.id, 'T-FE-0010')
+  assert.equal(started.parent.status, 'working')
+
+  store.create({actor:'user',operationId:'new-u',task:{id:'T-OPS-0099',title:'User personal card',scope:'personal:user',owner:'user',reviewer:'one',acceptance:'check',dependencies:[]}})
+  const mainListed = await call({action:'list'}, 'chat-main')
+  assert.ok(mainListed.items.some(item => item.id === 'T-OPS-0099'))
+  const otherListed = await call({action:'list'}, 'chat-two')
+  assert.equal(otherListed.items.some(item => item.id === 'T-OPS-0099'), false)
+  const mainComment = await call({action:'comment',task_id:'T-OPS-0099',operation_id:'main-cm',expected_revision:1,note:'请确认是否需要继续推进'}, 'chat-main')
+  assert.equal(mainComment.task.replies.at(-1).author, 'main')
+  await assert.rejects(call({action:'comment',task_id:'T-OPS-0099',operation_id:'two-cm',expected_revision:2,note:'nope'}, 'chat-two'), /authorized/)
+})

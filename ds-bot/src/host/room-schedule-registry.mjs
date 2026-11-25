@@ -28,15 +28,22 @@ const trackedEnglishPromptOf = token => [
   ...activePromptBeforeTracking,
   'At each scheduled check, review every open item on the group’s shared task board. Reconcile its status, owner, blocker, evidence, and next check with the latest verified information, and record status changes on the original item. Keep following up until the work is complete or a user decision is required; never mark reported work done without acceptance evidence.',
 ].join(' ') + ' ' + marker(token)
-const promptOf = token => [
+const chineseV1PromptOf = token => [
   `群管理员每 ${ROOM_POLL_SECONDS / 60} 分钟巡查一次。用中文沟通与记录，文本采用 UTF-8，时间用北京时间 CST（Asia/Shanghai，UTC+08:00）。`,
   '逐项核对群共享看板的未结任务，在原卡更新负责人、状态、阻碍、证据及下次检查时间。以阶段变化、任务结果或可核验的新证据判断进展。仅有聊天、排队或接单记录不能证明任务已推进。完成须有验收证据。',
   '目标未达成且无实质进展时，优先推进最紧要的授权任务。需要协作时，用纯文本 @姓名 定向联系责任人，写明任务编号、所需动作或证据、反馈期限及下次检查时间。同一轮每项任务对同一人最多跟进一次，不用全员提醒。',
   '交接不明时查原回执，只向原接收人核实；不要重派或更换请求编号。未到期先做其他独立工作。逾期或连续两次巡查未获确认，找有权解决的人协调。需要用户决断时，由群管理员向用户说明待决定的问题并登记下次检查；其余阻碍由管理员协调至解决。',
   '遇共享锁先核持有人，联系其反馈并释放，锁空闲后再安排冲突任务。遵守用户的暂停和停止指令。',
 ].join('\n') + ' ' + marker(token)
+const promptOf = token => [
+  `群管理员每 ${ROOM_POLL_SECONDS / 60} 分钟巡查一次。用简体中文沟通与记录，文本采用 UTF-8，时间用北京时间 CST（Asia/Shanghai，UTC+08:00）。`,
+  '巡查时必须通过 board_task list/show（并对照 group_goal show）逐项核对群共享看板的未结任务，检查编号是否唯一且已注册、在原卡更新负责人、状态、阻碍、证据及下次检查时间；子任务有任何状态变化时，同步检查并更新父任务状态。严禁未编号或未注册先开工，完成前必须同步最新状态与验收证据回看板。以阶段变化、任务结果或可核验的新证据判断进展。仅有聊天、排队或接单记录不能证明任务已推进。完成须有验收证据。',
+  '目标未达成且无实质进展时，优先推进最紧要的授权任务。需要协作时，用纯文本 @姓名 定向联系责任人，写明任务编号、所需动作或证据、反馈期限及下次检查时间。同一轮每项任务对同一人最多跟进一次，不用全员提醒。',
+  '交接不明时查原回执，只向原接收人核实；不要重派或更换请求编号。未到期先做其他独立工作。逾期或连续两次巡查未获确认，找有权解决的人协调。需要用户决断时，由群管理员向用户说明待决定的问题并登记下次检查；其余阻碍由管理员协调至解决。',
+  '遇共享锁先核持有人，联系其反馈并释放，锁空闲后再安排冲突任务。遵守用户的暂停和停止指令。',
+].join('\n') + ' ' + marker(token)
 const currentPrompt = (prompt, token) => {
-  for (const previous of [previousPromptOf(token), previousCurrentPromptOf(token), activePromptBeforeTrackingOf(token), trackedEnglishPromptOf(token)]) {
+  for (const previous of [previousPromptOf(token), previousCurrentPromptOf(token), activePromptBeforeTrackingOf(token), trackedEnglishPromptOf(token), chineseV1PromptOf(token)]) {
     if (prompt === previous || prompt?.startsWith(previous)) return promptOf(token) + prompt.slice(previous.length)
   }
   return prompt

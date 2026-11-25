@@ -7,7 +7,7 @@ export function boardReleaseId(task, parent, caller, direct) {
   return parent?.scope === task.scope && direct(parent, caller) ? parent.releaseId : undefined
 }
 
-export function discoverWork({ caller, args, store, direct, sharedProjection, goalCards }) {
+export function discoverWork({ caller, args, store, direct, sharedProjection, goalCards, isMain = false }) {
   const query = args.query ?? ''
   if (typeof query !== 'string' || query.length > 200 || (args.cursor !== undefined && (typeof args.cursor !== 'string' || args.cursor.length > 300))
     || (args.kind !== undefined && !kinds.includes(args.kind)) || (args.mine !== undefined && typeof args.mine !== 'boolean')
@@ -42,7 +42,9 @@ export function discoverWork({ caller, args, store, direct, sharedProjection, go
       if (shared) add('shared', shared)
       continue
     }
-    if (!caller.roomId && task.owner !== caller.actor && task.reviewer !== caller.actor) continue
+    if (!caller.roomId && task.owner !== caller.actor && task.reviewer !== caller.actor
+      && !(isMain && (task.scope === 'personal:user' || task.owner === 'user' || task.reviewer === 'user'))
+      && !(task.participants ?? []).includes(caller.actor)) continue
     if (!needle && !args.parentTaskId && !args.releaseId && (task.archivedAt || ['done', 'cancelled'].includes(task.status))) continue
     const parent = byId.get(task.parentTaskId)
     const releaseId = boardReleaseId(task, parent, caller, direct)

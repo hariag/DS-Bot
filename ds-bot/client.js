@@ -13997,6 +13997,9 @@ var ZH = {
   "Edit comment": "编辑评论",
   "The comment could not be posted.": "无法发表评论。",
   "Write a comment": "写下评论",
+  "Write a comment (type @ to mention)": "写下评论（输入 @ 可提及成员）",
+  "Will notify": "将通知",
+  "Mention member": "提及成员",
   "People": "成员",
   "The title could not be saved.": "无法保存标题。",
   "Rename card": "重命名卡片",
@@ -47303,6 +47306,192 @@ function AttachmentsEditor({ scope, task, request, canUpload, canRemove, canCove
     canUpload ? (0, import_react63.createElement)(ImageUploader, { task, disabled, onUpload }) : null
   );
 }
+var COMMENT_MENTION_SPACE = /\r|\n/;
+function mentionableActors(actors) {
+  return (Array.isArray(actors) ? actors : []).filter((actor) => actor && actor.id !== "user" && typeof actor.name === "string" && actor.name.trim() !== "");
+}
+function activeMentionQuery(text, caret) {
+  const value = textValue(text);
+  const pos = Number.isInteger(caret) ? Math.max(0, Math.min(caret, value.length)) : value.length;
+  const before = value.slice(0, pos);
+  const at = before.lastIndexOf("@");
+  if (at === -1) return null;
+  if (at > 0 && /[a-z0-9_./]/i.test(before[at - 1])) return null;
+  const query = before.slice(at + 1);
+  if (COMMENT_MENTION_SPACE.test(query) || query.length > 40) return null;
+  return { start: at, end: pos, query };
+}
+function filterMentionCandidates(actors, query = "") {
+  const pool = mentionableActors(actors);
+  const needle = String(query ?? "").toLowerCase();
+  if (!needle) return pool;
+  const matches3 = pool.filter((actor) => actor.name.toLowerCase().includes(needle) || typeof actor.role === "string" && actor.role.toLowerCase().includes(needle));
+  return matches3.sort((left, right) => {
+    const lp = left.name.toLowerCase().startsWith(needle) ? 0 : 1;
+    const rp = right.name.toLowerCase().startsWith(needle) ? 0 : 1;
+    return lp - rp;
+  });
+}
+function commentTextSegments(text, actors) {
+  const value = textValue(text);
+  if (!value || !value.includes("@")) return value ? [{ type: "text", text: value }] : [];
+  const bots = mentionableActors(actors);
+  if (!bots.length) return [{ type: "text", text: value }];
+  const segments = [];
+  let cursor = 0;
+  for (const span of mentionSpans(value, bots)) {
+    if (!span.bot) continue;
+    if (span.start > cursor) segments.push({ type: "text", text: value.slice(cursor, span.start) });
+    segments.push({ type: "mention", text: value.slice(span.start, span.end), bot: span.bot });
+    cursor = span.end;
+  }
+  if (cursor < value.length) segments.push({ type: "text", text: value.slice(cursor) });
+  return segments.length ? segments : [{ type: "text", text: value }];
+}
+function renderCommentText(text, actors) {
+  return commentTextSegments(text, actors).map((segment, index) => segment.type === "mention" ? (0, import_react63.createElement)("span", {
+    key: `${segment.bot.id}:${index}`,
+    className: "bt-board-mention",
+    "data-bot-id": segment.bot.id,
+    title: segment.bot.role ? `${segment.bot.name} (${segment.bot.role})` : segment.bot.name
+  }, segment.text) : segment.text);
+}
+function MentionTextarea({ value, rows: rows2 = 3, disabled, placeholder, "aria-label": ariaLabel, actors, inputRef, onChange }) {
+  const localRef = (0, import_react63.useRef)(null);
+  const textareaRef = inputRef ?? localRef;
+  const backdropRef = (0, import_react63.useRef)(null);
+  const [caret, setCaret] = (0, import_react63.useState)(null);
+  const [menuOpen, setMenuOpen] = (0, import_react63.useState)(false);
+  const [activeIndex, setActiveIndex] = (0, import_react63.useState)(0);
+  const pendingCaret = (0, import_react63.useRef)(null);
+  const segments = commentTextSegments(value, actors);
+  const notified = [];
+  const seenBots = /* @__PURE__ */ new Set();
+  for (const segment of segments) {
+    if (segment.type === "mention" && !seenBots.has(segment.bot.id)) {
+      seenBots.add(segment.bot.id);
+      notified.push(segment.bot);
+    }
+  }
+  const active = !disabled && caret !== null ? activeMentionQuery(value, caret) : null;
+  const candidates = active ? filterMentionCandidates(actors, active.query) : [];
+  const open = menuOpen && !!active && candidates.length > 0;
+  const selectedIndex = open ? Math.min(activeIndex, candidates.length - 1) : 0;
+  const syncScroll = () => {
+    const area = textareaRef.current, backdrop = backdropRef.current;
+    if (!area || !backdrop) return;
+    backdrop.scrollTop = area.scrollTop;
+    backdrop.scrollLeft = area.scrollLeft;
+  };
+  (0, import_react63.useEffect)(() => {
+    syncScroll();
+    const nextPos = pendingCaret.current;
+    if (nextPos !== null && textareaRef.current) {
+      pendingCaret.current = null;
+      textareaRef.current.focus();
+      textareaRef.current.setSelectionRange(nextPos, nextPos);
+    }
+  }, [value]);
+  const pickCandidate = (bot) => {
+    if (!active || !bot) return;
+    const current2 = textValue(value);
+    const insert = `@${bot.name} `;
+    const next = current2.slice(0, active.start) + insert + current2.slice(active.end);
+    const nextPos = active.start + insert.length;
+    pendingCaret.current = nextPos;
+    setCaret(nextPos);
+    setMenuOpen(false);
+    setActiveIndex(0);
+    onChange(next);
+  };
+  const updateCaretFromEvent = (event) => {
+    const pos = event.currentTarget.selectionStart;
+    setCaret(Number.isInteger(pos) ? pos : textValue(event.currentTarget.value).length);
+    syncScroll();
+  };
+  const handleKeyDown = (event) => {
+    if (!open) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((index) => (index + 1) % candidates.length);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((index) => (index - 1 + candidates.length) % candidates.length);
+    } else if ((event.key === "Enter" || event.key === "Tab") && !event.isComposing && event.keyCode !== 229 && !event.shiftKey) {
+      event.preventDefault();
+      pickCandidate(candidates[selectedIndex]);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      setMenuOpen(false);
+    }
+  };
+  return (0, import_react63.createElement)(
+    "div",
+    { className: "bt-mention-wrap" },
+    open ? (0, import_react63.createElement)(
+      "div",
+      { className: "bt-mention-menu", role: "listbox", "aria-label": t("Mention member") },
+      candidates.map((bot, index) => (0, import_react63.createElement)(
+        "button",
+        {
+          key: bot.id,
+          type: "button",
+          role: "option",
+          "aria-selected": index === selectedIndex,
+          className: "bt-mention-item" + (index === selectedIndex ? " bt-mention-item-active" : ""),
+          onMouseDown: (event) => {
+            event.preventDefault();
+            pickCandidate(bot);
+          }
+        },
+        (0, import_react63.createElement)(MemberAvatar, { name: bot.name, size: 20 }),
+        (0, import_react63.createElement)("span", { className: "bt-mention-item-name" }, bot.name),
+        bot.role ? (0, import_react63.createElement)("small", { className: "bt-mention-item-role" }, bot.role) : null
+      ))
+    ) : null,
+    (0, import_react63.createElement)(
+      "div",
+      { className: "bt-mention-input-wrap" },
+      (0, import_react63.createElement)(
+        "div",
+        { ref: backdropRef, className: "bt-mention-backdrop", "aria-hidden": "true" },
+        segments.map((segment, index) => segment.type === "mention" ? (0, import_react63.createElement)("mark", { key: `${segment.bot.id}:${index}`, className: "bt-mention-mark" }, segment.text) : segment.text),
+        textValue(value).endsWith("\n") ? "\n " : ""
+      ),
+      (0, import_react63.createElement)("textarea", {
+        ref: textareaRef,
+        value: textValue(value),
+        rows: rows2,
+        disabled,
+        placeholder,
+        "aria-label": ariaLabel,
+        "aria-expanded": open ? "true" : void 0,
+        onScroll: syncScroll,
+        onClick: (event) => {
+          updateCaretFromEvent(event);
+          setMenuOpen(true);
+        },
+        onSelect: updateCaretFromEvent,
+        onBlur: () => setMenuOpen(false),
+        onKeyDown: handleKeyDown,
+        onChange: (event) => {
+          const pos = event.currentTarget.selectionStart;
+          setCaret(Number.isInteger(pos) ? pos : event.currentTarget.value.length);
+          setMenuOpen(true);
+          setActiveIndex(0);
+          onChange(event.currentTarget.value);
+        }
+      })
+    ),
+    notified.length ? (0, import_react63.createElement)(
+      "div",
+      { className: "bt-mention-preview", "aria-live": "polite" },
+      (0, import_react63.createElement)("span", null, t("Will notify") + ": "),
+      notified.map((bot) => (0, import_react63.createElement)("span", { key: bot.id, className: "bt-board-mention", "data-bot-id": bot.id }, `@${bot.name}`))
+    ) : null
+  );
+}
 var WORK_REPLY_LABELS = { reply: "Task reply", "goal-update": "Group goal update", start: "Work claimed", progress: "Progress", report: "Submitted for independent review", block: "Blocked", unblock: "Blocker cleared" };
 function WorkReply({ comment, actors }) {
   const label = comment.workflowAction === "review" ? comment.result === "pass" ? "Independent review passed" : "Rework requested" : WORK_REPLY_LABELS[comment.workflowAction];
@@ -47310,7 +47499,7 @@ function WorkReply({ comment, actors }) {
     "div",
     { className: "bt-card-work-reply" },
     label ? (0, import_react63.createElement)("strong", null, t(label)) : null,
-    comment.text ? (0, import_react63.createElement)("p", { className: "bt-comment-text" }, comment.text) : null,
+    comment.text ? (0, import_react63.createElement)("p", { className: "bt-comment-text" }, renderCommentText(comment.text, actors)) : null,
     (0, import_react63.createElement)(Fact, { label: t("Next action"), value: comment.next }),
     (0, import_react63.createElement)(Fact, { label: t("Environment"), value: comment.environment }),
     (0, import_react63.createElement)(Fact, { label: t("Unblock condition"), value: comment.condition }),
@@ -47351,10 +47540,10 @@ function CommentItem({ comment, actors, canEdit, canDelete, disabled, onEdit, on
       comment.workflowAction ? (0, import_react63.createElement)(WorkReply, { comment, actors }) : editing ? (0, import_react63.createElement)(
         "div",
         { className: "bt-card-editor" },
-        (0, import_react63.createElement)("textarea", { value: draft, rows: 3, disabled, "aria-label": t("Edit comment"), onChange: (event) => setDraft(event.target.value) }),
+        (0, import_react63.createElement)(MentionTextarea, { value: draft, rows: 3, disabled, "aria-label": t("Edit comment"), actors, onChange: (value) => setDraft(value) }),
         error ? (0, import_react63.createElement)("p", { className: "bt-form-error", role: "alert" }, error) : null,
         (0, import_react63.createElement)("div", { className: "bt-card-editor-actions" }, (0, import_react63.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", onClick: () => setEditing(false) }, t("Cancel")), (0, import_react63.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary", disabled: disabled || !draft.trim() || byteLength(draft) > 2048, onClick: () => void save() }, t("Save")))
-      ) : (0, import_react63.createElement)("p", { className: "bt-comment-text" }, textValue(comment.text))
+      ) : (0, import_react63.createElement)("p", { className: "bt-comment-text" }, renderCommentText(comment.text, actors))
     )
   );
 }
@@ -47363,6 +47552,7 @@ function CommentsEditor({ task, actors, canPost, canEdit, canDelete, disabled, p
   const [text, setText] = (0, import_react63.useState)("");
   const [error, setError] = (0, import_react63.useState)("");
   const [saving, setSaving] = (0, import_react63.useState)(false);
+  const composeRef = (0, import_react63.useRef)(null);
   const post = async () => {
     if (!canPost || disabled || saving || !text.trim() || byteLength(text) > 2048) return;
     setSaving(true);
@@ -47377,6 +47567,23 @@ function CommentsEditor({ task, actors, canPost, canEdit, canDelete, disabled, p
       setSaving(false);
     }
   };
+  const triggerAt = () => {
+    const area = composeRef.current;
+    if (!area || disabled || saving) return;
+    const start = Number.isInteger(area.selectionStart) ? area.selectionStart : text.length;
+    const end = Number.isInteger(area.selectionEnd) ? area.selectionEnd : start;
+    const prefix = start > 0 && !/[\s@]/.test(text[start - 1]) ? " @" : "@";
+    const next = text.slice(0, start) + prefix + text.slice(end);
+    const nextPos = start + prefix.length;
+    setText(next);
+    setError("");
+    requestAnimationFrame(() => {
+      area.focus();
+      area.setSelectionRange(nextPos, nextPos);
+      area.dispatchEvent(new Event("click", { bubbles: true }));
+    });
+  };
+  const hasMentionBots = mentionableActors(actors).length > 0;
   if (!comments.length && !canPost) return null;
   return (0, import_react63.createElement)(
     CardSection,
@@ -47397,12 +47604,17 @@ function CommentsEditor({ task, actors, canPost, canEdit, canDelete, disabled, p
     canPost ? (0, import_react63.createElement)(
       "div",
       { className: "bt-comment-compose" },
-      (0, import_react63.createElement)("textarea", { value: text, rows: 3, disabled: disabled || saving, placeholder: t("Write a comment"), "aria-label": t("Add a comment"), onChange: (event) => {
-        setText(event.target.value);
+      (0, import_react63.createElement)(MentionTextarea, { inputRef: composeRef, value: text, rows: 3, disabled: disabled || saving, placeholder: t("Write a comment (type @ to mention)"), "aria-label": t("Add a comment"), actors, onChange: (value) => {
+        setText(value);
         setError("");
       } }),
       error ? (0, import_react63.createElement)("p", { className: "bt-form-error", role: "alert" }, error) : null,
-      (0, import_react63.createElement)("div", { className: "bt-card-editor-actions" }, (0, import_react63.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary", disabled: disabled || saving || !text.trim() || byteLength(text) > 2048, onClick: () => void post() }, t("Post comment")))
+      (0, import_react63.createElement)(
+        "div",
+        { className: "bt-card-editor-actions" },
+        hasMentionBots ? (0, import_react63.createElement)("button", { type: "button", className: "bt-card-mini bt-mention-trigger", title: t("Mention member"), "aria-label": t("Mention member"), disabled: disabled || saving, onClick: triggerAt }, "@") : null,
+        (0, import_react63.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary", disabled: disabled || saving || !text.trim() || byteLength(text) > 2048, onClick: () => void post() }, t("Post comment"))
+      )
     ) : null
   );
 }
@@ -51059,7 +51271,21 @@ var TASK_BOARD_CSS = `
 .bt-comment-text{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:20px;color:var(--bt-ink)}
 .bt-comment-confirm{display:inline-flex;align-items:center;gap:4px}
 .bt-comment-compose{display:flex;flex-direction:column;gap:8px;margin-top:4px}
-.bt-board-dialog .bt-comment-compose textarea,.bt-card-modal .bt-comment-compose textarea{width:100%;min-height:64px;resize:vertical}
+.bt-board-dialog .bt-comment-compose textarea,.bt-card-modal .bt-comment-compose textarea,.bt-board-dialog .bt-mention-input-wrap textarea,.bt-card-modal .bt-mention-input-wrap textarea{width:100%;min-height:64px;resize:vertical}
+.bt-board-mention{display:inline-flex;align-items:center;padding:0 5px;border-radius:5px;background:color-mix(in srgb,var(--bt-accent) 13%,var(--bt-card));color:var(--bt-accent);font-weight:600;vertical-align:baseline}
+.bt-mention-wrap{position:relative;display:flex;flex-direction:column;gap:6px;min-width:0}
+.bt-mention-input-wrap{position:relative;border-radius:10px;background:var(--bt-card)}
+.bt-mention-backdrop,.bt-mention-input-wrap textarea{box-sizing:border-box;width:100%;margin:0;padding:8px 10px;border:1px solid var(--bt-line-2);border-radius:10px;font:inherit;font-size:13px;line-height:20px;letter-spacing:normal;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+.bt-mention-backdrop{position:absolute;inset:0;overflow:hidden;pointer-events:none;border-color:transparent;color:transparent}
+.bt-mention-mark{background:color-mix(in srgb,var(--bt-accent) 20%,transparent);color:transparent;border-radius:4px;box-shadow:0 0 0 1px color-mix(in srgb,var(--bt-accent) 28%,transparent)}
+.bt-mention-input-wrap textarea{position:relative;z-index:1;display:block;background:transparent;color:var(--bt-ink);caret-color:var(--bt-ink)}
+.bt-mention-menu{position:absolute;left:0;right:0;bottom:calc(100% + 4px);z-index:20;display:flex;flex-direction:column;max-height:220px;overflow-y:auto;padding:4px;border:.5px solid var(--bt-line-2);border-radius:12px;background:var(--bt-main);box-shadow:var(--bt-glass-shadow,0 12px 36px rgba(0,0,0,.18))}
+.bt-mention-item{display:flex;align-items:center;gap:8px;width:100%;padding:6px 8px;border:0;border-radius:8px;background:transparent;color:var(--bt-ink);font:inherit;font-size:12px;line-height:18px;text-align:left;cursor:pointer}
+.bt-mention-item:hover,.bt-mention-item-active{background:var(--bt-hover)}
+.bt-mention-item-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-mention-item-role{margin-left:auto;color:var(--bt-ink-3);font-size:11px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%}
+.bt-mention-preview{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11px;line-height:16px;color:var(--bt-ink-2)}
+.bt-mention-trigger{margin-right:auto;font-weight:600}
 .bt-card-side-block{display:flex;flex-direction:column;gap:8px;min-width:0}
 .bt-card-related{padding-top:12px;border-top:1px solid var(--bt-line)}
 .bt-card-related h3{margin:8px 0 2px;font-size:12px;line-height:18px;font-weight:600;color:var(--bt-ink-2)}

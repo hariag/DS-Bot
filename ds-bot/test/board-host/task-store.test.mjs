@@ -1094,3 +1094,33 @@ test('a working feature is reported once every item is done', t => {
   assert.match(parent.evidence.evidence, /child/)
   assert.ok(store.listActions('parent').some(action => action.kind === 'review' && action.state === 'pending'))
 })
+
+test('task IDs reject case-insensitive duplicates across the board', t => {
+  const { store } = fixture(t)
+  store.create({ operationId:'create-upper', actor:'user', task:task('T-FE-0001') })
+  assert.throws(() => store.create({ operationId:'create-lower', actor:'user', task:task('t-fe-0001') }), /task id exists/)
+})
+
+test('child start promotes a ready parent to working and all children done promotes a ready parent to reported', t => {
+  const { store } = fixture(t)
+  const roomTask = (id, extra = {}) => ({ ...task(id), scope:'room:room', ...extra })
+  store.create({ operationId:'p-create', actor:'user', task:roomTask('T-FEAT-0001', { type:'feature' }) })
+  store.create({ operationId:'c1-create', actor:'user', task:roomTask('T-SUB-FEAT-0001', { parentTaskId:'T-FEAT-0001', type:'development' }) })
+  store.create({ operationId:'c2-create', actor:'user', task:roomTask('T-SUB-FEAT-0002', { parentTaskId:'T-FEAT-0001', type:'test' }) })
+  for (const id of ['T-FEAT-0001', 'T-SUB-FEAT-0001', 'T-SUB-FEAT-0002']) {
+    register(store, id)
+    command(store, id, 'schedule', 'user', { kind:'personal', reference:'owner approval' }, `sched-${id}`)
+  }
+  accept(store, 'T-SUB-FEAT-0001', 'execute')
+  command(store, 'T-SUB-FEAT-0001', 'start', 'owner')
+  assert.equal(store.get('T-FEAT-0001').status, 'working')
+  assert.equal(store.listActions('T-FEAT-0001').some(action => action.kind === 'execute' && action.state === 'pending'), false)
+
+  command(store, 'T-SUB-FEAT-0001', 'report', 'owner', evidence)
+  accept(store, 'T-SUB-FEAT-0001', 'review')
+  command(store, 'T-SUB-FEAT-0001', 'review', 'reviewer', { evidence:'independent review', result:'pass' })
+  assert.equal(store.get('T-FEAT-0001').status, 'working')
+  finish(store, 'T-SUB-FEAT-0002')
+  assert.equal(store.get('T-FEAT-0001').status, 'reported')
+  assert.ok(store.listActions('T-FEAT-0001').some(action => action.kind === 'review' && action.state === 'pending'))
+})

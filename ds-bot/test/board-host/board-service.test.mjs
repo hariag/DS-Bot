@@ -1406,3 +1406,27 @@ test('participants can be added and removed on a card in any status', async t =>
     expectedRevision:added.revision, type:'participants', value:{ remove:['three'] } })
   assert.deepEqual(removed.participants, [])
 })
+
+test('personal board mentions join the bot, preserve boardMention, expose actor roles and report open personal work', async t => {
+  const { rt, deliveries } = fixture(t)
+  rt.state.bots.three = { name:'Three', role:'API中间件工程师' }
+  const personal = { kind:'personal', id:'user' }
+  assert.equal(rt.hasOpenPersonalBoardTasks(), false)
+  const created = await rt.boardCall('board-command', { scope:personal, operationId:'p-create-1', taskId:'T-API-0100', type:'create',
+    value:{ title:'Personal card', owner:'user', reviewer:'one', acceptance:'Check', dependencies:[], personalProgress:'todo' } })
+  assert.equal(rt.hasOpenPersonalBoardTasks(), true)
+  const view = await rt.boardCall('board-list', { scope:personal })
+  assert.equal(view.capabilities.actors.find(a => a.id === 'three')?.role, 'API中间件工程师')
+  await rt.boardCall('board-command', { scope:personal, operationId:'p-mention-1', taskId:created.id,
+    expectedRevision:created.revision, type:'card-comment', value:{ text:'@Three please handle this' } })
+  await new Promise(resolve => setTimeout(resolve, 50))
+  const updated = (await rt.boardCall('board-list', { scope:personal })).tasks.find(item => item.id === created.id)
+  assert.deepEqual(updated.participants, ['three'])
+  const delivery = deliveries.find(d => d.sessionId === 'chat-three')
+  assert.ok(delivery)
+  assert.equal(delivery.message.source.boardMention, true)
+  assert.match(delivery.message.content[0].text, /personal task board/)
+  await rt.boardCall('board-command', { scope:personal, operationId:'p-finish-1', taskId:created.id,
+    expectedRevision:updated.revision, type:'personal-progress', value:{ progress:'finished' } })
+  assert.equal(rt.hasOpenPersonalBoardTasks(), false)
+})

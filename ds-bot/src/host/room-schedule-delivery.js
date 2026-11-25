@@ -89,7 +89,7 @@ export function installRoomScheduleDelivery(rt) {
       && rt.sessionOfRoom(room) === root.id && room.sessions?.[binding.adminId] === target
       && !busy(room, messageId, root.id)
     if (!current()) return
-    const text = '群管理员请核对本群看板，在原卡上推进已分派且获授权的工作。记录结果或具体阻碍与下一负责人；没有可执行事项时静默结束。\n' + binding.prompt
+    const text = '群管理员请用 board_task list/show 核对本群任务看板（含父子任务状态联动及编号唯一性），在原卡推进已分派且获授权的工作；子任务变动时同步检查父任务状态，完成前先同步状态回看板。记录结果或具体阻碍与下一负责人；没有可执行事项时静默结束。\n' + binding.prompt
     await rt.deliver({ roomId:room.id, toId:binding.adminId, sessionId:target, role:'room', fromName:'DS Bot', text,
       exchangeId:createHash('sha256').update(JSON.stringify([room.id,key])).digest('hex'), note:'scheduled group board check' }, {
       beforeAdmission() { if (!current()) throw new Error('The group or its administrator changed before the board check') },

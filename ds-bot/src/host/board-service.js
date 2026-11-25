@@ -559,18 +559,23 @@ export function install(rt) {
     }
   }
   // A board comment may call people the same way a group post does. Mentioned
-  // room members are added to the card and receive the comment as a durable
-  // message in their group Session; the user's own comment stays the record.
+  // bots are added to the card and receive the comment as a durable message;
+  // the user's own comment stays the record.
   const notifyCardMentions = async (taskId, text, operationId, author = 'user') => {
     const { store } = service()
     const task = store.get(taskId)
-    if (!task || !String(task.scope).startsWith('room:')) return
-    const room = rt.roomOf(task.scope.slice(5))
-    if (!room) return
-    const members = (room.members ?? []).map(id => rt.botOf(id)).filter(bot => bot && bot.private !== true)
+    if (!task) return
+    const scope = String(task.scope ?? '')
+    const room = scope.startsWith('room:') ? rt.roomOf(scope.slice(5)) : undefined
+    const personal = scope.startsWith('personal:')
+    if (!room && !personal) return
+    const members = (room
+      ? (room.members ?? []).map(id => rt.botOf(id))
+      : Object.keys(rt.state?.bots ?? {}).map(id => rt.botOf(id)))
+      .filter(bot => bot && bot.private !== true)
     const ids = [...new Set([...mentionSpans(text, members)].filter(span => span.bot && span.bot.id !== author).map(span => span.bot.id))]
     for (const id of ids) {
-      const sessionId = room.sessions?.[id]
+      const sessionId = room ? room.sessions?.[id] : rt.chatOf?.(id)
       if (!sessionId) continue
       if (!(task.participants ?? []).includes(id)) {
         try {
@@ -578,14 +583,23 @@ export function install(rt) {
           store.command({ operationId:`${operationId}:join:${id}`, actor:'user', taskId, expectedRevision:latest.revision, type:'participants', value:{ add:[id] } })
         } catch (error) { rt.warn?.('ds-bot: board mention join failed: %s', error?.message || error) }
       }
+      const boardLabel = room ? 'group task board' : 'personal task board'
       try {
-        await rt.deliver({ roomId:room.id, toId:id, sessionId, role:'room', fromName:'DS Bot',
-          text:`[Board card ${task.id}] ${author === 'user' ? 'The user' : author} mentioned you in a comment:\n${text}\n\nOpen this card in the group task board (board_task show) to read the discussion; you can reply with board_task comment.`,
+        await rt.deliver({ ...(room ? { roomId:room.id } : {}), toId:id, sessionId, role:room ? 'room' : 'request', fromName:'DS Bot', boardMention:true,
+          text:`[Board card ${task.id}] ${author === 'user' ? 'The user' : author} mentioned you in a comment:\n${text}\n\nOpen this card in the ${boardLabel} (board_task show) to read the discussion; you can reply with board_task comment.`,
           exchangeId:createHash('sha256').update(`${operationId}:mention:${id}`).digest('hex') })
       } catch (error) { rt.warn?.('ds-bot: board mention delivery failed: %s', error?.message || error) }
     }
   }
   rt.notifyBoardMentions = notifyCardMentions
+  rt.hasOpenPersonalBoardTasks = () => {
+    if (closing || rt.stopping || rt.readOnly?.() !== undefined) return false
+    if (!instance && !existsSync(join(rt.home, 'board-v1', 'tasks.sqlite'))) return false
+    return service().store.list().some(task => !task.archivedAt
+      && (task.scope === 'personal:user' || task.owner === 'user' || task.reviewer === 'user')
+      && !['done', 'cancelled'].includes(task.status)
+      && task.personalProgress !== 'finished')
+  }
   const notifyWorkingBot = async (taskId, change, operationId) => {
     const task = service().store.get(taskId)
     if (!task || !['working','reported','cancelled'].includes(task.status)) return

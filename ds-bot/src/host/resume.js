@@ -165,7 +165,7 @@ export function install(rt) {
   let stopped = false
   let due = false
   const isCoalescableRoomArgs = args => args?.role === 'room' && typeof args?.roomId === 'string'
-    && !args.reviewId && !args.reviewInspect && !args.reviewReceipt && !args.groupKickoff && !args.resumed
+    && !args.reviewId && !args.reviewInspect && !args.reviewReceipt && !args.groupKickoff && !args.boardMention && !args.resumed
   const isCoalescableRoomMessage = (message, roomId) =>
     message?.source?.kind === SOURCE_KIND
     && message.source.role === 'room'
@@ -174,6 +174,7 @@ export function install(rt) {
     && !message.source.reviewInspect
     && !message.source.reviewReceipt
     && !message.source.groupKickoff
+    && !message.source.boardMention
     && !message.source.resumed
   const coalesceQueuedList = (list) => {
     if (!Array.isArray(list) || list.length <= 1) return { kept: list ?? [], dropped: [] }

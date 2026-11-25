@@ -548,13 +548,36 @@ const releaseIsDone = release => {
   }
   const reportParentForItems = parent => {
     if (!parent || parent.archivedAt || parent.stale || parent.blocked) return parent
-    if (parent.status !== 'working' || !hasItems.get(parent.id) || unfinishedItems.get(parent.id)) return parent
+    const reportable = parent.status === 'working'
+      || ((parent.status === 'ready' || (parent.status === 'waiting' && (parent.authority || isManualBoardTask(parent)))) && !unresolved(parent.id) && dependenciesDone(parent))
+    if (!reportable || !hasItems.get(parent.id) || unfinishedItems.get(parent.id)) return parent
+    if (parent.status !== 'working') db.prepare("UPDATE actions SET state='cancelled' WHERE task_id=? AND kind='execute' AND state='pending'").run(parent.id)
+    else if (db.prepare("SELECT 1 FROM actions WHERE task_id=? AND kind='execute' AND state='accepted'").get(parent.id)) finishAction(parent.id, 'execute')
     const next = { ...parent, revision:parent.revision + 1, status:'reported', actionRevision:parent.revision + 1,
       blocked:null, stale:false, evidence:itemEvidence(parent) }
-    if (db.prepare("SELECT 1 FROM actions WHERE task_id=? AND kind='execute' AND state='accepted'").get(parent.id)) finishAction(parent.id, 'execute')
     save(parent, next)
     action(next, 'review', next.reviewer)
     return next
+  }
+  const syncParentForItemChange = (child, { parentBlockedBefore = false } = {}) => {
+    if (!child?.parentTaskId) return
+    unblockParentAfterItems(child)
+    if (parentBlockedBefore) return
+    const parent = getTask(child.parentTaskId)
+    if (!parent || parent.archivedAt || parent.stale || parent.blocked) return
+    if (!unfinishedItems.get(parent.id)) {
+      reportParentForItems(parent)
+      return
+    }
+    if (['working', 'reported', 'done'].includes(child.status)
+      && ['ready', 'waiting'].includes(parent.status)
+      && (parent.authority || isManualBoardTask(parent))
+      && !unresolved(parent.id)
+      && dependenciesDone(parent)) {
+      db.prepare("UPDATE actions SET state='cancelled' WHERE task_id=? AND kind='execute' AND state='pending'").run(parent.id)
+      const next = { ...parent, revision: parent.revision + 1, status: 'working' }
+      save(parent, next)
+    }
   }
   // A committed owner start acknowledges this execution even if DSH has since rotated
   // the Session. Preserve the current card and its workflow gates; never re-admit input.
@@ -1081,7 +1104,7 @@ const releaseIsDone = release => {
         }
         if (task.personalProgress !== undefined && (actor !== 'user' || task.scope !== 'personal:user' || owner !== 'user' || !['todo','doing','finished'].includes(task.personalProgress))) throw new Error('invalid personal progress')
         string(task.title, 'title'); string(task.acceptance, 'acceptance'); requireId(task.scope, 'scope')
-        if (getTask(id)) throw new Error('task id exists')
+        if (getTask(id) || db.prepare('SELECT 1 FROM tasks WHERE lower(id) = lower(?) LIMIT 1').get(id)) throw new Error('task id exists')
         if (parentTaskId) {
           const parent = getTask(parentTaskId)
           if (!task.scope.startsWith('room:') || !isFeatureCard(parent) || parent.scope !== task.scope || !parentOpen(parent)) throw new Error('parent card unavailable')
@@ -1211,7 +1234,7 @@ const releaseIsDone = release => {
             if(!actor||actor==='scheduler'||typeof value.text!=='string'||!value.text.trim()||Buffer.byteLength(value.text)>2048)throw new Error('invalid card comment')
             // The instance user writes from the board UI; a Bot participates from
             // the card it owns, reviews, or was explicitly added to.
-            if(actor!=='user'&&actor!==old.owner&&actor!==old.reviewer&&!(old.participants??[]).includes(actor))throw new Error('not a card participant')
+            if(actor!=='user'&&actor!==old.owner&&actor!==old.reviewer&&!(old.participants??[]).includes(actor)&&old.scope!=='personal:user')throw new Error('not a card participant')
             const comments=Array.isArray(old.comments)?old.comments:[]
             if(comments.filter(comment => !comment.workflowAction).length>=100)throw new Error('card comment limit reached')
             next.comments=[...comments,{id:operationId,author:actor,text:value.text.trim(),at:Date.now()}]
@@ -1528,16 +1551,13 @@ const releaseIsDone = release => {
           const activity=Array.isArray(old.boardActivity)?old.boardActivity:[]
           next.boardActivity=[...activity,{id:operationId,actor,type,at:Date.now()}].slice(-50)
         }
+        const parentBlockedBefore = !!(old.parentTaskId && getTask(old.parentTaskId)?.blocked)
         save(old, next)
         if (type === 'report') action(next, 'review', next.reviewer)
         if (type === 'register' || type === 'schedule' || type === 'review' && value.result === 'rework' || type === 'unblock' || type === 'dependencies') next = ready(next)
         if (type === 'unblock' && next.status === 'reported') action(next, 'review', next.reviewer)
         if (type === 'review' && value.result === 'pass') for (const id of dependents(taskId)) { const task = getTask(id); if (task) ready(task) }
-        unblockParentAfterItems(next)
-        if (next.parentTaskId) {
-          const parent = getTask(next.parentTaskId)
-          if (parent) reportParentForItems(parent)
-        }
+        syncParentForItemChange(next, { parentBlockedBefore })
         if (next.status === 'done' && next.releaseId) reconcileRelease(next.releaseId)
         if (type === 'invalidate') {
           db.prepare("UPDATE actions SET state='cancelled' WHERE task_id=? AND state='pending'").run(taskId)

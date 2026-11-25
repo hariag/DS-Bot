@@ -8,6 +8,7 @@
 
 import { threadCurrentOfPart, threadOfPart } from './threads.js'
 import { createRoomScheduleRegistry } from './room-schedule-registry.mjs'
+import { createPersonalBoardSchedule, filterPersonalReminderMessage } from './personal-board-schedule.mjs'
 
 const MAX_TITLE = 120
 // A time input reports HH:mm, or HH:mm:ss when the browser's picker shows seconds.
@@ -94,11 +95,14 @@ export function install(rt) {
   const { ctx } = rt
   let service = null
   const roomSchedules = createRoomScheduleRegistry(rt, () => service)
+  const personalBoardSchedule = createPersonalBoardSchedule(rt, () => service)
   const reconcileRoomSchedules = () => {
     if (!hostWide(service)) return
     void rt.load().then(() => {
       roomSchedules.prime()
       if (Object.keys(rt.state.roomSchedules ?? {}).length) roomSchedules.schedule()
+      personalBoardSchedule.prime()
+      if (rt.state.personalBoardSchedule || rt.state.mainBotIds?.length) personalBoardSchedule.schedule()
     }).catch(error => {
       rt.warn('ds-bot: room schedules: %s', error.message)
     })
@@ -318,6 +322,31 @@ export function install(rt) {
     const items = result.value.items.filter(mine).slice(0, limit)
     return { ...result, value: { ...result.value, items, shown: items.length, total: positions.length, limit, offset } }
   })
+
+  ctx.on('schedule/resolve-agent', async (sessionId, next) => {
+    const [agent] = await Promise.all([next(), rt.load()])
+    if (service === null || !hostWide(service) || rt.roomOf?.(sessionId)) return agent
+    if (!rt.state?.personalBoardSchedule) return agent
+    await personalBoardSchedule.refresh()
+    let skipped = false
+    return new Proxy(agent, {
+      get(target, property) {
+        if (property === 'followup') return message => {
+          const remaining = filterPersonalReminderMessage(message, entry => {
+            if (!personalBoardSchedule.known(entry.schedule_id)) return false
+            if (!personalBoardSchedule.isActiveManaged(entry.schedule_id, sessionId)) return true
+            if (rt.readOnly?.() !== undefined || rt.live?.get(sessionId)?.turn !== undefined) return true
+            return rt.hasOpenPersonalBoardTasks?.() !== true
+          })
+          skipped = !remaining
+          if (remaining) target.followup(remaining)
+        }
+        if (property === 'whenIdle' && skipped) return () => Promise.resolve()
+        const value = Reflect.get(target, property, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+  }, { prepend: true })
 
   // DSH injects its schedule service after the plugin starts; until then a task cannot move.
   const schedulesPending = () => typeof ctx.inject === 'function' && service === null

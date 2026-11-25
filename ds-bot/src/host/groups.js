@@ -93,6 +93,7 @@ const isCoalescableRoomMessage = (message, roomId) =>
   && !message.source.reviewInspect
   && !message.source.reviewReceipt
   && !message.source.groupKickoff
+  && !message.source.boardMention
   && !message.source.resumed
 
 const removeCoalescedRoomMessages = (agent, roomId, rt) => {

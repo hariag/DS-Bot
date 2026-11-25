@@ -38,7 +38,9 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
     const ids = scope.kind === 'room'
       ? ['user', ...(state.rooms[scope.id].members ?? []).filter(isPublic)]
       : ['user', ...publicBots]
-    const actors = [...new Set(ids)].map(id => ({ id, name: id === 'user' ? 'You' : (state.bots[id]?.name ?? id) }))
+    const actors = [...new Set(ids)].map(id => id === 'user'
+      ? { id, name: 'You' }
+      : { id, name: state.bots[id]?.name ?? id, ...(state.bots[id]?.role ? { role: state.bots[id].role } : {}), ...(state.bots[id]?.color ? { color: state.bots[id].color } : {}) })
     let writable = false
     try { assertWritable(); writable = true } catch { /* read-only host still shows its board */ }
     const availableTargets = Object.create(null)

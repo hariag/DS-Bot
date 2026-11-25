@@ -2924,3 +2924,21 @@ test('repeated group calls while a member is busy coalesce unread room messages 
   }
   assert.equal(roomMessages[0].source.roomFromSeq, 0)
 })
+
+test('boardMention room deliveries are never dropped by unread room message coalescing', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const host = await start(t)
+  await rt.deliver({ roomId: 'r1', toId: 'b', sessionId: 'gb', role: 'room', fromName: 'DS Bot', boardMention: true,
+    text: '[Board card c1] The user mentioned you in a comment:\n@Writer check card c1' })
+  host.emit('gb', 'turn/start', { turn: 1 })
+  for (let i = 1; i <= 3; i += 1) {
+    const done = host.round(`bm${i}`, host.say(`@Writer later ${i}`))
+    await settle(() => done() !== undefined)
+  }
+  const inbox = host.agentOf('gb').inbox
+  const all = [...inbox.nextStep, ...inbox.nextTurn]
+  const boardMentions = all.filter(m => m.source?.boardMention === true)
+  const plainRoom = all.filter(m => m.source?.role === 'room' && !m.source?.boardMention)
+  assert.equal(boardMentions.length, 1, 'unread board mention must survive subsequent room coalescing')
+  assert.equal(plainRoom.length, 1, 'subsequent plain room posts still coalesce')
+})

@@ -1716,6 +1716,25 @@ async function runBrowserCases() {
   const assigned=await page.evaluate(()=>{const item=globalThis.fixture.phase2Tasks.find(task=>task.id==='U1');return {owner:item.owner,reviewer:item.reviewer}})
   assert.deepEqual(assigned,{owner:'a',reviewer:'b'})
 
+  // Comment @mention popup, highlight preview and rendered pill in a card dialog.
+  await assignItem.getByRole('button',{name:'Close card'}).click()
+  await page.evaluate(()=>{globalThis.fixture.phase2Tasks=[{id:'M1',title:'Mention card',type:'feature',owner:'a',reviewer:'b',acceptance:'Proof',dependencies:[],revision:1,status:'proposed',comments:[]}];globalThis.fixture.calls=[];globalThis.renderFixture({kind:'room',id:'g1'},'phase2',true)})
+  await page.locator('article[data-task-id="M1"]').click()
+  const mentionCard=page.getByRole('dialog',{name:'Mention card',exact:true})
+  const commentArea=mentionCard.getByLabel('Add a comment')
+  await commentArea.click()
+  await commentArea.type('@Al')
+  const mentionMenu=mentionCard.locator('.bt-mention-menu')
+  await mentionMenu.waitFor()
+  assert.equal(await mentionMenu.getByRole('option').count(),1)
+  await commentArea.press('Enter')
+  assert.equal(await commentArea.inputValue(),'@Alice ')
+  await commentArea.type('please check this card')
+  await mentionCard.locator('.bt-mention-backdrop .bt-mention-mark').getByText('@Alice').waitFor()
+  await mentionCard.locator('.bt-mention-preview').getByText('@Alice').waitFor()
+  await mentionCard.getByRole('button',{name:'Post comment'}).click()
+  await mentionCard.locator('.bt-comment-text .bt-board-mention[data-bot-id="a"]').getByText('@Alice').waitFor()
+
   assert.deepEqual(errors, [])
   console.log('PASS ' + assertions + ' assertions: board images, legacy cards, description/labels/due/checklist/comments, attachments and covers, quick add, personal progress, group scheduling, sharing, explicit cancellation, late response, reopen, scoped rendering and conflicts, task types, draft/cancelled, releases and proposals')
 }

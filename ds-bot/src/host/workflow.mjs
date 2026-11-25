@@ -79,7 +79,11 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
   const direct = (task, caller) => {
     if (!task || !id(task.id) || typeof task.scope !== 'string') return false
     if (task.scope.startsWith('personal:')) return caller.roomId === undefined
-      && (task.scope.slice(9) === caller.actor || task.reviewer === caller.actor)
+      && (task.scope.slice(9) === caller.actor
+        || task.owner === caller.actor
+        || task.reviewer === caller.actor
+        || (task.participants ?? []).includes(caller.actor)
+        || (task.scope === 'personal:user' && rt.isMain?.(caller.actor) === true))
     const origin = roomFor(task)
     if (!member(origin, caller.actor)) return false
     return caller.roomId === undefined || caller.roomId === origin.id
@@ -87,7 +91,8 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
 
   const canMutate = (task, caller, action) => {
     if (!direct(task, caller) || (!actions.has(action) && action !== 'propose')) return false
-    if (action === 'propose') return task.stale !== true && !task.archivedAt && (caller.actor === task.owner || caller.actor === task.reviewer)
+    if (action === 'propose') return task.stale !== true && !task.archivedAt
+      && (caller.actor === task.owner || caller.actor === task.reviewer || (task.scope === 'personal:user' && rt.isMain?.(caller.actor) === true))
     if (action === 'reply') {
       const room = roomFor(task)
       return task.status === 'draft' && !task.authority && !task.stale && !task.archivedAt
@@ -108,10 +113,19 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
     return false
   }
 
-  // The owner, reviewer or a participant (for example someone the user @mentioned
-  // on the card) may reply on it, whatever its status; the card keeps the discussion.
+  // The owner, reviewer, participant (for example someone the user @mentioned
+  // on the card), or Main Bot reviewing personal:user may reply on it.
   const canComment = (task, caller) => !!task && direct(task, caller) && !task.archivedAt
-    && (caller.actor === task.owner || caller.actor === task.reviewer || (task.participants ?? []).includes(caller.actor))
+    && (caller.actor === task.owner || caller.actor === task.reviewer || (task.participants ?? []).includes(caller.actor)
+      || (task.scope === 'personal:user' && rt.isMain?.(caller.actor) === true))
+  const parentSummary = task => {
+    const parent = task?.parentTaskId ? store.get(task.parentTaskId) : undefined
+    return parent ? {
+      id: parent.id, status: parent.status, revision: parent.revision,
+      ...(parent.blocked ? { blocked: parent.blocked } : {}),
+      ...(parent.stale ? { stale: true } : {}),
+    } : undefined
+  }
 
   const visibleDependency = (caller, id) => {
     const dependency = store.get(id)
@@ -198,7 +212,7 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
   async function invoke(exec, args) {
     const caller = selectRoom(identity(exec), args?.roomId)
     if (args?.action === 'list') return discoverWork({
-      caller, args, store, direct, sharedProjection, goalCards,
+      caller, args, store, direct, sharedProjection, goalCards, isMain: rt.isMain?.(caller.actor) === true,
     })
     if (args?.action === 'register') {
       const required = []
@@ -305,7 +319,8 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       const context = { exec, caller, roomId:args.roomId, taskId:task.id, revision:args.expectedRevision, action:'comment' }
       const result = scope.run(context, () => store.command(command))
       await rt.notifyBoardMentions?.(result.id, text, args.operationId, caller.actor)
-      return { task: projectDirect(result, caller) }
+      const parent = parentSummary(result)
+      return { task: projectDirect(result, caller), ...(parent ? { parent } : {}) }
     }
     if (args.action === 'show') {
       if (direct(task, caller)) {
@@ -387,7 +402,8 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
     if (!['progress','reply'].includes(args.action) && !isManualBoardTask(result)) {
       try { await wake() } catch (error) { onError(error) }
     }
-    return { task: projectDirect(result, caller) }
+    const parent = parentSummary(result)
+    return { task: projectDirect(result, caller), ...(parent ? { parent } : {}) }
   }
 
   function conversationKind(actor) {
