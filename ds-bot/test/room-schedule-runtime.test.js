@@ -26,7 +26,8 @@ test('schedule service startup applies managed room prompt migrations', async t 
     async edit({ id, expectedUpdatedAt, action, patch }) {
       if (id !== task.record.id || expectedUpdatedAt !== task.updatedAt) return { code:'schedule_conflict' }
       if (action === 'delete') return { code:'unexpected_delete' }
-      Object.assign(task.record, patch)
+      if (patch.timing) task.record.everySeconds = patch.timing.every_seconds
+      if (patch.prompt !== undefined) task.record.prompt = patch.prompt
       task.updatedAt = String(Number(task.updatedAt) + 1)
       return { id }
     },
@@ -57,8 +58,9 @@ test('schedule service startup applies managed room prompt migrations', async t 
   })
   for (let i=0; i<100 && task.record.prompt===oldPrompt; i++) await new Promise(resolve=>setTimeout(resolve,10))
   assert.equal(task.record.prompt.includes('Stay silent while the group is actively progressing'),false)
-  assert.match(task.record.prompt,/A live turn, queued message, chat activity/)
-  assert.match(task.record.prompt,/the group administrator reports the exact decision needed/)
+  assert.equal(task.record.everySeconds,1800)
+  assert.match(task.record.prompt,/仅有聊天、排队或接单记录不能证明任务已推进/)
+  assert.match(task.record.prompt,/需要用户决断时，由群管理员向用户说明/)
   assert.ok(task.record.prompt.endsWith('Keep the signed release milestone.'))
 })
 

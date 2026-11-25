@@ -860,6 +860,30 @@ test('concurrent and admin-interleaved goalSettled calls back off at the immedia
   assert.ok(goal(host).ownerReviewAt > Date.now())
 })
 
+test('fallback polling waits thirty minutes and skips paused room schedules', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const host = await start(t)
+  await startGoal(host)
+  const room = host.rt.state.rooms.r1
+  delete room.goal.reviewAt
+  delete room.goal.ownerReviewAt
+  const resolves = t.mock.method(host.rt, 'resolveAgent', async () => undefined)
+  const tick = async () => {
+    t.mock.timers.tick(5 * 60_000)
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  room.scheduledReviewOccurrence = { at: Date.now() - 29 * 60_000 }
+  await tick()
+  assert.equal(resolves.mock.callCount(), 0)
+  room.scheduledReviewOccurrence.at = Date.now() - 31 * 60_000
+  host.rt.state.roomSchedules = { r1: { paused: true } }
+  await tick()
+  assert.equal(resolves.mock.callCount(), 0)
+  host.rt.state.roomSchedules.r1.paused = false
+  await tick()
+  assert.equal(resolves.mock.callCount(), 1)
+})
+
 test('sweepScheduledReviews releases overdue admitting reviewAttempt even while other members work', async (t) => {
   t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] })
   const staleAt = Date.now() - 60 * 60 * 1000

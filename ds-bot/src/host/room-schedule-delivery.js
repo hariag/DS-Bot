@@ -89,7 +89,7 @@ export function installRoomScheduleDelivery(rt) {
       && rt.sessionOfRoom(room) === root.id && room.sessions?.[binding.adminId] === target
       && !busy(room, messageId, root.id)
     if (!current()) return
-    const text = 'As the current group administrator, read this group’s task board. Continue its assigned, authorized work on the original cards. Record a result or a concrete blocker and next owner. If the board has no actionable work, pass silently.\n' + binding.prompt
+    const text = '群管理员请核对本群看板，在原卡上推进已分派且获授权的工作。记录结果或具体阻碍与下一负责人；没有可执行事项时静默结束。\n' + binding.prompt
     await rt.deliver({ roomId:room.id, toId:binding.adminId, sessionId:target, role:'room', fromName:'DS Bot', text,
       exchangeId:createHash('sha256').update(JSON.stringify([room.id,key])).digest('hex'), note:'scheduled group board check' }, {
       beforeAdmission() { if (!current()) throw new Error('The group or its administrator changed before the board check') },
@@ -99,7 +99,7 @@ export function installRoomScheduleDelivery(rt) {
   // A managed reminder that lands together with ordinary room traffic is stripped
   // from that turn. Silently dropping it loses the whole cycle (the room is busy
   // nearly all day), so ask for the review again as a normal nudge once the room is
-  // quiet. The occurrence key keeps retries idempotent; the next ten-minute tick is
+  // quiet. The occurrence key keeps retries idempotent; the next scheduled tick is
   // still the fallback if every retry finds the room busy.
   const retriggers = new Map()
   let disposed = false

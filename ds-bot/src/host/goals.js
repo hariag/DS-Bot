@@ -16,6 +16,7 @@ import { currentGoalBoardTaskId } from './legacy-goal.js'
 import { completedInspection, inspectionMessageHash, inspectionSourceMatches } from './inspection-terminal.mjs'
 import { syncDirectory } from './directory-sync.mjs'
 import { scheduleChangeId } from './room-schedule-delivery.js'
+import { ROOM_POLL_SECONDS } from './room-schedule-registry.mjs'
 
 // DSH can inject a schedule-change notice without waking an agent. Only a
 // verified no-action notice may remain queued while the room is considered idle.
@@ -78,9 +79,7 @@ const reviewMissing = (goal, checkCurrent = () => false) => {
 }
 // The reconciliation horizon for existing review receipts. Native schedules own new occurrences.
 export const GOAL_REVIEW_INTERVAL_MS = 30 * 60 * 1000
-// A resolution or a skip stores the next review time, but the native room timer
-// keeps ticking every ten minutes. Without this gate every tick opened a review,
-// so an unchanged goal cost a full administrator turn three times an hour.
+// A native reminder or fallback sweep may arrive before a goal’s saved review deadline.
 export function reviewIsDue(goal, now = Date.now()) {
   const due = [goal?.reviewAt, goal?.ownerReviewAt].filter(value => Number.isFinite(value))
   return due.length === 0 || now >= Math.min(...due)
@@ -1090,8 +1089,8 @@ export function install(rt) {
     }
     if (isAdmin && nudge && reviewId && goal.reviewAttempt?.id === reviewId && goal.reviewAttempt.adminId === member.id
       && goal.reviewAttempt.scheduledPrompt) {
-      block += '\nRoom schedule instructions, within the current goal, permissions and review restrictions:\n' + goal.reviewAttempt.scheduledPrompt
-        + '\nA status question in this scheduled review is sent by group_goal review-follow-up. Process every distinct eligible unfinished task in this review, overdue tasks first; one task is one deduplication unit, and multiple different tasks may be followed. Do not post a second copy for a task or repeat a question from the goal ledger. Keep each active @Name on its own plain-text line outside code or Markdown links; respect task dependencies.'
+      block += '\n按当前群目标、授权和复核范围执行以下轮询任务：\n' + goal.reviewAttempt.scheduledPrompt
+        + '\n通过 group_goal review-follow-up 查询进度。按依赖逐项核对可跟进的未结任务，优先处理逾期项。同一任务只问一次，先查目标记录以免重复。每个有效的 @姓名 单独占一行纯文本。'
     }
     if (goal.status !== 'drafting') block += '\nApply each saved goal rule only to its stated scope. Honor the latest explicit user instruction and any still-valid approval for the same action, object, environment and conditions; do not ask for the same approval again. Do not extend a lock rule beyond the operations it actually covers: evidence from a different scope can be reported for its own scope but is not a substitute for the required gate evidence. If the applicable authorization or rule scope cannot be verified, pause only the affected action and continue independent authorized work. Tell the goal owner when saved rules need a scoped update.'
     if (isAdmin && nudge && !inspectOnly) block += '\nEvery next action in this reply must name its owner with an exact plain-text @Name on its own line — including a card that still has to be registered, an evidence request, a test re-run or a decision. Registration is part of the work, not a reason to leave the owner uncalled; an arrangement whose owner is not @-called does not count as driving the work.'
@@ -1712,8 +1711,7 @@ export function install(rt) {
       }
       if (goal.status === 'complete') return await result('completed')
       if (!reviewEligible(goal)) return await result('paused')
-      // The room timer is a ten-minute heartbeat, not a review schedule: keep the
-      // heartbeat but open a review only when the goal's next review time has come.
+      // A scheduled reminder may open a review only when the goal’s next review is due.
       if (!goal.reviewAttempt && !reviewIsDue(goal, now)) return await result('fresh')
       const admin = rt.botOf(room.admin)
       if (!admin) return await result('invalid')
@@ -1769,7 +1767,7 @@ export function install(rt) {
   }
   // DSH delivers a native schedule reminder only when the room Session is free
   // enough to take it; a chatty room can go hours without a reminder arriving,
-  // and the ten-minute heartbeat then advances silently (observed 2026-11-21
+  // and the room timer then advances silently (observed 2026-11-21
   // 15:55-16:40). A light sweep opens due reviews without waiting for one.
   async function sweepScheduledReviews() {
     try {
@@ -1784,7 +1782,9 @@ export function install(rt) {
           await reconcileOriginalReview(room, Date.now())
         }
         if (inspectionOnlyIdle(goal) || !reviewEligible(goal) || !reviewIsDue(goal)) continue
-        if (Date.now() - (room.scheduledReviewOccurrence?.at ?? 0) < 10 * 60e3) continue
+        const schedule = rt.state.roomSchedules?.[room.id]
+        if (schedule?.paused || schedule?.restorePaused) continue
+        if (Date.now() - (room.scheduledReviewOccurrence?.at ?? 0) < ROOM_POLL_SECONDS * 1000) continue
         const sessionId = rt.sessionOfRoom(room)
         if (!sessionId) continue
         const agent = await rt.resolveAgent(sessionId)

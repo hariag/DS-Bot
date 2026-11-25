@@ -41,14 +41,16 @@ test('native room schedules follow the actual room, preserve independent timing 
   const mgr=start();t.after(()=>rt.close())
   await Promise.all(Array.from({length:6},()=>mgr.reconcile()))
   const [ui,dev]=[...rows.values()]
-  assert.equal(rows.size,2);assert.equal(ui.everySeconds,600);assert.equal(ui.target.sessionId,'ui-part')
+  assert.equal(rows.size,2);assert.equal(ui.everySeconds,1800);assert.equal(ui.target.sessionId,'ui-part')
   assert.equal(dev.target.sessionId,'dev-part');assert.equal(ui.status,'active')
-  assert.match(ui.prompt,/A live turn, queued message, chat activity/)
-  assert.match(ui.prompt,/For blockers that require a user decision, the group administrator reports/)
-  assert.match(ui.prompt,/At each scheduled check, review every open item on the group’s shared task board/)
-  assert.match(ui.prompt,/plain-text @Name/)
-  assert.match(ui.prompt,/feedback deadline/)
-  assert.match(ui.prompt,/do not say only “waiting”/)
+  assert.match(ui.prompt,/每 30 分钟巡查一次/)
+  assert.match(ui.prompt,/中文.*UTF-8.*CST（Asia\/Shanghai，UTC\+08:00）/)
+  assert.match(ui.prompt,/仅有聊天、排队或接单记录不能证明任务已推进/)
+  assert.match(ui.prompt,/需要用户决断时，由群管理员向用户说明/)
+  assert.match(ui.prompt,/逐项核对群共享看板的未结任务/)
+  assert.match(ui.prompt,/纯文本 @姓名/)
+  assert.match(ui.prompt,/反馈期限/)
+  assert.match(ui.prompt,/目标未达成且无实质进展时，优先推进/)
   assert.equal(mgr.lookup(ui.id,'dev-part'),undefined);assert.equal(mgr.lookup(ui.id,'pm'),undefined)
   assert.equal(mgr.lookup(dev.id,'dev-part').adminId,'pm')
   assert.equal(mgr.ownerOf('unrelated'),undefined)
@@ -121,7 +123,7 @@ test('upgrade the 0.3.9 default room prompt and keep its appended custom instruc
   assert.equal(row.prompt,nextDefault+custom)
 })
 
-test('upgrade the current room prompt with shared todo tracking and keep custom instructions',async t=>{
+test('upgrade both 0.3.10 managed prompts and preserve the custom suffix, schedule ID and pause',async t=>{
   const {rt,rows,start}=setup({ui:room});const mgr=start();t.after(()=>rt.close())
   await mgr.reconcile()
   const [row]=rows.values(), nextDefault=row.prompt
@@ -136,11 +138,23 @@ test('upgrade the current room prompt with shared todo tracking and keep custom 
     'Do not repeat a follow-up while its stated deadline is still open. Use that time for independent authorized work and record the next check. If a deadline is missed or two scheduled checks pass without confirmation, escalate with a plain-text @Name to the specific authorized person who can unblock or decide; do not leave an ownerless or open-ended wait.',
     'For blockers that require a user decision, the group administrator reports the exact decision needed to the user and records the blocker and next check. For blockers within the group’s authority, the administrator coordinates owners and dependencies until the work moves; record the outcome on the original board item.',
     'If a shared lock is held, verify the current holder, ask that person to finish/report/release, and do not dispatch conflicting work. Once the lock is verified idle, continue the queued task. Honor an explicit user pause or stop and never mark reported work done without acceptance evidence.',
-  ].join(' ') + ' [DS-Bot room timer ' + token + ']'
+  ].join(' ')
+  const tracking = 'At each scheduled check, review every open item on the group’s shared task board. Reconcile its status, owner, blocker, evidence, and next check with the latest verified information, and record status changes on the original item. Keep following up until the work is complete or a user decision is required; never mark reported work done without acceptance evidence.'
   const custom=' Keep the signed release milestone.'
-  row.prompt=previous+custom
-  await mgr.refresh();await mgr.reconcile()
-  assert.equal(row.prompt,nextDefault+custom)
+  for (const prefix of [previous, previous + ' ' + tracking]) {
+    row.everySeconds = 600
+    row.status = 'paused'
+    row.prompt = prefix + ' [DS-Bot room timer ' + token + ']' + custom
+    await mgr.reconcile()
+    assert.equal(rows.size, 1)
+    assert.equal(rt.state.roomSchedules.ui.id, row.id)
+    assert.equal(row.everySeconds, 1800)
+    assert.equal(row.status, 'paused')
+    assert.equal(row.prompt, nextDefault + custom)
+    const revision = row.updatedAt
+    await mgr.reconcile()
+    assert.equal(row.updatedAt, revision)
+  }
 })
 
 test('never create with an unpersisted marker or mutate native schedules while the roster is read-only', async t=>{

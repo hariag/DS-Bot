@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 
-const EVERY_SECONDS = 10 * 60
+export const ROOM_POLL_SECONDS = 30 * 60
 const titleOf = roomId => 'DSBOT-GROUP/' + roomId
-const timing = {kind:'every', every_seconds:EVERY_SECONDS}
+const timing = {kind:'every', every_seconds:ROOM_POLL_SECONDS}
 const marker = token => '[DS-Bot room timer ' + token + ']'
 const previousPromptOf = token => 'The current group administrator checks this group’s board, its assigned owners, outstanding work and deadlines. Follow up through the original task and record verified changes. ' + marker(token)
 const previousCurrentPromptOf = token => [
@@ -24,12 +24,19 @@ const activePromptBeforeTracking = [
   'If a shared lock is held, verify the current holder, ask that person to finish/report/release, and do not dispatch conflicting work. Once the lock is verified idle, continue the queued task. Honor an explicit user pause or stop and never mark reported work done without acceptance evidence.',
 ]
 const activePromptBeforeTrackingOf = token => activePromptBeforeTracking.join(' ') + ' ' + marker(token)
-const promptOf = token => [
+const trackedEnglishPromptOf = token => [
   ...activePromptBeforeTracking,
   'At each scheduled check, review every open item on the group’s shared task board. Reconcile its status, owner, blocker, evidence, and next check with the latest verified information, and record status changes on the original item. Keep following up until the work is complete or a user decision is required; never mark reported work done without acceptance evidence.',
 ].join(' ') + ' ' + marker(token)
+const promptOf = token => [
+  `群管理员每 ${ROOM_POLL_SECONDS / 60} 分钟巡查一次。用中文沟通与记录，文本采用 UTF-8，时间用北京时间 CST（Asia/Shanghai，UTC+08:00）。`,
+  '逐项核对群共享看板的未结任务，在原卡更新负责人、状态、阻碍、证据及下次检查时间。以阶段变化、任务结果或可核验的新证据判断进展。仅有聊天、排队或接单记录不能证明任务已推进。完成须有验收证据。',
+  '目标未达成且无实质进展时，优先推进最紧要的授权任务。需要协作时，用纯文本 @姓名 定向联系责任人，写明任务编号、所需动作或证据、反馈期限及下次检查时间。同一轮每项任务对同一人最多跟进一次，不用全员提醒。',
+  '交接不明时查原回执，只向原接收人核实；不要重派或更换请求编号。未到期先做其他独立工作。逾期或连续两次巡查未获确认，找有权解决的人协调。需要用户决断时，由群管理员向用户说明待决定的问题并登记下次检查；其余阻碍由管理员协调至解决。',
+  '遇共享锁先核持有人，联系其反馈并释放，锁空闲后再安排冲突任务。遵守用户的暂停和停止指令。',
+].join('\n') + ' ' + marker(token)
 const currentPrompt = (prompt, token) => {
-  for (const previous of [previousPromptOf(token), previousCurrentPromptOf(token), activePromptBeforeTrackingOf(token)]) {
+  for (const previous of [previousPromptOf(token), previousCurrentPromptOf(token), activePromptBeforeTrackingOf(token), trackedEnglishPromptOf(token)]) {
     if (prompt === previous || prompt?.startsWith(previous)) return promptOf(token) + prompt.slice(previous.length)
   }
   return prompt
@@ -75,7 +82,7 @@ export function createRoomScheduleRegistry(rt, service) {
     const roomId = ownerOf(id), room = roomId && rt.state.rooms[roomId], row = snapshot.get(id)
     if (!host() || !room || bindings()[roomId]?.restorePaused || !sessionId || rt.sessionOfRoom(room) !== sessionId || !room.members.includes(room.admin)
       || !rt.botOf(room.admin) || rt.botOf(room.admin).private === true || sessionOf(row) !== sessionId || row.status !== 'active'
-      || row.kind !== 'every' || row.everySeconds !== EVERY_SECONDS || row.title !== titleOf(roomId)) return
+      || row.kind !== 'every' || row.everySeconds !== ROOM_POLL_SECONDS || row.title !== titleOf(roomId)) return
     return { roomId, adminId:room.admin, scheduleId:id, sessionId, prompt:row.prompt }
   }
 
@@ -154,7 +161,7 @@ export function createRoomScheduleRegistry(rt, service) {
       const target = rt.sessionOfRoom(current()), patch = {}
       if (row.title !== titleOf(roomId)) patch.title = titleOf(roomId)
       if (sessionOf(row) !== target) patch.target = {kind:'session',sessionId:target}
-      if (row.kind !== 'every' || row.everySeconds !== EVERY_SECONDS) patch.timing = timing
+      if (row.kind !== 'every' || row.everySeconds !== ROOM_POLL_SECONDS) patch.timing = timing
       const updatedPrompt = currentPrompt(binding.restorePrompt ?? row.prompt, binding.token)
       if (updatedPrompt !== row.prompt) patch.prompt = updatedPrompt
       if (binding.restorePaused && row.status !== 'paused') patch.active = false
@@ -163,7 +170,7 @@ export function createRoomScheduleRegistry(rt, service) {
         await edit(row,{action:'update',patch})
         const changed = (await refresh()).find(r => r.id === binding.id)
         if (!changed || sessionOf(changed) !== target || changed.title !== titleOf(roomId)
-          || changed.kind !== 'every' || changed.everySeconds !== EVERY_SECONDS || changed.status === 'ended'
+          || changed.kind !== 'every' || changed.everySeconds !== ROOM_POLL_SECONDS || changed.status === 'ended'
           || binding.restorePaused && changed.status !== 'paused' || updatedPrompt !== row.prompt && changed.prompt !== updatedPrompt) fail('Native room schedule update could not be confirmed')
         row = changed
       }
