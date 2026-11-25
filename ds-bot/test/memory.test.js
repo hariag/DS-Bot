@@ -962,6 +962,22 @@ test('a memory snapshot checks every entry in a file against the same day', asyn
   assert.equal(calls, 2)
 })
 
+test('the Chinese charter localizes only the memory wrapper of an existing snapshot', async (t) => {
+  const { tool, section, rt, stop } = start()
+  t.after(() => stop())
+  await tool('bot_remember', { text: 'Likes tea' }, 'b2')
+  const original = section('b2')
+  const bot = rt.botOf('b2')
+  bot.instructions = '团队章程 v1.2'
+  const zh = section('b2')
+  assert.match(zh, /^# 记忆\n/)
+  assert.match(zh, /Likes tea/)
+  assert.match(zh, /## 团队记忆/)
+  assert.doesNotMatch(zh, /You keep notes/)
+  bot.instructions = ''
+  assert.equal(section('b2'), original)
+})
+
 test('a Session keeps the memory it began with, across restarts, until its snapshot goes', async (t) => {
   const first = start()
   t.after(() => first.stop())

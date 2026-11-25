@@ -1539,6 +1539,9 @@ export function install(rt) {
         }
         for (const request of joined) {
           if (request.info.role === 'room' && stoppedRoomTurns.delete(request.info.exchangeId)) continue
+          const { reviewId, reviewInspect, reviewReceipt, roomId } = request.info
+          const currentReview = () => !reviewId || reviewReceipt === true || rt.goalReviewAllowed?.(rt.roomOf(roomId), reviewId) === true
+          if (!currentReview()) continue
           // A failed or stopped turn closes the request like any other; a finished
           // one hands it back to the Bot to answer next.
           if (failure !== undefined || reason?.kind === 'aborted') {
@@ -1557,8 +1560,11 @@ export function install(rt) {
             ...(request.info.role === 'room' ? { roomId: request.info.roomId, askedBy: request.info.askedBy, note: 'you read this call during your last task; answer it now' } : {}),
             ...(request.info.senderRoomId ? { fromRoomId: request.info.senderRoomId } : {}),
             ...(request.info.senderPart ? { fromPart: request.info.senderPart } : {}),
+            ...(reviewId ? { reviewId, reviewInspect, reviewReceipt } : {}),
             deferred: true,
-          }).catch(error => rt.warn('ds-bot: deferred request delivery failed: %s', error))
+          }, reviewId ? { beforeAdmission() {
+            if (!currentReview()) throw new Error('The goal review changed before deferred delivery')
+          } } : undefined).catch(error => rt.warn('ds-bot: deferred request delivery failed: %s', error))
         }
         // A retry keeps the line it just showed, so its own final can still fold into it.
         if (!echoed && !retry) rt.dropRoomStepEcho?.(id)

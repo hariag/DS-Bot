@@ -1465,9 +1465,12 @@ export function install(rt) {
       // attempt, and refusing them left the named owners uncalled ("review was
       // stopped or its identity changed"). The same admin session may still send the
       // verdict's own follow-ups while this occurrence is current.
-      const verdictCurrent = room?.scheduledReviewOccurrence?.reviewId === info.reviewId
-        && room?.goal?.reviewAttempt?.id !== info.reviewId && room?.sessions?.[room.admin] === exec.agent?.id
-      if (verdictCurrent && (exec.name === 'message_bot' || (exec.name === 'group_goal' && exec.arguments?.action === 'review-follow-up'))) return undefined
+      const occurrence = room?.scheduledReviewOccurrence
+      const verdictCurrent = info.reviewInspect !== true && occurrence?.reviewId === info.reviewId
+        && occurrence.goalId === room?.goal?.id && room?.goal?.status === 'active'
+        && room.goal.idle !== true && !stopsPending.has(room.id) && room.goal.reviewAttempt === undefined
+        && room.members.includes(room.admin) && room.sessions?.[room.admin] === exec.agent?.id
+      if (verdictCurrent && exec.name === 'message_bot') return undefined
       if (exec.name === 'list_bots' || (exec.name === 'group_goal' && exec.arguments?.action === 'show')) return undefined
       return 'The goal review was stopped or its identity changed; no further action is allowed.'
     }
@@ -1717,7 +1720,7 @@ export function install(rt) {
       && !rt.roomBusyForPatrol(room, openingMessageId, openingMessageId ? agent.session.id : undefined)
     // A durable claim precedes every possible send, including the no-goal
     // fallback handled by the caller. An uncertain save cannot authorize a retry.
-    const occurrence = { key:occurrenceKey, at, outcome:'claimed' }
+    const occurrence = { key:occurrenceKey, at, outcome:'claimed', ...(goal ? { goalId:goal.id } : {}) }
     const result = async outcome => {
       occurrence.outcome = outcome
       await rt.save({ required:true })
@@ -1825,6 +1828,8 @@ export function install(rt) {
         if (Date.now() - (room.scheduledReviewOccurrence?.at ?? 0) < ROOM_POLL_SECONDS * 1000) continue
         const sessionId = rt.sessionOfRoom(room)
         if (!sessionId) continue
+        const managed = schedule?.id ? await rt.readRoomSchedule?.(schedule.id, sessionId) : undefined
+        if (schedule?.id && (!managed || managed.roomId !== room.id)) continue
         const agent = await rt.resolveAgent(sessionId)
         const key = JSON.stringify([`sweep-${room.id}`, new Date().toISOString()])
         // A permanently chatty room keeps quiet() false, so a due review would be
@@ -1832,7 +1837,7 @@ export function install(rt) {
         // sweeps the nudge is admitted anyway and the admin reads it once its own
         // queue drains.
         const streak = (reviewBusyStreak.get(room.id) ?? 0)
-        const outcome = await runScheduledRoomReview(room, key, agent, undefined, undefined, undefined, streak >= 2)
+        const outcome = await runScheduledRoomReview(room, key, agent, undefined, managed?.instructions, undefined, streak >= 2)
         if (outcome === 'busy') reviewBusyStreak.set(room.id, streak + 1)
         else reviewBusyStreak.delete(room.id)
         if (outcome === 'admitted' || outcome === 'no-goal') rt.warn?.('ds-bot: opened a scheduled review for %s without a native reminder (%s)', room.id, outcome)

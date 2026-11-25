@@ -305,6 +305,23 @@ test('events keep the newest 50 and pastGoals retain the newest 5 plus audited h
   assert.equal(room.pastGoals.at(-1).status, 'stopped')
 })
 
+test('a review invalidated while saving the round never becomes an ordinary nudge', async (t) => {
+  const host = await start(t)
+  await startGoal(host)
+  const room = host.rt.roomOf('r1')
+  const reviewId = 'review-invalidated-on-save'
+  room.goal.reviewAttempt = { id:reviewId, at:Date.now(), state:'admitting', adminId:'a', rootSessionId:'r1', adminSessionId:'ga', inspectOnly:true }
+  let checks = 0
+  t.mock.method(host.rt, 'goalReviewAllowed', () => ++checks === 1)
+  const result = host.round('stale-review', {
+    source:{kind:'bot', form:'relay', role:'goal', goal:'nudge', goalId:room.goal.id, reviewId, reviewInspect:true},
+    content:[{type:'text', text:'[Scheduled group board review]'}],
+  })
+  await settle(() => result() !== undefined)
+  assert.ok(checks >= 2)
+  assert.equal(host.agentOf('ga').calls.length, 0)
+})
+
 test('the admin and member prompts carry the goal block', async (t) => {
   const host = await start(t)
   await startGoal(host)

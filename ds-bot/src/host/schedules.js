@@ -96,6 +96,14 @@ export function install(rt) {
   let service = null
   const roomSchedules = createRoomScheduleRegistry(rt, () => service)
   const personalBoardSchedule = createPersonalBoardSchedule(rt, () => service)
+  rt.isManagedRoomScheduleId = roomSchedules.known
+  rt.managedRoomSchedule = roomSchedules.lookup
+  rt.refreshRoomScheduleBindings = roomSchedules.refresh
+  rt.readRoomSchedule = async (scheduleId, sessionId) => {
+    if (!hostWide(service)) return undefined
+    await roomSchedules.refresh()
+    return roomSchedules.lookup(scheduleId, sessionId)
+  }
   const reconcileRoomSchedules = () => {
     if (!hostWide(service)) return
     void rt.load().then(() => {

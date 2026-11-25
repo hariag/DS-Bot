@@ -1255,8 +1255,10 @@ export function install(rt) {
   // `heard` takes each such line once it is posted.
   async function roomTurn(room, member, sessionId, { text, images = [], files = [] }, note, signal, round, by, said = [], heard = () => {}, onWork = () => {}, roomFromSeq) {
     if (signal.aborted) return null
-    const reviewId = rt.isAdminOf(room, member.id) ? round.goalReviewId : undefined
-    if (reviewId !== undefined && rt.goalReviewAllowed?.(room, reviewId) !== true) return null
+    const reviewId = round.goalReviewId
+    const currentReview = () => !signal.aborted && rt.isAdminOf(room, member.id)
+      && room.sessions?.[member.id] === sessionId && rt.goalReviewAllowed?.(room, reviewId) === true
+    if (reviewId && !currentReview()) return null
     const startedAt = Date.now()
     const exchangeId = randomUUID()
     const turn = { botId: member.id, sessionId, exchangeId }
@@ -1295,13 +1297,18 @@ export function install(rt) {
       rt.roomWaiters.set(exchangeId, { sessionId, botId: member.id, roomId: room.id, resolve: finish, fail: failure => finish({ failure }), touch, work, say, approval: () => finish({ approval: true }) })
       signal.addEventListener('abort', () => finish(null), { once: true })
     })
+    let reviewExpired = false
     try {
       await rt.deliver({
         fromId: undefined, toId: member.id, sessionId, role: 'room', roomId: room.id,
         ...(Number.isSafeInteger(roomFromSeq) ? { roomFromSeq } : {}),
         ...(reviewId ? { reviewId, reviewInspect: round.goalInspectOnly === true } : {}),
-        exchangeId, note, text, images, files, steer: busy, ...(by ? { askedBy: by } : {}),
-      })
+        exchangeId, note, text, images, files, steer: busy && !reviewId, ...(by ? { askedBy: by } : {}),
+      }, reviewId ? { beforeAdmission() {
+        if (currentReview()) return
+        reviewExpired = true
+        throw new Error('The goal review changed before delivery')
+      } } : undefined)
       // The prompt reached the member: its read position moves on.
       room.seen[member.id] = seenAt
       // Still held by an earlier request: this turn cannot start until the user answers.
@@ -1310,6 +1317,11 @@ export function install(rt) {
       // Still at earlier work: the call steers it at its next step; the round goes on.
       else if (busy) rt.roomWaiters.get(exchangeId)?.resolve({ working: true })
     } catch (error) {
+      if (reviewExpired) {
+        rt.roomWaiters.get(exchangeId)?.resolve(null)
+        started.splice(started.indexOf(turn), 1)
+        return null
+      }
       rt.warn('ds-bot: group delivery to %s failed: %s', member.name, error)
       // A delivery that failed is not a pass: the round shows it. Nothing here can
       // repair a lost Session, so the member's next turn in the group starts a new one.
@@ -1526,6 +1538,8 @@ export function install(rt) {
   // nobody: that step is what a group answering itself runs on. Once the room is paused
   // (or this step reaches the limit) the calls it would make wait for the user.
   function callFrom(room, round, member, text, called, { worked = false, byBot = false } = {}) {
+    // Status mentions in an inspection are not new assignments.
+    if (round.goalInspectOnly) return
     const everyone = room.members.map(rt.botOf).filter(Boolean)
     const others = everyone.filter(other => other.id !== member.id)
     const { all, found: named } = mentionsIn(text, everyone)
@@ -1905,6 +1919,7 @@ export function install(rt) {
         delete post.goalId
       }
     }
+    if (posts.length === 0) return
     // A post a running round already logged stays inside the round this relay opens.
     const startSeq = Math.min(room.seq + 1, ...posts.map(post => post.logged).filter(seq => typeof seq === 'number'))
     // The opening greeting is a cue for the admin, not a line of the group; a member's
@@ -1978,6 +1993,8 @@ export function install(rt) {
     const attempt = room.goal?.reviewAttempt
     const review = opener.goal === 'nudge' && opener.reviewId && rt.goalReviewAllowed?.(room, opener.reviewId) === true
       && admin?.id === attempt?.adminId ? attempt : undefined
+    // Never turn a stale inspection into an ordinary unrestricted nudge.
+    if (opener.reviewId && !review) return
     const round = {
       roomId: room.id,
       members: room.members,

@@ -34,6 +34,7 @@ test('schedule service startup applies managed room prompt migrations', async t 
   }
   const ctx = fakeContext({ services:{ schedule } })
   const saved = new Set(), drains = new Set()
+  const reviews = []
   const rt = {
     ctx,
     state:{ rooms:{g1:room}, roomSchedules:{g1:{id:record.id,token,target:'g1'}} },
@@ -42,6 +43,8 @@ test('schedule service startup applies managed room prompt migrations', async t 
     botOf: id => id === 'admin' ? { id, private:false } : undefined,
     chatOf: id => id,
     sessionOfRoom: value => value.sessionId ?? value.id,
+    roomBusyForPatrol: () => false,
+    runScheduledRoomReview: async (...args) => { reviews.push(args); return 'paused' },
     isBotSession: () => false,
     load: async () => {},
     save: async () => { for (const listener of saved) listener() },
@@ -52,6 +55,7 @@ test('schedule service startup applies managed room prompt migrations', async t 
     warn: () => {},
   }
   installSchedules(rt)
+  roomScheduleDelivery.install(rt)
   t.after(async () => {
     await Promise.all([...drains].map(drain => drain()))
     await ctx.dispose()
@@ -62,6 +66,19 @@ test('schedule service startup applies managed room prompt migrations', async t 
   assert.match(task.record.prompt,/聊天、排队和接单不算进展/)
   assert.match(task.record.prompt,/需用户决断时列出选项/)
   assert.ok(task.record.prompt.endsWith('Keep the signed release milestone.'))
+  const agent = { id:'g1', session:{id:'g1'} }
+  const message = {id:'m1', source:{kind:'schedule'}, content:[{type:'text',text:
+    `[SCHEDULE REMINDER]\nschedule_id_json: ${JSON.stringify(record.id)}\noccurrence_at: 2026-11-25T14:00:00+08:00\nreminder_prompt_json: ${JSON.stringify(record.prompt)}`}]}
+  const [preStep] = ctx.listeners.get('agent/pre-step')
+  const input = {agent, step:1, turn:1, messages:[message]}
+  const enter = async () => ({kind:'enter', messages:[message]})
+  assert.deepEqual((await preStep(input, enter)).messages, [])
+  assert.equal(reviews.length, 1)
+  assert.match(reviews[0][4], /Keep the signed release milestone\.$/)
+  assert.doesNotMatch(reviews[0][4], /DS-Bot room timer/)
+  task.status = 'paused'
+  assert.deepEqual((await preStep(input, enter)).messages, [])
+  assert.equal(reviews.length, 1)
 })
 
 test('the plugin runtime composes the managed room schedule delivery module', () => {
