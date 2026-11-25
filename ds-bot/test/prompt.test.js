@@ -107,3 +107,12 @@ test('role-dependent prompt guidance stays frozen until the next turn in both di
     emit('turn/end')
   }
 })
+
+test('TEAM_RULES lets Bot instructions override casual texting and global style defaults', (t) => {
+  const { ctx, prompt } = start()
+  t.after(() => ctx.dispose())
+  for (const id of ['main', 'worker', 'group-worker']) {
+    assert.match(prompt(id), /Follow any stricter delivery format or single-message summary rules in your instructions/)
+    assert.match(prompt(id), /following any stricter language, encoding, timezone, board, Git\/workflow, or delivery rules set in your instructions/)
+  }
+})

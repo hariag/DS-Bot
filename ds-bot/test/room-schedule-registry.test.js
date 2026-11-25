@@ -45,15 +45,16 @@ test('native room schedules follow the actual room, preserve independent timing 
   assert.equal(dev.target.sessionId,'dev-part');assert.equal(ui.status,'active')
   assert.match(ui.prompt,/每 30 分钟巡查一次/)
   assert.match(ui.prompt,/简体中文.*UTF-8.*CST（Asia\/Shanghai，UTC\+08:00）/)
+  assert.match(ui.prompt,/收到本巡检即表示宿主已判定群内安静/)
   assert.match(ui.prompt,/board_task list\/show.*group_goal show/)
   assert.match(ui.prompt,/子任务有任何状态变化时，同步检查并更新父任务状态/)
-  assert.match(ui.prompt,/严禁未编号或未注册先开工/)
-  assert.match(ui.prompt,/仅有聊天、排队或接单记录不能证明任务已推进/)
-  assert.match(ui.prompt,/需要用户决断时，由群管理员向用户说明/)
+  assert.match(ui.prompt,/未注册任务须先同轮 board_task register/)
+  assert.match(ui.prompt,/仅有聊天、排队或长期阻塞而无实质进展/)
+  assert.match(ui.prompt,/board_task operation/)
+  assert.match(ui.prompt,/需用户决断时由群管理员汇总/)
   assert.match(ui.prompt,/逐项核对群共享看板的未结任务/)
   assert.match(ui.prompt,/纯文本 @姓名/)
   assert.match(ui.prompt,/反馈期限/)
-  assert.match(ui.prompt,/目标未达成且无实质进展时，优先推进/)
   assert.equal(mgr.lookup(ui.id,'dev-part'),undefined);assert.equal(mgr.lookup(ui.id,'pm'),undefined)
   assert.equal(mgr.lookup(dev.id,'dev-part').adminId,'pm')
   assert.equal(mgr.ownerOf('unrelated'),undefined)
@@ -157,6 +158,32 @@ test('upgrade both 0.3.10 managed prompts and preserve the custom suffix, schedu
     const revision = row.updatedAt
     await mgr.reconcile()
     assert.equal(row.updatedAt, revision)
+  }
+})
+
+test('upgrade 30-minute legacy English managed prompts and preserve room-specific Chinese suffix', async t => {
+  const { rt, rows, start } = setup({ ui: room }); const mgr = start(); t.after(() => rt.close())
+  await mgr.reconcile()
+  const [row] = rows.values(), nextDefault = row.prompt
+  const token = nextDefault.match(/\[DS-Bot room timer ([^\]]+)\]/)?.[1]
+  assert.ok(token)
+  const previous30 = [
+    'Every 30 minutes, inspect this group’s active goal and original task board.',
+    'Count progress only when the goal stage or task status/evidence changes, or the assigned owner provides verifiable evidence before an open deadline. A live turn, queued message, chat activity, accepted handoff, or “working” label alone is not proof that work progressed.',
+    'If the goal is active and incomplete and there is no verified progress, take a concrete authorized step now even if the group has an active conversation or live turn; do not say only “waiting” or reply [PASS] because a task is blocked.',
+    'Identify the highest-priority unfinished task, its exact owner, the next action or evidence, and who can clear any blocker. Follow up in the group using a plain-text @Name for the one person who must act; never put the mention in backticks, code, or a link, and never use @all. Include the task ID, requested action/evidence, feedback deadline, and next check. Make at most one effective follow-up per owner for the same task in this cycle and record progress on the original board item.',
+    'For an uncertain handoff, inspect its original receipt and ask the known recipient only to confirm receipt and current status; explicitly do not repeat or restart the work. Do not send another assignment or change its request ID to bypass uncertainty.',
+    'Do not repeat a follow-up while its stated deadline is still open. Use that time for independent authorized work and record the next check. If a deadline is missed or two scheduled checks pass without confirmation, escalate with a plain-text @Name to the specific authorized person who can unblock or decide; do not leave an ownerless or open-ended wait.',
+    'For blockers that require a user decision, the group administrator reports the exact decision needed to the user and records the blocker and next check. For blockers within the group’s authority, the administrator coordinates owners and dependencies until the work moves; record the outcome on the original board item.',
+    'If a shared lock is held, verify the current holder, ask that person to finish/report/release, and do not dispatch conflicting work. Once the lock is verified idle, continue the queued task. Honor an explicit user pause or stop and never mark reported work done without acceptance evidence.',
+  ].join(' ')
+  const tracking = 'At each scheduled check, review every open item on the group’s shared task board. Reconcile its status, owner, blocker, evidence, and next check with the latest verified information, and record status changes on the original item. Keep following up until the work is complete or a user decision is required; never mark reported work done without acceptance evidence.'
+  const custom = '\n\n【研发协作群业务】只推进本群当前目标及实际原卡。'
+  for (const prefix of [previous30, previous30 + ' ' + tracking]) {
+    row.prompt = prefix + ' [DS-Bot room timer ' + token + ']' + custom
+    await mgr.reconcile()
+    assert.equal(row.everySeconds, 1800)
+    assert.equal(row.prompt, nextDefault + custom)
   }
 })
 

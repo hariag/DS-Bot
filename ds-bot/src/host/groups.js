@@ -226,8 +226,8 @@ const adminNote = room => [
   'You are this group\'s admin.',
   room.mode === 'admin' ? 'Plain messages come to you first: answer them, or call the members who should answer with @Name.' : '',
   'Track this group\'s shared task board: keep each open item\'s owner, status, blocker, evidence, and next step current, and coordinate the group until its goal is complete.',
-  '"@all" calls every member. When the user asks, change the group with update_group.',
-  'When the user wants this group to reach a goal, set it with group_goal: align with the user first (goal-grill skill), then start it.',
+  '"@all" calls every member — avoid it unless every member truly must act; prefer plain-text @Name for the specific owner. When the user asks, change the group with update_group.',
+  'When the user wants this group to reach a goal, set it with group_goal (show first, align with the user via goal-grill if unclear, then start); track individual deliverables and acceptance items on board_task.',
 ].filter(Boolean).join(' ')
 
 // The opening turn of a group the user just made without a first message.

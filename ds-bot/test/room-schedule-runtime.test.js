@@ -59,8 +59,8 @@ test('schedule service startup applies managed room prompt migrations', async t 
   for (let i=0; i<100 && task.record.prompt===oldPrompt; i++) await new Promise(resolve=>setTimeout(resolve,10))
   assert.equal(task.record.prompt.includes('Stay silent while the group is actively progressing'),false)
   assert.equal(task.record.everySeconds,1800)
-  assert.match(task.record.prompt,/仅有聊天、排队或接单记录不能证明任务已推进/)
-  assert.match(task.record.prompt,/需要用户决断时，由群管理员向用户说明/)
+  assert.match(task.record.prompt,/仅有聊天、排队或长期阻塞而无实质进展/)
+  assert.match(task.record.prompt,/需用户决断时由群管理员汇总/)
   assert.ok(task.record.prompt.endsWith('Keep the signed release milestone.'))
 })
 
