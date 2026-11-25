@@ -264,6 +264,7 @@ test('ordinary group admins keep the guidance to edit their own group', async (t
   const message = host.begin('gb')
   assert.match(text(message), /You are this group's admin/)
   assert.match(text(message), /When the user asks, change the group with update_group/)
+  assert.match(text(message), /Track this group's shared task board/)
   host.finish('gb', 'Ready.')
   await settle(() => done() !== undefined)
 })
@@ -2904,4 +2905,22 @@ test('stopping a group while its round finishes starts nothing afterwards', asyn
   await settle(() => first() !== undefined && !rt.roomActive('r1'))
   for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve))
   assert.equal(host.agentOf('gc').calls.length, 0, 'nothing started after the stop')
+})
+
+test('repeated group calls while a member is busy coalesce unread room messages in inbox', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const host = await start(t)
+  host.emit('gb', 'turn/start', { turn: 1 })
+  for (let i = 1; i <= 5; i += 1) {
+    const done = host.round(`c${i}`, host.say(`@Writer step ${i}`))
+    await settle(() => done() !== undefined)
+  }
+  const inbox = host.agentOf('gb').inbox
+  const roomMessages = [...inbox.nextStep, ...inbox.nextTurn].filter(m => m.source?.role === 'room')
+  assert.equal(roomMessages.length, 1, 'unread plain room messages must coalesce to a single latest snapshot')
+  const latest = text(roomMessages[0])
+  for (let i = 1; i <= 5; i += 1) {
+    assert.match(latest, new RegExp(`step ${i}`), `coalesced prompt preserves unseen line step ${i}`)
+  }
+  assert.equal(roomMessages[0].source.roomFromSeq, 0)
 })

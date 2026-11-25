@@ -183,7 +183,7 @@ export function install(rt) {
     }
   }
 
-  async function deliverToAgent({ fromId, fromName: senderName, toId, sessionId, text, role, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false, merged = false, abandoned = false, recordExchange = true, askedBy, fromRoomId, fromPart, images = [], files = [], length, work, recoveryIds, recoveryKey, reviewId, reviewInspect, reviewReceipt, groupKickoff, taskAction, taskId, imOrigin, failureRequestId, preparedMessage }, onAdmission, onAdmitted) {
+  async function deliverToAgent({ fromId, fromName: senderName, toId, sessionId, text, role, replyTo, roomId, roomFromSeq, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false, merged = false, abandoned = false, recordExchange = true, askedBy, fromRoomId, fromPart, images = [], files = [], length, work, recoveryIds, recoveryKey, reviewId, reviewInspect, reviewReceipt, groupKickoff, taskAction, taskId, imOrigin, failureRequestId, preparedMessage }, onAdmission, onAdmitted) {
 
     const from = rt.botOf(fromId)
     const to = rt.botOf(toId)
@@ -205,6 +205,7 @@ export function install(rt) {
       ...(fromPart ? { senderPart: fromPart } : {}),
       ...(replyTo ? { replyTo } : {}),
       ...(roomId ? { roomId } : {}),
+      ...(Number.isSafeInteger(roomFromSeq) ? { roomFromSeq } : {}),
       ...(reviewId ? { reviewId } : {}),
       ...(reviewInspect ? { reviewInspect: true } : {}),
       ...(reviewReceipt ? { reviewReceipt: true } : {}),

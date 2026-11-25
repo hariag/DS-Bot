@@ -148,7 +148,8 @@ test('a scheduled review retries the same occurrence after a busy result', async
   const host = await start(t)
   await startGoal(host)
   const room = host.rt.state.rooms.r1
-  host.rt.roomBusyForPatrol = () => false
+  assert.equal(typeof host.rt.roomBusyForPatrol, 'function')
+  assert.equal(host.rt.roomLaterCount('r1'), 0)
   room.goal.ownerReviewAt = 0
   await host.rt.save({ required:true })
   const agent = host.agentOf('r1')
@@ -167,7 +168,7 @@ test('a completed periodic review leaves an unfinished goal active and schedules
   const host = await start(t)
   await startGoal(host)
   const room = host.rt.roomOf('r1')
-  host.rt.roomBusyForPatrol = () => false
+  assert.equal(typeof host.rt.roomBusyForPatrol, 'function')
   room.goal.ownerReviewAt = 0
   await host.rt.save({ required:true })
   const key = JSON.stringify(['managed', new Date().toISOString()])
@@ -857,4 +858,57 @@ test('concurrent and admin-interleaved goalSettled calls back off at the immedia
   assert.equal(nudges().length, 6)
   assert.equal(goal(host).idle, undefined)
   assert.ok(goal(host).ownerReviewAt > Date.now())
+})
+
+test('sweepScheduledReviews releases overdue admitting reviewAttempt even while other members work', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] })
+  const staleAt = Date.now() - 60 * 60 * 1000
+  const host = await start(t, {
+    scheduledReviewOccurrence: { key: JSON.stringify(['sweep-r1', new Date(Date.now() - 2 * 60 * 1000).toISOString()]), at: Date.now() - 2 * 60 * 1000, outcome: 'busy' },
+    goal: {
+      id: 'g-stuck',
+      revision: 1,
+      status: 'active',
+      title: 'Fix',
+      objective: 'Verify',
+      acceptance: 'Pass',
+      constraints: [],
+      stages: [{ id: 's1', title: 'S1', acceptance: 'A', tasks: [{ id: 't1', botId: 'b', task: 'Do work', status: 'working' }], reworks: 0, status: 'active' }],
+      current: 0,
+      nudges: 0,
+      events: [],
+      reviewAttempt: { id: 'stuck-rev-1', at: staleAt, state: 'admitting', adminId: 'a', rootSessionId: 'r1', adminSessionId: 'ga' },
+    },
+  })
+  // Simulate another member currently working in the room (not running stuck-rev-1).
+  host.rt.live.set('gb', { turn: 1 })
+  t.mock.timers.tick(5 * 60 * 1000)
+  await settle(() => host.rt.roomOf('r1').goal.reviewAttempt === undefined)
+  assert.equal(host.rt.roomOf('r1').goal.reviewAttempt, undefined)
+})
+
+test('sweepScheduledReviews also settles overdue adminCompleted reviewAttempt after admin session rotation', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] })
+  const staleAt = Date.now() - 60 * 60 * 1000
+  const host = await start(t, {
+    scheduledReviewOccurrence: { key: JSON.stringify(['sweep-r1', new Date(Date.now() - 2 * 60 * 1000).toISOString()]), at: Date.now() - 2 * 60 * 1000, outcome: 'busy' },
+    goal: {
+      id: 'g-rotated',
+      revision: 1,
+      status: 'active',
+      title: 'Fix',
+      objective: 'Verify',
+      acceptance: 'Pass',
+      constraints: [],
+      stages: [{ id: 's1', title: 'S1', acceptance: 'A', tasks: [{ id: 't1', botId: 'b', task: 'Do work', status: 'working' }], reworks: 0, status: 'active' }],
+      current: 0,
+      nudges: 0,
+      events: [],
+      reviewAttempt: { id: 'stuck-rotated-1', at: staleAt, state: 'admitting', adminId: 'a', rootSessionId: 'r1', adminSessionId: 'ga-old-part', adminCompleted: true },
+    },
+  })
+  host.rt.live.set('gb', { turn: 1 })
+  t.mock.timers.tick(5 * 60 * 1000)
+  await settle(() => host.rt.roomOf('r1').goal.reviewAttempt === undefined)
+  assert.equal(host.rt.roomOf('r1').goal.reviewAttempt, undefined)
 })

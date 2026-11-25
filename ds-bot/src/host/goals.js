@@ -1562,18 +1562,27 @@ export function install(rt) {
     // An uncertain full review whose nudge never reached the admin has no terminal
     // proof and used to stay fenced for ever, blocking every later review (R&D
     // fc624356, 2026-11-21 16:35). After the review interval, release it so the
-    // next sweep opens a fresh one. Active admin work is never released here.
+    // next sweep opens a fresh one unless this exact review attempt is still
+    // running or queued on the admin or in an active review round.
     if (attempt && ['admitting', 'uncertain'].includes(attempt.state) && attempt.inspectOnly !== true
-      && !attempt.terminalFailure && attempt.adminCompleted !== true && !reviewInputs.get(attempt)?.admin
+      && !attempt.terminalFailure && !reviewInputs.get(attempt)?.admin
       && reviewEligible(goal) && !stopsPending.has(room.id) && !reviewing.has(room.id)
-      && Number.isFinite(attempt.at) && now - attempt.at >= GOAL_REVIEW_INTERVAL_MS
-      && (rt.workingInRoom?.(room) ?? []).length === 0) {
-      try {
-        finishReview(room, 'nudge-limit', now)
-        await rt.save({ required: true })
-        rt.warn('ds-bot: released an unanswered goal review %s in %s after the review interval', attempt.id, room.name)
-      } catch (error) { rt.warn('ds-bot: releasing goal review %s failed: %s', attempt.id, error?.message || error) }
-      return
+      && Number.isFinite(attempt.at) && now - attempt.at >= GOAL_REVIEW_INTERVAL_MS) {
+      const adminAgent = attempt.adminSessionId ? ctx.get?.('agents')?.get?.(attempt.adminSessionId) : undefined
+      const adminLive = attempt.adminSessionId ? rt.live.get(attempt.adminSessionId) : undefined
+      const activeReviewRound = [...rt.roomProgress.values()].some(round => round.roomId === room.id && round.goalReviewId === attempt.id)
+      const attemptActiveOnAdmin = activeReviewRound
+        || adminLive?.info?.reviewId === attempt.id
+        || [...(adminAgent?.inbox?.nextStep ?? []), ...(adminAgent?.inbox?.nextTurn ?? [])].some(message => message?.source?.reviewId === attempt.id)
+        || rt.unreadOf?.(attempt.adminSessionId)?.some(args => args?.reviewId === attempt.id) === true
+      if (!attemptActiveOnAdmin) {
+        try {
+          finishReview(room, attempt.adminCompleted === true ? 'admin-pass' : 'nudge-limit', now)
+          await rt.save({ required: true })
+          rt.warn('ds-bot: released an unanswered goal review %s in %s after the review interval', attempt.id, room.name)
+        } catch (error) { rt.warn('ds-bot: releasing goal review %s failed: %s', attempt.id, error?.message || error) }
+        return
+      }
     }
     if (attempt?.inspectOnly === true && attempt.state === 'uncertain' && reviewEligible(goal)
       && !stopsPending.has(room.id) && Number.isFinite(attempt.at) && now - attempt.at >= GOAL_REVIEW_INTERVAL_MS) {
@@ -1768,9 +1777,12 @@ export function install(rt) {
       for (const room of Object.values(rt.state.rooms ?? {})) {
         const goal = room.goal
         // An attempt may be stuck in admitting/uncertain after a failed delivery;
-        // runScheduledRoomReview's reconcile path is what recovers it, so do not
-        // skip the room just because an attempt exists.
+        // reconcile overdue attempts proactively even when the room is busy so a
+        // later sweep can open a fresh review instead of fencing for days.
         if (!goal || goal.status !== 'active') continue
+        if (goal.reviewAttempt && Number.isFinite(goal.reviewAttempt.at) && Date.now() - goal.reviewAttempt.at >= GOAL_REVIEW_INTERVAL_MS) {
+          await reconcileOriginalReview(room, Date.now())
+        }
         if (inspectionOnlyIdle(goal) || !reviewEligible(goal) || !reviewIsDue(goal)) continue
         if (Date.now() - (room.scheduledReviewOccurrence?.at ?? 0) < 10 * 60e3) continue
         const sessionId = rt.sessionOfRoom(room)

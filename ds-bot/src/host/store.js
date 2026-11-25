@@ -254,6 +254,28 @@ export function install(rt) {
       foldedOpenParts = true
     }
     if (migrateLocalRoutes(state)) migrated = true
+    // Background tasks inherit earlier segment references by sessionId instead of storing
+    // duplicate copies of multi-KB handoff notes in state.json.
+    for (const bot of Object.values(state.bots)) {
+      if (!bot || typeof bot !== 'object' || !Array.isArray(bot.tasks)) continue
+      const botSegIds = new Set((Array.isArray(bot.segments) ? bot.segments : []).map(seg => sessionIdOf(seg?.sessionId)).filter(Boolean))
+      if (botSegIds.size === 0) continue
+      for (const task of bot.tasks) {
+        if (!Array.isArray(task?.inheritedSegments)) continue
+        for (let i = 0; i < task.inheritedSegments.length; i += 1) {
+          const seg = task.inheritedSegments[i]
+          const sid = sessionIdOf(seg?.sessionId)
+          if (sid === undefined || !botSegIds.has(sid)) continue
+          if (!('note' in seg) && !('fallback' in seg) && !('noteFrom' in seg)) continue
+          task.inheritedSegments[i] = {
+            sessionId: sid,
+            ...(seg.endedAt !== undefined ? { endedAt: seg.endedAt } : {}),
+            ...(seg.tokens !== undefined ? { tokens: seg.tokens } : {}),
+          }
+          migrated = true
+        }
+      }
+    }
     // A team from before several Main Bots were allowed names a single one.
     if (!Array.isArray(state.mainBotIds)) state.mainBotIds = []
     if ('mainBotId' in state) {

@@ -972,3 +972,59 @@ test('a written tool call is told apart from text about one', () => {
   assert.equal(writesToolCall('plain <text> with an angle or two'), false)
   assert.equal(stripWrittenCalls('a < b or c > d'), 'a < b or c > d')
 })
+
+test('startup recovery compacts stacked plain room inbox messages and coalesces inflight queued entries atomically', async (t) => {
+  const { readdirSync } = await import('node:fs')
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const home = freshHome(t)
+  const roomId = 'r-compact'
+  const botId = 'b'
+  const roomSess = 'gb-compact'
+  writeFileSync(join(home, 'state.json'), JSON.stringify({
+    version: 1,
+    mainBotIds: ['a'],
+    bots: {
+      a: { id: 'a', name: 'Chief', role: 'Boss', sessionId: 'a', createdAt: 1 },
+      [botId]: { id: botId, name: 'Writer', role: 'Write', sessionId: botId, createdAt: 2 },
+    },
+    rooms: {
+      [roomId]: { id: roomId, name: 'CompactTeam', members: ['a', botId], mode: 'admin', admin: 'a', named: true, sessions: { a: 'ga-compact', [botId]: roomSess }, log: [], seq: 0, seen: {} },
+    },
+    exchanges: [],
+    exchangeTurns: {},
+    questions: {},
+    prefs: {},
+    revision: 0,
+  }))
+  const stacked = Array.from({ length: 12 }, (_, idx) => ({
+    at: 100 + idx,
+    args: { toId: botId, sessionId: roomSess, role: 'room', roomId, note: 'turn', text: `msg-${idx}`, exchangeId: `ex-room-${idx}` },
+  }))
+  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ turns: {}, queued: { [roomSess]: stacked } }))
+
+  const host = await start(home)
+  // Pre-seed 12 matching plain room messages already sitting in the live agent inbox.
+  const inbox = host.agentOf(roomSess).inbox
+  for (let idx = 0; idx < 12; idx += 1) {
+    inbox.nextTurn.push({
+      id: `in-${idx}`,
+      content: [{ type: 'text', text: `msg-${idx}` }],
+      source: { kind: 'bot', role: 'room', roomId, exchangeId: `ex-room-${idx}` },
+    })
+  }
+  inbox.remove = (id) => {
+    for (const list of [inbox.nextStep, inbox.nextTurn]) {
+      const at = list.findIndex(m => m.id === id)
+      if (at !== -1) { list.splice(at, 1); return true }
+    }
+    return false
+  }
+  t.mock.timers.tick(3000)
+  await settle(() => inbox.nextTurn.length === 1 && (notes(home).queued[roomSess] ?? []).length === 1)
+    .catch(() => {
+      throw new Error(`unexpected state: nextTurn=${inbox.nextTurn.length}, queued=${JSON.stringify(notes(home).queued)}`)
+    })
+  assert.equal(inbox.nextTurn[0].id, 'in-11')
+  assert.equal(notes(home).queued[roomSess][0].args.exchangeId, 'ex-room-11')
+  assert.equal(readdirSync(home).some(name => name.startsWith('inflight.json.') && name.endsWith('.tmp')), false)
+})

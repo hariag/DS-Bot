@@ -108,6 +108,11 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
     return false
   }
 
+  // The owner, reviewer or a participant (for example someone the user @mentioned
+  // on the card) may reply on it, whatever its status; the card keeps the discussion.
+  const canComment = (task, caller) => !!task && direct(task, caller) && !task.archivedAt
+    && (caller.actor === task.owner || caller.actor === task.reviewer || (task.participants ?? []).includes(caller.actor))
+
   const visibleDependency = (caller, id) => {
     const dependency = store.get(id)
     return !!dependency && (direct(dependency, caller) || !!sharedProjection(dependency, caller))
@@ -171,7 +176,9 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       return sameIdentity(caller, pending.caller) && input.actor === caller.actor
         && input.task?.id === pending.taskId && intakeAllowed(caller, input.task)
     }
-    if (!pending || input?.actor !== pending.caller.actor || !(input?.type === pending.action || (pending.action === 'propose' && input?.type === 'proposal')) || input?.task?.id !== pending.taskId) return false
+    // The `comment` tool action is stored as a `card-comment` command.
+    const commentCommand = pending?.action === 'comment' && input?.type === 'card-comment'
+    if (!pending || input?.actor !== pending.caller.actor || !(input?.type === pending.action || commentCommand || (pending.action === 'propose' && input?.type === 'proposal')) || input?.task?.id !== pending.taskId) return false
     let caller
     try { caller = selectRoom(identity(pending.exec), pending.roomId) } catch { return false }
     if (!sameIdentity(caller, pending.caller)) return false
@@ -184,6 +191,7 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
     const current = store.get(pending.taskId)
     // store.command checks exact replays before the CAS for new writes. Proposals
     // instead carry the base revision in their separate journal entry.
+    if (pending.action === 'comment') return canComment(current, caller)
     return canMutate(current, caller, pending.action) && (pending.action !== 'propose' || current.revision === pending.revision)
   }
 
@@ -287,12 +295,12 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
     }
     if (!task) throw refused()
     if (args.action === 'comment') {
-      const allowed = caller.actor === task.owner || caller.actor === task.reviewer || (task.participants ?? []).includes(caller.actor)
-      if (!direct(task, caller) || !allowed) throw refused()
+      if (!canComment(task, caller)) throw refused()
       if (!id(args.operationId)) throw new Error('comment requires a stable operation_id')
       if (!Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 1) throw new Error('comment requires expected_revision from the current card')
       const text = typeof args.note === 'string' ? args.note : ''
-      if (!text.trim() || Buffer.byteLength(text) > 2048) throw new Error('comment requires note text')
+      if (!text.trim()) throw new Error('comment requires note text')
+      if (Buffer.byteLength(text) > 2048) throw new Error(`comment note is ${Buffer.byteLength(text)} bytes; the limit is 2048 bytes. Shorten it or post the detail in the group and keep a summary here`)
       const command = { operationId:args.operationId, taskId:task.id, expectedRevision:args.expectedRevision, actor:caller.actor, type:'card-comment', value:{ text } }
       const context = { exec, caller, roomId:args.roomId, taskId:task.id, revision:args.expectedRevision, action:'comment' }
       const result = scope.run(context, () => store.command(command))

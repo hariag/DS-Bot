@@ -11,8 +11,9 @@
 // request itself is never sent again there.
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { replaceFile } from './files.js'
 import { HISTORY_TIMEOUT_MS, MESSAGE_INLINE_MAX, SOURCE_KIND, STEER_CUT } from './constants.js'
 import { answerSender, cutOffText, failureLine, turnFailure } from './turns.js'
 import { textOf } from './text.js'
@@ -162,23 +163,58 @@ export function install(rt) {
   let queued = interrupted.queued
   let writing = Promise.resolve()
   let stopped = false
-  let latest
   let due = false
+  const isCoalescableRoomArgs = args => args?.role === 'room' && typeof args?.roomId === 'string'
+    && !args.reviewId && !args.reviewInspect && !args.reviewReceipt && !args.groupKickoff && !args.resumed
+  const isCoalescableRoomMessage = (message, roomId) =>
+    message?.source?.kind === SOURCE_KIND
+    && message.source.role === 'room'
+    && message.source.roomId === roomId
+    && !message.source.reviewId
+    && !message.source.reviewInspect
+    && !message.source.reviewReceipt
+    && !message.source.groupKickoff
+    && !message.source.resumed
+  const coalesceQueuedList = (list) => {
+    if (!Array.isArray(list) || list.length <= 1) return { kept: list ?? [], dropped: [] }
+    const lastRoomIndex = new Map()
+    for (let i = 0; i < list.length; i += 1) {
+      const args = list[i]?.args
+      if (isCoalescableRoomArgs(args)) lastRoomIndex.set(args.roomId, i)
+    }
+    const kept = []
+    const dropped = []
+    for (let i = 0; i < list.length; i += 1) {
+      const item = list[i]
+      const args = item?.args
+      if (isCoalescableRoomArgs(args) && lastRoomIndex.get(args.roomId) !== i) {
+        if (args.exchangeId !== undefined) dropped.push(args.exchangeId)
+        continue
+      }
+      kept.push(item)
+    }
+    return { kept, dropped }
+  }
   const persist = () => {
     // Only the host that saves the team runs its work again.
     if (stopped || rt.readOnly() !== undefined) return
-    latest = JSON.stringify({ turns, queued })
-    // One write waits at a time and takes the latest notes, so a busy round does not
-    // write the file once per change.
+    // One write waits at a time and takes the latest notes inside the async chain,
+    // so a busy round neither JSON.stringifies per event nor writes in place.
     if (due) return
     due = true
-    // Written in place: a rename over the file fails on Windows while anything reads
-    // it, and a torn write only loses what one restart would pick up.
     writing = writing.then(async () => {
       due = false
-      const snapshot = latest
+      if (rt.readOnly() !== undefined) return
+      const snapshot = JSON.stringify({ turns, queued })
+      const temp = `${file}.${process.pid}.tmp`
       await mkdir(home, { recursive: true })
-      await writeFile(file, snapshot, 'utf8')
+      try {
+        await writeFile(temp, snapshot, 'utf8')
+        await replaceFile(temp, file)
+      } catch (error) {
+        await unlink(temp).catch(() => {})
+        throw error
+      }
     }).catch(error => rt.warn('ds-bot: noting running turns failed: %s', error))
   }
   const update = (id, change) => {
@@ -343,9 +379,11 @@ export function install(rt) {
   // for the next start instead of losing them.
   async function resendQueued(sessionId, list) {
     const active = new Set()
-    const fresh = list.filter(item => rt.botOf(item.args?.toId) !== undefined
+    const freshRaw = list.filter(item => rt.botOf(item.args?.toId) !== undefined
       && sessionFor(sessionId, item.args) !== undefined && taken?.has(item.args.exchangeId) !== true)
-    if (fresh.length === 0) return active
+    if (freshRaw.length === 0) return active
+    const { kept: fresh, dropped: coalesced } = coalesceQueuedList(freshRaw)
+    for (const exchangeId of coalesced) forgetQueued(exchangeId)
     const target = sessionFor(sessionId, fresh[0].args)
     const agent = await rt.resolveAgent(target)
     const waiting = new Set([...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])].map(message => message.source?.exchangeId))
@@ -705,6 +743,46 @@ export function install(rt) {
     }
   }
 
+  async function compactGroupInboxes() {
+    if (stopped || rt.readOnly() !== undefined || typeof rt.resolveAgent !== 'function') return
+    for (const room of Object.values(rt.state?.rooms ?? {})) {
+      for (const sessionId of Object.values(room?.sessions ?? {})) {
+        if (typeof sessionId !== 'string' || sessionId === '') continue
+        const agent = await rt.resolveAgent(sessionId).catch(() => undefined)
+        const inbox = agent?.inbox
+        if (!inbox) continue
+        const all = [...(Array.isArray(inbox.nextStep) ? inbox.nextStep : []), ...(Array.isArray(inbox.nextTurn) ? inbox.nextTurn : [])]
+        const matches = all.filter(message => isCoalescableRoomMessage(message, room.id))
+        if (matches.length <= 1) continue
+        const keepId = matches.at(-1)?.id
+        let removed = 0
+        for (const [target, list] of [['next-step', inbox.nextStep], ['next-turn', inbox.nextTurn]]) {
+          if (!Array.isArray(list) || list.length === 0) continue
+          const drop = list.filter(message => message.id !== keepId && isCoalescableRoomMessage(message, room.id))
+          if (drop.length === 0) continue
+          if (typeof inbox.splice === 'function' && (drop.length === list.length || (drop.length === list.length - 1 && list.at(-1)?.id === keepId))) {
+            for (const message of inbox.splice(target, 0, drop.length, [])) {
+              removed += 1
+              if (message?.source?.exchangeId) forgetQueued(message.source.exchangeId)
+            }
+            continue
+          }
+          if (typeof inbox.remove !== 'function') continue
+          for (const message of drop) {
+            if (inbox.remove(message.id) === true) {
+              removed += 1
+              if (message?.source?.exchangeId) forgetQueued(message.source.exchangeId)
+            }
+          }
+        }
+        if (removed > 0) {
+          if (agent.session) await ctx.sessions?.flush?.(agent.session).catch(() => {})
+          rt.warn('ds-bot: compacted %d superseded unread room messages in %s (%s)', removed, sessionId, room.name)
+        }
+      }
+    }
+  }
+
   async function resumeAll() {
     await rt.load()
     if (rt.readOnly() !== undefined) return
@@ -713,7 +791,8 @@ export function install(rt) {
     // What the last run still had on the way is noted again first, under the
     // Session it would go to now: nothing is cleared before it is handed over.
     // A Bot that is gone takes its notes with it; what a turn already read here
-    // is done with.
+    // is done with. Coalesce stacked plain room deliveries so inflight.json does
+    // not retain superseded full-context snapshots across restarts.
     const pending = queued
     queued = {}
     for (const [oldId, list] of Object.entries(pending)) {
@@ -724,7 +803,13 @@ export function install(rt) {
         queued = { ...queued, [key]: [...(queued[key] ?? []), item] }
       }
     }
+    for (const [key, list] of Object.entries(queued)) {
+      const { kept } = coalesceQueuedList(list)
+      if (kept.length === 0) delete queued[key]
+      else queued[key] = kept
+    }
     persist()
+    await compactGroupInboxes().catch(error => rt.warn('ds-bot: compacting group inboxes failed: %s', error))
     // Agents and inboxes are read before anything wakes their Sessions.
     const cut = []
     const keepTaskSessions = new Set()
@@ -787,6 +872,7 @@ export function install(rt) {
     const timer = pending
       ? setTimeout(() => void resumeAll().catch(error => rt.warn('ds-bot: picking up interrupted work failed: %s', error)), RESUME_DELAY_MS)
       : setTimeout(() => void rt.load()
+        .then(() => compactGroupInboxes())
         .then(() => rt.reconcileTasksAfterRestart?.(new Set()))
         .then(() => rt.settleRoomBatches?.())
         .catch(error => rt.warn('ds-bot: settling group batches failed: %s', error)), 0)

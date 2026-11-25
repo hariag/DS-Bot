@@ -253,3 +253,26 @@ test('assigned participants can leave idempotent replies on a draft without auth
   assert.equal(store.get('i').status,'draft')
   assert.deepEqual(store.listActions('i'),[])
 })
+
+test('A mentioned participant can comment on a blocked room card; outsiders cannot', async t => {
+  const {store, rt, workflow} = fixture(t)
+  const rooms = {g:{id:'g',members:['one','two','three','four']}}
+  rt.state = {rooms,bots:{one:{},two:{},three:{},four:{}}}
+  rt.roomOf = id => rooms[id]
+  rt.botOf = id => ['one','two','three','four'].includes(id) ? {id,name:id} : undefined
+  rt.groupOwners.set('g-three', {roomId:'g'})
+  rt.groupOwners.set('g-four', {roomId:'g'})
+  rt.selfOf = id => ({'g-three':'three','g-four':'four'})[id]
+  rt.teamTools = []
+  const tool = installTaskTool(rt, workflow, value => value)
+  const call = async (args, sid) => JSON.parse(await tool.execute(args, {agent:{id:sid}}))
+  store.create({actor:'user',operationId:'new',task:{...task,id:'c1',scope:'room:g'}})
+  store.command({actor:'user',operationId:'join',taskId:'c1',expectedRevision:store.get('c1').revision,type:'participants',value:{add:['three']}})
+  const revision = store.get('c1').revision
+  const sent = await call({action:'comment',task_id:'c1',room_id:'g',operation_id:'cm1',expected_revision:revision,note:'contract delivered'}, 'g-three')
+  assert.equal(store.get('c1').comments.at(-1).text, 'contract delivered')
+  assert.equal(store.get('c1').comments.at(-1).author, 'three')
+  await assert.rejects(call({action:'comment',task_id:'c1',room_id:'g',operation_id:'cm2',expected_revision:store.get('c1').revision,note:'x'}, 'g-four'), /authorized/)
+  await assert.rejects(call({action:'comment',task_id:'c1',room_id:'g',operation_id:'cm3',expected_revision:store.get('c1').revision,note:'x'.repeat(3000)}, 'g-three'), /2048 bytes/)
+  assert.ok(sent.task)
+})

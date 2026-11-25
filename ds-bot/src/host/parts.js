@@ -409,7 +409,19 @@ export function install(rt) {
       const task = bot.tasks[thread.index]
       // A foreground turn moved into a background task keeps read_own_chat access to the
       // Bot's earlier parts frozen at handoff time, without shifting on later foreground rollovers.
-      const inherited = Array.isArray(task.inheritedSegments) ? task.inheritedSegments : []
+      // Resolve canonical notes by sessionId so tasks do not duplicate multi-KB handoff notes.
+      const byId = new Map((Array.isArray(bot.segments) ? bot.segments : []).filter(seg => seg?.sessionId).map(seg => [seg.sessionId, seg]))
+      const inherited = (Array.isArray(task.inheritedSegments) ? task.inheritedSegments : []).map((seg) => {
+        const canonical = byId.get(seg?.sessionId)
+        if (!canonical) return seg
+        return {
+          ...canonical,
+          ...seg,
+          ...(seg.note === undefined && canonical.note !== undefined ? { note: canonical.note } : {}),
+          ...(seg.fallback === undefined && canonical.fallback !== undefined ? { fallback: canonical.fallback } : {}),
+          ...(seg.noteFrom === undefined && canonical.noteFrom !== undefined ? { noteFrom: canonical.noteFrom } : {}),
+        }
+      })
       const seen = new Set(inherited.map(seg => seg?.sessionId).filter(Boolean))
       const segments = [...inherited, ...(thread.segments ?? []).filter(seg => !seen.has(seg?.sessionId))]
       return partsOf(bot.id, undefined, segments, task.sessionId)

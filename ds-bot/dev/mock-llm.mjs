@@ -119,6 +119,10 @@ function isSummary(body) {
 }
 
 function decide(body) {
+  const hasBackgroundTaskPrompt = (body.messages ?? [])
+    .filter(message => message.role === 'user')
+    .flatMap(message => textBlocks(message.content))
+    .some(value => value.includes('[Background task ·'))
   const system = systemText(body.system) + '\n' + (body.messages ?? []).filter(m => m.role === 'system').map(m => textOf(m.content)).join('\n')
   const tools = new Set((body.tools ?? []).map(entry => entry.name))
   // Clock snapshots and a group's memory snapshot are context, not a new scripted user command.
@@ -373,6 +377,7 @@ function decide(body) {
   }
 
   const userText = textOf(last?.content).trim()
+  if (hasBackgroundTaskPrompt) return [text(`后台任务已完成，共继承 ${messages.length} 条消息。`)]
   const groupAt = userText.indexOf('[Group chat "')
   const groupText = groupAt === -1 ? userText : userText.slice(groupAt).trimStart()
   // "撑爆": the provider rejects the request as past its window.
@@ -522,7 +527,6 @@ function decide(body) {
   }
   // Secret cards: ask for a key, and use it once the card says it is saved or allowed.
   if (userText.startsWith('[Secret card]')) return secretNote(userText, tools)
-  if (userText.startsWith('[Background task ·')) return [text(`后台任务已完成，共继承 ${messages.length} 条消息。`)]
   if (userText.startsWith('[Background task report ·')) return [text(`已收到后台任务汇报：${userText.split('\n').slice(1).join(' ').slice(0, 120)}`)]
   // Multiline: a runtime-context or policy notice can share the user's message.
   const secretAsk = /^要密钥(?:[ \t]+([A-Za-z][\w]*))?/m.exec(userText)

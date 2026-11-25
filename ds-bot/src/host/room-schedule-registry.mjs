@@ -13,7 +13,7 @@ const previousCurrentPromptOf = token => [
   'Do not repeat a follow-up while its stated deadline is still open. Use that time for independent authorized work and record the next check. If a deadline is missed or two scheduled checks pass without confirmation, escalate with a plain-text @Name to the specific authorized person who can unblock or decide; do not leave an ownerless or open-ended wait.',
   'If a shared lock is held, verify the current holder, ask that person to finish/report/release, and do not dispatch conflicting work. Once the lock is verified idle, continue the queued task. Honor an explicit user pause or stop and never mark reported work done without acceptance evidence.',
 ].join(' ') + ' ' + marker(token)
-const promptOf = token => [
+const activePromptBeforeTracking = [
   'Every 10 minutes, inspect this group’s active goal and original task board.',
   'Count progress only when the goal stage or task status/evidence changes, or the assigned owner provides verifiable evidence before an open deadline. A live turn, queued message, chat activity, accepted handoff, or “working” label alone is not proof that work progressed.',
   'If the goal is active and incomplete and there is no verified progress, take a concrete authorized step now even if the group has an active conversation or live turn; do not say only “waiting” or reply [PASS] because a task is blocked.',
@@ -22,9 +22,14 @@ const promptOf = token => [
   'Do not repeat a follow-up while its stated deadline is still open. Use that time for independent authorized work and record the next check. If a deadline is missed or two scheduled checks pass without confirmation, escalate with a plain-text @Name to the specific authorized person who can unblock or decide; do not leave an ownerless or open-ended wait.',
   'For blockers that require a user decision, the group administrator reports the exact decision needed to the user and records the blocker and next check. For blockers within the group’s authority, the administrator coordinates owners and dependencies until the work moves; record the outcome on the original board item.',
   'If a shared lock is held, verify the current holder, ask that person to finish/report/release, and do not dispatch conflicting work. Once the lock is verified idle, continue the queued task. Honor an explicit user pause or stop and never mark reported work done without acceptance evidence.',
+]
+const activePromptBeforeTrackingOf = token => activePromptBeforeTracking.join(' ') + ' ' + marker(token)
+const promptOf = token => [
+  ...activePromptBeforeTracking,
+  'At each scheduled check, review every open item on the group’s shared task board. Reconcile its status, owner, blocker, evidence, and next check with the latest verified information, and record status changes on the original item. Keep following up until the work is complete or a user decision is required; never mark reported work done without acceptance evidence.',
 ].join(' ') + ' ' + marker(token)
 const currentPrompt = (prompt, token) => {
-  for (const previous of [previousPromptOf(token), previousCurrentPromptOf(token)]) {
+  for (const previous of [previousPromptOf(token), previousCurrentPromptOf(token), activePromptBeforeTrackingOf(token)]) {
     if (prompt === previous || prompt?.startsWith(previous)) return promptOf(token) + prompt.slice(previous.length)
   }
   return prompt

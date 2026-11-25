@@ -21,7 +21,7 @@ export const DEFAULTS = {
   webPort: 3097,
   mockPort: 8797,
   chrome: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  harness: join(PLUGIN, 'dev', 'harness'),
+  harness: process.env.DSH_E2E_HARNESS || join(PLUGIN, 'dev', 'harness'),
 }
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))

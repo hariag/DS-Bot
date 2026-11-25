@@ -35,6 +35,13 @@ export function install(rt) {
   const reportsDir = join(rt.home, 'task-reports')
   const settling = new Set()
   const delivering = new Set()
+  // A fresh Session can finish a setup turn before its task prompt is admitted.
+  const launching = new Set()
+  const slimSegmentRef = seg => ({
+    sessionId: seg?.sessionId,
+    ...(seg?.endedAt !== undefined ? { endedAt: seg.endedAt } : {}),
+    ...(seg?.tokens !== undefined ? { tokens: seg.tokens } : {}),
+  })
   // Message IDs currently being restored to an old foreground Agent (pre-commit failure)
   // or forwarded onto a newly forked foreground Agent, so `interceptForegroundUserMessage`
   // never re-intercepts its own writes (including when `backgroundAfterSec === 0`).
@@ -434,7 +441,15 @@ export function install(rt) {
       ...(imOrigin !== undefined ? { imOrigin } : {}),
     }
 
-    const { sessionId, forked, task } = await rt.openTaskPart(bot, fromSessionId, baseTask, { workDir: resolvedDir })
+    launching.add(id)
+    let opened
+    try {
+      opened = await rt.openTaskPart(bot, fromSessionId, baseTask, { workDir: resolvedDir })
+    } catch (error) {
+      launching.delete(id)
+      throw error
+    }
+    const { sessionId, forked, task } = opened
     if (taskWorkId !== undefined) {
       rt.openWork?.(taskWorkId, { from: bot.id, parent: parentWork, name: `task "${name}"`, child: id })
     }
@@ -448,6 +463,13 @@ export function install(rt) {
     const prompt = `${detail}${dirNote}${localNote}${contextNote}\n\nDo this work here. The user does not chat directly in this task session; do not call ask_user, show_view, request_secret, or task_* tools. When you finish, your final reply is sent back to ${reportDest}, so make it complete and self-contained.`
 
     try {
+      // A first-turn fork can fall back to a fresh Session whose setup turn is
+      // already running. Let it settle before the task prompt starts the task.
+      if (!forked) {
+        const agent = ctx.get('agents')?.get(sessionId)
+        if (typeof agent?.whenIdle === 'function') await agent.whenIdle()
+      }
+      launching.delete(id)
       await rt.deliver({
         toId: bot.id,
         sessionId,
@@ -458,6 +480,7 @@ export function install(rt) {
         recordExchange: false,
       })
     } catch (error) {
+      launching.delete(id)
       await settleTask(bot, task, 'failed', { error: error?.message ?? String(error), notifyForeground: false })
       throw error
     }
@@ -976,7 +999,7 @@ export function install(rt) {
         sessionId: oldSid,
         segments: [],
         startSeq,
-        ...(bot.segments?.length ? { inheritedSegments: bot.segments.map(seg => ({ ...seg })) } : {}),
+        ...(bot.segments?.length ? { inheritedSegments: bot.segments.map(slimSegmentRef) } : {}),
         origin,
         status: rt.waitsForApproval?.(oldSid) ? 'waiting_approval' : 'running',
         startedAt: entry?.since ?? now,
@@ -1075,7 +1098,7 @@ export function install(rt) {
       title,
       brief: oneLine(text, BRIEF_KEPT),
       from: fromSessionId,
-      ...(target.segments?.length ? { inheritedSegments: target.segments.map(seg => ({ ...seg })) } : {}),
+      ...(target.segments?.length ? { inheritedSegments: target.segments.map(slimSegmentRef) } : {}),
       origin: 'bot-handoff',
       exchangeId,
       status: 'running',
@@ -1205,6 +1228,7 @@ export function install(rt) {
     if (found === undefined) return
     const { bot, task } = found
     if (!isActiveTask(task)) return
+    if (launching.has(task.id)) return
 
     const reason = event.data?.reason
     // 1. Host shutdown (`disposed`) or steer cut: keep task active.

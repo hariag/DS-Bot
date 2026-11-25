@@ -643,3 +643,38 @@ test('indexSessions normalizes missing ids, empty sessionId, switched segments, 
   assert.equal(rt.selfOf(undefined), undefined)
   assert.equal(rt.roomOf(''), undefined)
 })
+
+test('adopt slims duplicate inheritedSegments notes while preserving orphaned segment entries', async (t) => {
+  const { rt } = runtime(t, {
+    version: 1,
+    mainBotIds: [],
+    bots: {
+      pm: {
+        id: 'pm',
+        name: 'PM',
+        sessionId: 'pm-now',
+        segments: [{ sessionId: 'seg-1', endedAt: 10, tokens: 100, note: 'heavy-note' }],
+        tasks: [{
+          id: 't1',
+          sessionId: 'task-1',
+          inheritedSegments: [
+            { sessionId: 'seg-1', endedAt: 10, tokens: 100, note: 'heavy-note' },
+            { sessionId: 'seg-orphan', endedAt: 5, tokens: 50, note: 'orphan-note' },
+          ],
+        }],
+      },
+    },
+    rooms: {},
+    agents: {},
+    exchanges: [],
+    exchangeTurns: {},
+    questions: {},
+    prefs: {},
+    revision: 0,
+  })
+  await rt.load()
+  const inh = rt.botOf('pm').tasks[0].inheritedSegments
+  assert.equal('note' in inh[0], false)
+  assert.deepEqual(inh[0], { sessionId: 'seg-1', endedAt: 10, tokens: 100 })
+  assert.equal(inh[1].note, 'orphan-note')
+})

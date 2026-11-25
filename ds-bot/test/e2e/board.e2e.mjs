@@ -29,7 +29,7 @@ const { chromium } = require('playwright-core')
 const { PNG } = require('pngjs')
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const ARTIFACTS_ROOT = join(HERE, 'artifacts')
+const ARTIFACTS_ROOT = process.env.BOARD_E2E_ARTIFACTS || join(HERE, 'artifacts')
 const systemChrome = process.platform === 'darwin'
   ? ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', chromium.executablePath()]
   : ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', chromium.executablePath()]

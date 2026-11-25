@@ -38,6 +38,7 @@ const MEMORY_LIMIT_SCOPES = new Set(['group', 'bot', 'team'])
 const MEMORY_LIMIT_MIN = 1_000
 const MEMORY_LIMIT_MAX = 200_000
 const QUEUE_PREVIEW_MAX = 400
+const QUEUE_VIEW_CAP = 20
 
 // Recovery notes are positive evidence of a delivery, not proof that an
 // unavailable Session inbox is empty: notes may be missing or unreadable.
@@ -57,6 +58,7 @@ export function groupQueueView(rooms, bots, getAgent, unreadOf) {
       const earlier = (room.segments?.[botId] ?? []).map(segment => segment.sessionId).filter(Boolean)
       const seen = new Set()
       let unknown
+      const rows = []
       for (const sessionId of new Set([currentId, ...earlier].filter(Boolean))) {
         const inbox = getAgent?.(sessionId)?.inbox
         const available = Array.isArray(inbox?.nextStep) && Array.isArray(inbox?.nextTurn)
@@ -64,7 +66,7 @@ export function groupQueueView(rooms, bots, getAgent, unreadOf) {
           // A missing delivery note does not prove that an unloaded inbox is empty.
           if (!unknown) {
             unknown = { id: 'unavailable', roomId: room.id, roomName: room.name, unavailable: true }
-            ;(result[botId] ??= []).push(unknown)
+            rows.push(unknown)
           }
           if (recoveryNoted(unreadOf, sessionId)) unknown.noted = true
           continue
@@ -76,11 +78,28 @@ export function groupQueueView(rooms, bots, getAgent, unreadOf) {
           if (exchangeId !== undefined) seen.add(exchangeId)
           const content = Array.isArray(item.content) ? item.content : []
           const text = content.filter(block => block?.type === 'text').map(block => block.text ?? '').join('\n')
-          ;(result[botId] ??= []).push({
+          rows.push({
             id: item.id ?? item.source.exchangeId ?? `${sessionId}:${index}`, roomId: room.id, roomName: room.name, previous: sessionId !== currentId,
             senderName: item.source.senderName ?? bots?.[item.source.askedBy ?? item.source.fromId]?.name ?? '',
             text: text.length > QUEUE_PREVIEW_MAX ? `${text.slice(0, QUEUE_PREVIEW_MAX)}…` : text,
           })
+        }
+      }
+      if (rows.length > 0) {
+        const msgRows = rows.filter(item => !item.unavailable).slice(-QUEUE_VIEW_CAP)
+        const capped = unknown ? [...msgRows, unknown] : msgRows
+        if (unknown && rows[0]?.unavailable) {
+          // Preserve encounter order when unavailable appeared before trailing messages.
+          const merged = []
+          let placedUnknown = false
+          const msgSet = new Set(msgRows)
+          for (const item of rows) {
+            if (item.unavailable && !placedUnknown) { merged.push(item); placedUnknown = true }
+            else if (msgSet.has(item)) merged.push(item)
+          }
+          ;(result[botId] ??= []).push(...merged)
+        } else {
+          ;(result[botId] ??= []).push(...capped)
         }
       }
     }
@@ -93,6 +112,7 @@ export function earlierPrivateQueueView(bots, getAgent, unreadOf) {
   for (const bot of Object.values(bots ?? {})) {
     const seen = new Set()
     let unknown
+    const rows = []
     const otherParts = [
       ...(bot.segments ?? []).map(segment => segment.sessionId),
       ...(bot.openParts ?? []).flatMap(part => [part.sessionId, ...(part.segments ?? []).map(segment => segment.sessionId)]),
@@ -103,7 +123,7 @@ export function earlierPrivateQueueView(bots, getAgent, unreadOf) {
       if (!available) {
         if (!unknown) {
           unknown = { id: 'unavailable', unavailable: true }
-          ;(result[bot.id] ??= []).push(unknown)
+          rows.push(unknown)
         }
         if (recoveryNoted(unreadOf, sessionId)) unknown.noted = true
         continue
@@ -115,8 +135,12 @@ export function earlierPrivateQueueView(bots, getAgent, unreadOf) {
         if (exchangeId !== undefined) seen.add(exchangeId)
         const content = Array.isArray(item.content) ? item.content : []
         const text = content.filter(block => block?.type === 'text').map(block => block.text ?? '').join('\n')
-        ;(result[bot.id] ??= []).push({ id: item.id ?? exchangeId ?? `${sessionId}:${index}`, ...(exchangeId === undefined ? {} : { exchangeId }), senderName: item.source.senderName ?? '', text: text.length > QUEUE_PREVIEW_MAX ? `${text.slice(0, QUEUE_PREVIEW_MAX)}…` : text })
+        rows.push({ id: item.id ?? exchangeId ?? `${sessionId}:${index}`, ...(exchangeId === undefined ? {} : { exchangeId }), senderName: item.source.senderName ?? '', text: text.length > QUEUE_PREVIEW_MAX ? `${text.slice(0, QUEUE_PREVIEW_MAX)}…` : text })
       }
+    }
+    if (rows.length > 0) {
+      const msgSet = new Set(rows.filter(item => !item.unavailable).slice(-QUEUE_VIEW_CAP))
+      result[bot.id] = rows.filter(item => item.unavailable || msgSet.has(item))
     }
   }
   return result
@@ -140,7 +164,7 @@ export function roomPostQueueView(rooms, sessionOfRoom, getAgent) {
         rows.push({ id: item.id ?? exchangeId ?? `${sessionId}:${index}`, sessionId, ...(typeof item.id === 'string' && item.id !== '' ? { messageId: item.id } : {}), ...(exchangeId ? { exchangeId } : {}), senderName: item.source.senderName ?? '', text: text.length > QUEUE_PREVIEW_MAX ? `${text.slice(0, QUEUE_PREVIEW_MAX)}…` : text, attachments: content.filter(block => block?.type === 'image' || block?.type === 'file').length })
       }
     }
-    result[room.id] = { rows, unavailable }
+    result[room.id] = { rows: rows.slice(-QUEUE_VIEW_CAP), unavailable }
   }
   return result
 }

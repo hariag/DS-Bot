@@ -564,11 +564,12 @@ test('closing a session releases its download wait and cancels later events', as
   const clicked = deferred()
   const { session, primary, files } = await fixture(t, { click: () => { clicked.resolve() } })
   const running = session.click('e1')
+  const settled = running.catch(() => {})
   await clicked.promise
   await session.close()
   const incoming = download()
   primary.emit('download', incoming)
-  await running.catch(() => {})
+  await settled
   assert.equal(incoming.saved, 0)
   assert.equal(incoming.canceled, 1)
   assert.deepEqual(await files(), [])

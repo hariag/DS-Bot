@@ -78,10 +78,47 @@ const SHOWN_ONLY = new Set(['working', 'approval'])
 const memberLine = record => record !== undefined && !SHOWN_ONLY.has(record.kind)
 
 // A member's own lines are already in its Session, so only the others' are news.
-const unseenLines = (room, memberId) => {
-  const since = room.seen[memberId]
+const unseenLines = (room, memberId, fromSeq) => {
+  const seen = room.seen[memberId]
+  const since = Number.isSafeInteger(fromSeq) ? (seen === undefined ? fromSeq : Math.min(seen, fromSeq)) : seen
   if (since === undefined) return room.log.slice(-ROOM_FIRST_LOOK)
   return room.log.filter(line => line.seq > since && line.botId !== memberId).slice(-ROOM_DELTA_MAX)
+}
+
+const isCoalescableRoomMessage = (message, roomId) =>
+  message?.source?.kind === SOURCE_KIND
+  && message.source.role === 'room'
+  && message.source.roomId === roomId
+  && !message.source.reviewId
+  && !message.source.reviewInspect
+  && !message.source.reviewReceipt
+  && !message.source.groupKickoff
+  && !message.source.resumed
+
+const removeCoalescedRoomMessages = (agent, roomId, rt) => {
+  const inbox = agent?.inbox
+  if (!inbox) return []
+  const removed = []
+  for (const [target, list] of [['next-step', inbox.nextStep], ['next-turn', inbox.nextTurn]]) {
+    if (!Array.isArray(list) || list.length === 0) continue
+    const matches = list.filter(message => isCoalescableRoomMessage(message, roomId))
+    if (matches.length === 0) continue
+    if (typeof inbox.splice === 'function' && matches.length === list.length) {
+      for (const message of inbox.splice(target, 0, list.length, [])) {
+        removed.push(message)
+        if (message?.source?.exchangeId) rt.forgetDelivery?.(message.source.exchangeId)
+      }
+      continue
+    }
+    if (typeof inbox.remove !== 'function') continue
+    for (const message of matches) {
+      if (inbox.remove(message.id) === true) {
+        removed.push(message)
+        if (message?.source?.exchangeId) rt.forgetDelivery?.(message.source.exchangeId)
+      }
+    }
+  }
+  return removed
 }
 
 // A notice keeps its fields, not a finished sentence: the line members read is written
@@ -187,6 +224,7 @@ const slotLabel = (slot, self) => {
 const adminNote = room => [
   'You are this group\'s admin.',
   room.mode === 'admin' ? 'Plain messages come to you first: answer them, or call the members who should answer with @Name.' : '',
+  'Track this group\'s shared task board: keep each open item\'s owner, status, blocker, evidence, and next step current, and coordinate the group until its goal is complete.',
   '"@all" calls every member. When the user asks, change the group with update_group.',
   'When the user wants this group to reach a goal, set it with group_goal: align with the user first (goal-grill skill), then start it.',
 ].filter(Boolean).join(' ')
@@ -422,6 +460,8 @@ export function roomBusyForPatrol(rt, room, ignoreMessageId, openingSessionId) {
 
 export function install(rt) {
   const { ctx } = rt
+  rt.roomBusyForPatrol = (room, ignoreMessageId, openingSessionId) =>
+    roomBusyForPatrol(rt, room, ignoreMessageId, openingSessionId)
 
   // Everything said in a group is in the group's book of the ledger (ledger.js), whole,
   // before anything reads it. The room's own log in state.json keeps the latest lines,
@@ -896,12 +936,12 @@ export function install(rt) {
   // `finished` is what a batch woke the member for (finishedLines): its result lines, the
   // ones the prompt does not show anyway coming after the earlier lines, and the members
   // that finished without a closing message.
-  function roomPrompt(room, member, round, slot, finished = { results: [], quiet: [] }) {
+  function roomPrompt(room, member, round, slot, finished = { results: [], quiet: [] }, fromSeq) {
     const { results, quiet } = finished
     const peers = room.members.filter(id => id !== member.id).map(rt.botOf).filter(Boolean)
       .map(bot => `${bot.name}${rt.isAdminOf(room, bot.id) ? ' (admin)' : ''}`)
     const leads = rt.isAdminOf(room, member.id)
-    const lines = unseenLines(room, member.id)
+    const lines = unseenLines(room, member.id, fromSeq)
     const earlier = lines.filter(line => line.seq < round.startSeq).slice(-ROOM_EARLIER_MAX)
     const current = lines.filter(line => line.seq >= round.startSeq)
     const owed = results.filter(result => ![...earlier, ...current].some(line => line.seq === result.seq))
@@ -1190,7 +1230,7 @@ export function install(rt) {
   // called it, which answers what the turn posts after the round moved on. What the
   // member writes before its last step is posted at once and collected in `said`, and
   // `heard` takes each such line once it is posted.
-  async function roomTurn(room, member, sessionId, { text, images = [], files = [] }, note, signal, round, by, said = [], heard = () => {}, onWork = () => {}) {
+  async function roomTurn(room, member, sessionId, { text, images = [], files = [] }, note, signal, round, by, said = [], heard = () => {}, onWork = () => {}, roomFromSeq) {
     if (signal.aborted) return null
     const startedAt = Date.now()
     const exchangeId = randomUUID()
@@ -1231,7 +1271,11 @@ export function install(rt) {
       signal.addEventListener('abort', () => finish(null), { once: true })
     })
     try {
-      await rt.deliver({ fromId: undefined, toId: member.id, sessionId, role: 'room', roomId: room.id, exchangeId, note, text, images, files, steer: busy, ...(by ? { askedBy: by } : {}) })
+      await rt.deliver({
+        fromId: undefined, toId: member.id, sessionId, role: 'room', roomId: room.id,
+        ...(Number.isSafeInteger(roomFromSeq) ? { roomFromSeq } : {}),
+        exchangeId, note, text, images, files, steer: busy, ...(by ? { askedBy: by } : {}),
+      })
       // The prompt reached the member: its read position moves on.
       room.seen[member.id] = seenAt
       // Still held by an earlier request: this turn cannot start until the user answers.
@@ -1553,7 +1597,52 @@ export function install(rt) {
       dropMemberFromBatch(room, member.id)
       return
     }
-    const prompt = roomPrompt(room, member, round, slot, await finishedLines(room, slot))
+    const finished = await finishedLines(room, slot)
+    let fromSeq = room.seen[member.id]
+    let effectiveBy = slot.by
+    const carriedImages = []
+    const carriedFiles = []
+    if (!round.kickoff && !round.goalReviewId && !round.goalInspectOnly) {
+      const targetAgent = ctx.get?.('agents')?.get?.(session.id) ?? await rt.resolveAgent?.(session.id).catch(() => undefined)
+      if (signal.aborted) {
+        slot.status = 'stopped'
+        return
+      }
+      const removed = removeCoalescedRoomMessages(targetAgent, room.id, rt)
+      if (removed.length > 0) {
+        const seqs = removed.map(message => message?.source?.roomFromSeq).filter(Number.isSafeInteger)
+        if (seqs.length > 0) {
+          const minRemoved = Math.min(...seqs)
+          fromSeq = fromSeq === undefined ? minRemoved : Math.min(fromSeq, minRemoved)
+        }
+        if (effectiveBy === undefined) {
+          effectiveBy = removed.findLast(message => typeof message?.source?.askedBy === 'string' && message.source.askedBy !== '')?.source?.askedBy
+        }
+        for (const message of removed) {
+          for (const block of Array.isArray(message?.content) ? message.content : []) {
+            if (block?.type === 'image' && block.attachment !== undefined) carriedImages.push(block.attachment)
+            else if (block?.type === 'file' && block.attachment !== undefined) carriedFiles.push(block.attachment)
+          }
+        }
+      }
+    }
+    const prompt = roomPrompt(room, member, round, slot, finished, fromSeq)
+    const initialFromSeq = Number.isSafeInteger(fromSeq)
+      ? fromSeq
+      : Math.max(0, (room.log.slice(-ROOM_FIRST_LOOK)[0]?.seq ?? 1) - 1)
+    const dedupeAttachments = (first, second) => {
+      const seen = new Set()
+      const out = []
+      for (const item of [...first, ...second]) {
+        const key = item?.attachmentId ?? item?.url ?? item?.path ?? JSON.stringify(item)
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push(item)
+      }
+      return out
+    }
+    const images = carriedImages.length > 0 ? dedupeAttachments(carriedImages, prompt.images) : prompt.images
+    const files = carriedFiles.length > 0 ? dedupeAttachments(carriedFiles, prompt.files) : prompt.files
     round.shown?.push(member.id)
     const text = session.brief === undefined ? prompt.text : `${session.brief}\n\n${prompt.text}`
     const said = []
@@ -1564,7 +1653,7 @@ export function install(rt) {
     let worked = false
     // A step answers a Bot when a Bot called it: by name, or the round a Bot's own post
     // opened (#853).
-    const answeredBot = slot.by !== undefined || slot.fromBot === true
+    const answeredBot = effectiveBy !== undefined || slot.fromBot === true
     const onWork = () => {
       worked = true
       slot.worked = true
@@ -1572,12 +1661,13 @@ export function install(rt) {
       markSlotWorked(room.id, slot)
     }
     const reply = await roomTurn(
-      room, member, session.id, { text, images: prompt.images, files: prompt.files }, slot.note ?? 'your turn', signal, round, slot.by, said,
+      room, member, session.id, { text, images, files }, slot.note ?? 'your turn', signal, round, effectiveBy, said,
       (line) => {
         posted.push(room.seq)
         callFrom(room, round, member, line, called, { worked, byBot: answeredBot })
       },
       onWork,
+      initialFromSeq,
     )
     const final = typeof reply === 'string' && !isPass(reply) ? reply : undefined
     // Tool-only turns can finish without assistant text; their changes still belong here.
@@ -1670,6 +1760,7 @@ export function install(rt) {
   // One round runs in a group at a time; what comes in meanwhile joins it (joinRound) or
   // waits for the next one (laterPosts).
   const laterPosts = new Map()
+  rt.roomLaterCount = roomId => laterPosts.get(roomId)?.length ?? 0
   // Groups whose round has ended but still finishes (goal check, save, reports): the group
   // stays taken until it hands what waits on to the next round, so no second round starts.
   const finalizing = new Set()

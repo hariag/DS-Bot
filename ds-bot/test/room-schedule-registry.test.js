@@ -45,6 +45,7 @@ test('native room schedules follow the actual room, preserve independent timing 
   assert.equal(dev.target.sessionId,'dev-part');assert.equal(ui.status,'active')
   assert.match(ui.prompt,/A live turn, queued message, chat activity/)
   assert.match(ui.prompt,/For blockers that require a user decision, the group administrator reports/)
+  assert.match(ui.prompt,/At each scheduled check, review every open item on the group’s shared task board/)
   assert.match(ui.prompt,/plain-text @Name/)
   assert.match(ui.prompt,/feedback deadline/)
   assert.match(ui.prompt,/do not say only “waiting”/)
@@ -112,6 +113,28 @@ test('upgrade the 0.3.9 default room prompt and keep its appended custom instruc
     'Identify the highest-priority unfinished task, its exact owner, the next action or evidence, and who can clear any blocker. Follow up in the group using a plain-text @Name for the one person who must act; never put the mention in backticks, code, or a link, and never use @all. Include the task ID, requested action/evidence, feedback deadline, and next check. Make at most one effective follow-up per owner for the same task in this cycle and record progress on the original board item.',
     'For an uncertain handoff, inspect its original receipt and ask the known recipient only to confirm receipt and current status; explicitly do not repeat or restart the work. Do not send another assignment or change its request ID to bypass uncertainty.',
     'Do not repeat a follow-up while its stated deadline is still open. Use that time for independent authorized work and record the next check. If a deadline is missed or two scheduled checks pass without confirmation, escalate with a plain-text @Name to the specific authorized person who can unblock or decide; do not leave an ownerless or open-ended wait.',
+    'If a shared lock is held, verify the current holder, ask that person to finish/report/release, and do not dispatch conflicting work. Once the lock is verified idle, continue the queued task. Honor an explicit user pause or stop and never mark reported work done without acceptance evidence.',
+  ].join(' ') + ' [DS-Bot room timer ' + token + ']'
+  const custom=' Keep the signed release milestone.'
+  row.prompt=previous+custom
+  await mgr.refresh();await mgr.reconcile()
+  assert.equal(row.prompt,nextDefault+custom)
+})
+
+test('upgrade the current room prompt with shared todo tracking and keep custom instructions',async t=>{
+  const {rt,rows,start}=setup({ui:room});const mgr=start();t.after(()=>rt.close())
+  await mgr.reconcile()
+  const [row]=rows.values(), nextDefault=row.prompt
+  const token=nextDefault.match(/\[DS-Bot room timer ([^\]]+)\]/)?.[1]
+  assert.ok(token)
+  const previous=[
+    'Every 10 minutes, inspect this group’s active goal and original task board.',
+    'Count progress only when the goal stage or task status/evidence changes, or the assigned owner provides verifiable evidence before an open deadline. A live turn, queued message, chat activity, accepted handoff, or “working” label alone is not proof that work progressed.',
+    'If the goal is active and incomplete and there is no verified progress, take a concrete authorized step now even if the group has an active conversation or live turn; do not say only “waiting” or reply [PASS] because a task is blocked.',
+    'Identify the highest-priority unfinished task, its exact owner, the next action or evidence, and who can clear any blocker. Follow up in the group using a plain-text @Name for the one person who must act; never put the mention in backticks, code, or a link, and never use @all. Include the task ID, requested action/evidence, feedback deadline, and next check. Make at most one effective follow-up per owner for the same task in this cycle and record progress on the original board item.',
+    'For an uncertain handoff, inspect its original receipt and ask the known recipient only to confirm receipt and current status; explicitly do not repeat or restart the work. Do not send another assignment or change its request ID to bypass uncertainty.',
+    'Do not repeat a follow-up while its stated deadline is still open. Use that time for independent authorized work and record the next check. If a deadline is missed or two scheduled checks pass without confirmation, escalate with a plain-text @Name to the specific authorized person who can unblock or decide; do not leave an ownerless or open-ended wait.',
+    'For blockers that require a user decision, the group administrator reports the exact decision needed to the user and records the blocker and next check. For blockers within the group’s authority, the administrator coordinates owners and dependencies until the work moves; record the outcome on the original board item.',
     'If a shared lock is held, verify the current holder, ask that person to finish/report/release, and do not dispatch conflicting work. Once the lock is verified idle, continue the queued task. Honor an explicit user pause or stop and never mark reported work done without acceptance evidence.',
   ].join(' ') + ' [DS-Bot room timer ' + token + ']'
   const custom=' Keep the signed release milestone.'

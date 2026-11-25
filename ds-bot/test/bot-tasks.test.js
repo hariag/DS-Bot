@@ -36,7 +36,7 @@ const makeTeam = (over = {}) => ({
   revision: 0,
 })
 
-async function startEnv({ team = makeTeam(), forkImpl, jobsList = () => [], approvalOutcome = 'allowed-once', services = {} } = {}) {
+async function startEnv({ team = makeTeam(), forkImpl, jobsList = () => [], approvalOutcome = 'allowed-once', services = {}, onFreshSessionIdle } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-tasks-'))
   const workDir = join(home, 'team')
   mkdirSync(workDir, { recursive: true })
@@ -72,6 +72,7 @@ async function startEnv({ team = makeTeam(), forkImpl, jobsList = () => [], appr
   const createdSessions = []
   const forkedCalls = []
   const archivedSessions = []
+  let emit
   let seqId = 0
 
   const makeAgent = (id, cwd = workDir) => {
@@ -106,6 +107,9 @@ async function startEnv({ team = makeTeam(), forkImpl, jobsList = () => [], appr
       },
       inject: (msg) => { followups.push(msg) },
       cancel: (cause) => cancelled.push(cause),
+      whenIdle: async () => {
+        if (id.startsWith('ses-')) await onFreshSessionIdle?.({ id, agent, emit })
+      },
       followups,
       steers,
       cancelled,
@@ -169,7 +173,7 @@ async function startEnv({ team = makeTeam(), forkImpl, jobsList = () => [], appr
     const res = await apiRoute.fetch({ json: async () => ({ endpoint, payload }) })
     return res.json()
   }
-  const emit = async (sessionId, type, data = {}) => {
+  emit = async (sessionId, type, data = {}) => {
     const agent = agentMap.get(sessionId) ?? makeAgent(sessionId)
     const event = { type, seq: agent.session.events.length + 1, data }
     agent.session.events.push(event)
@@ -240,6 +244,34 @@ test('first-turn fork-unavailable falls back to fresh session with recent chat c
   assert.match(out, /in a fresh session with recent summary/)
   assert.equal(env.createdSessions.length, 1)
   assert.match(env.deliveries[0].text, /Please check repo status/)
+})
+
+test('fresh task waits for its setup turn before admitting the task prompt', async (t) => {
+  let setupTurnRan = false
+  const env = await startEnv({
+    forkImpl: async () => { throw Object.assign(new Error('session has no completed turn to fork from'), { code: 'session/fork-unavailable' }) },
+    onFreshSessionIdle: async ({ id, emit }) => {
+      setupTurnRan = true
+      await emit(id, 'turn/start', { turn: 1 })
+      await emit(id, 'assistant/message', { turn: 1, message: { role: 'assistant', content: [{ type: 'text', text: 'stale setup reply' }] } })
+      await emit(id, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+    },
+  })
+  t.after(env.stop)
+
+  await env.tool('task_start').execute({ title: 'Fresh task', brief: 'Do the assigned work' }, execOf(env.agentMap.get('dm-a')))
+  const task = env.rt.botOf('a').tasks.at(-1)
+  assert.equal(setupTurnRan, true)
+  assert.equal(task.status, 'running')
+  assert.equal(task.summary, undefined)
+  assert.equal(env.deliveries.filter(item => item.role === 'task-report').length, 0)
+  assert.equal(env.deliveries.find(item => item.role === 'task')?.sessionId, task.sessionId)
+
+  await env.emit(task.sessionId, 'turn/start', { turn: 2 })
+  await env.emit(task.sessionId, 'assistant/message', { turn: 2, message: { role: 'assistant', content: [{ type: 'text', text: 'actual task result' }] } })
+  await env.emit(task.sessionId, 'turn/end', { turn: 2, reason: { kind: 'completed' } })
+  await waitFor(() => task.status === 'completed')
+  assert.equal(task.summary, 'actual task result')
 })
 
 test('turn/end state machine ignores disposed, switched/blocked, HANDOFF_ACK, running jobs, and open outgoing works', async (t) => {

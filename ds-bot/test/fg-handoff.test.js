@@ -811,3 +811,26 @@ test('fg-handoff snapshots inheritedSegments so foreground rollover never shifts
   bot.segments = []
   assert.deepEqual(env.rt.partsOfThread('a', 'dm-a').map(p => p.sessionId), ['dm-a-p1', 'dm-a'])
 })
+
+test('fg-handoff slims inheritedSegments while resolving notes by sessionId indirection', async (t) => {
+  const env = await startEnv({
+    team: makeTeam({
+      bots: {
+        a: { id: 'a', name: 'Chief', role: 'Boss', sessionId: 'dm-a', segments: [{ sessionId: 'dm-a-p1', endedAt: 10, tokens: 500, note: 'handoff-summary-from-p1' }], createdAt: 1 },
+      },
+    }),
+  })
+  t.after(env.stop)
+
+  env.agentMap.get('dm-a').status = 'running'
+  await env.emit('dm-a', 'turn/start', { turn: 1 })
+  await env.emit('dm-a', 'tool/call', { callId: 'tc1', name: 'bash', arguments: '{}' })
+  await env.rt.sendUser({ sessionId: 'dm-a', content: [{ type: 'text', text: 'New fg work' }] })
+
+  const bot = env.rt.botOf('a')
+  assert.equal(bot.tasks.length, 1)
+  assert.equal('note' in bot.tasks[0].inheritedSegments[0], false, 'stored inheritedSegments omits duplicated note')
+  const parts = env.rt.partsOfThread('a', 'dm-a')
+  assert.equal(parts[0].sessionId, 'dm-a-p1')
+  assert.equal(parts[0].note, 'handoff-summary-from-p1', 'partsOfThread resolves canonical note by sessionId')
+})
