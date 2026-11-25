@@ -21,7 +21,7 @@ function configOf(value) {
   return { repository, branch, ownerBotId, initialCursor }
 }
 
-const isPatrol = file => typeof file === 'string' && file.startsWith('team/patrol/')
+const isPatrol = file => typeof file === 'string' && (file.startsWith('project/patrol/') || file.startsWith('team/patrol/'))
 export function classifyFiles(files) {
   if (!Array.isArray(files) || files.length === 0) return 'unknown'
   for (const file of files) {

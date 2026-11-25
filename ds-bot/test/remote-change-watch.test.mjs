@@ -27,10 +27,16 @@ function fixture({filesB=[{filename:'team/patrol/cursor.json'}],filesC=[{filenam
 
 test('filter only patrol-only files, including rename origins',()=>{
   assert.equal(classifyFiles([{filename:'team/patrol/a'}]),'patrol-only')
+  assert.equal(classifyFiles([{filename:'project/patrol/a'}]),'patrol-only')
+  assert.equal(classifyFiles([{filename:'team/patrol/a'},{filename:'project/patrol/b'}]),'patrol-only')
   assert.equal(classifyFiles([{filename:'team/patrol/a'},{filename:'Ground/web/x'}]),'relevant')
+  assert.equal(classifyFiles([{filename:'project/patrol/a'},{filename:'Ground/web/x'}]),'relevant')
   assert.equal(classifyFiles([{filename:'team/patrol/a',status:'renamed',previous_filename:'Ground/web/x'}]),'relevant')
+  assert.equal(classifyFiles([{filename:'project/patrol/a',status:'renamed',previous_filename:'Ground/web/x'}]),'relevant')
   assert.equal(classifyFiles([{filename:'Ground/web/x',status:'renamed',previous_filename:'team/patrol/a'}]),'relevant')
+  assert.equal(classifyFiles([{filename:'Ground/web/x',status:'renamed',previous_filename:'project/patrol/a'}]),'relevant')
   assert.equal(classifyFiles([{filename:'team/patrol/a',status:'renamed'}]),'unknown')
+  assert.equal(classifyFiles([{filename:'project/patrol/a',status:'renamed'}]),'unknown')
   assert.equal(classifyFiles([]),'unknown')
 })
 
