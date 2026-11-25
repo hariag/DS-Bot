@@ -62,6 +62,7 @@ const TEAM_RULES_ZH = [
   '- [Checkpoint N] 是本会话摘要，[Handoff · part N] 是新分段的交接。精确路径、数字、完整清单或原话应通过 read_own_chat 按词或 part 查证，用返回的锚点作 around 读取上下文。',
   `- 解释或修改 DS Bot 设置前读 ds-bot-manual 及相关章节。没有技能加载器时直接读取 ${JSON.stringify(join(manualDirectory(), 'SKILL.md'))} 和其中链接的资料；遵守用户专属操作及审批要求。`,
   '- 保持 team/ 仅用于跨项目可复用的通用提示词、规则与模板：严禁向 team/ 写入具体项目的约束、台账、主机/环境配置、任务记录或事故详情，项目专属内容一律写入 project/ 或其他项目目录。',
+  '- 规则优先级：若角色指令或项目规范（如 AGENTS.md、team/RULES.md）对语言、格式、单条交付结构、分支流程或审批提出更严格要求，以更严格规则为准。',
 ].join('\n')
 
 const MAIN_RULES_ZH = [

@@ -4,11 +4,21 @@ export const PERSONAL_POLL_SECONDS = 30 * 60
 export const PERSONAL_SCHEDULE_TITLE = 'DSBOT-PERSONAL/user'
 const timing = { kind: 'every', every_seconds: PERSONAL_POLL_SECONDS }
 const marker = token => '[DS-Bot personal board timer ' + token + ']'
-const promptOf = token => [
+const previousPromptOf = token => [
   `主机器人每 ${PERSONAL_POLL_SECONDS / 60} 分钟回看一次用户个人任务看板（board_task list/show，涵盖 personal:user 及指派给用户的待办或待验收项）。用简体中文沟通与记录，文本采用 UTF-8，时间用北京时间 CST（Asia/Shanghai，UTC+08:00）。`,
   '核对每张未结卡的编号唯一性、负责人、状态、阻碍、子任务与父任务联动状态及截止时间；未在看板注册的任务不得推进，完成前必须同步最新状态回原卡。',
   '对已分派给机器人且条件齐全的任务，通过 message_bot 推动责任人执行或独立验收并在原卡 board_task comment 留痕；对受阻、逾期或需要用户本人确认与决断的卡片，按优先级汇总清单（任务编号、状态、待决点与建议选项）提醒用户推进。无未结事项或无新增变化时静默结束。',
 ].join('\n') + ' ' + marker(token)
+const promptOf = token => [
+  `主机器人每 ${PERSONAL_POLL_SECONDS / 60} 分钟回看一次用户个人任务看板（board_task list/show，涵盖 personal:user 及指派给用户的待办或待验收项）。用简体中文沟通与记录，文本采用 UTF-8，时间用北京时间 CST（Asia/Shanghai，UTC+08:00）。`,
+  '核对每张未结卡的编号唯一性、负责人、状态、阻碍、子任务与父任务联动状态及截止时间；未用 board_task register 在看板立卡的任务不得推进，完成前必须同步最新状态回原卡。',
+  '对已分派给机器人且条件齐全的任务，用稳定 request_id 通过 message_bot 推动责任人执行或独立验收并在原卡 board_task comment 留痕；交接不明时用 board_task operation 或原回执核实，不重派、不换 request_id。对受阻、逾期或需要用户本人确认与决断的卡片，按优先级汇总清单（任务编号、状态、待决点与建议选项）提醒用户推进。无未结事项或无新增变化时静默结束。',
+].join('\n') + ' ' + marker(token)
+const currentPrompt = (prompt, token) => {
+  if (typeof prompt !== 'string') return prompt
+  const previous = previousPromptOf(token)
+  return prompt.startsWith(previous) ? promptOf(token) + prompt.slice(previous.length) : prompt
+}
 
 const bearsMarker = (row, binding) => row?.prompt?.includes(marker(binding.token)) === true
 const sessionOf = row => row?.target?.kind === 'session' ? row.target.sessionId : undefined
@@ -178,7 +188,7 @@ export function createPersonalBoardSchedule(rt, service) {
     if (row.title !== PERSONAL_SCHEDULE_TITLE) patch.title = PERSONAL_SCHEDULE_TITLE
     if (sessionOf(row) !== target) patch.target = { kind: 'session', sessionId: target }
     if (row.kind !== 'every' || row.everySeconds !== PERSONAL_POLL_SECONDS) patch.timing = timing
-    const desiredPrompt = binding.restorePrompt ?? row.prompt
+    const desiredPrompt = currentPrompt(binding.restorePrompt ?? row.prompt, binding.token)
     if (desiredPrompt !== row.prompt) patch.prompt = desiredPrompt
     if (binding.restorePaused && row.status !== 'paused') patch.active = false
     else if (row.status === 'ended') patch.active = !binding.paused
@@ -187,6 +197,7 @@ export function createPersonalBoardSchedule(rt, service) {
       const changed = (await refresh()).find(r => r.id === binding.id)
       if (!changed || sessionOf(changed) !== target || changed.title !== PERSONAL_SCHEDULE_TITLE
         || changed.kind !== 'every' || changed.everySeconds !== PERSONAL_POLL_SECONDS || changed.status === 'ended'
+        || (patch.prompt !== undefined && changed.prompt !== desiredPrompt)
         || (binding.restorePaused && changed.status !== 'paused')) fail('Personal board schedule update could not be confirmed')
       row = changed
     }

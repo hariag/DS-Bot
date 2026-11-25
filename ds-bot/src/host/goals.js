@@ -677,7 +677,7 @@ const inspectionTools = scoped => `Inspection limits: allowed tools are read, gl
 const SCOPED_INSPECTION_DUTY = 'First call group_goal show for this group and read its original board items with board_task list/show using the exact room_id. Earlier deliveries have unresolved outcomes for specific owners; never repeat or redispatch that work. For every other current owner, inspect status, evidence, dependencies and capacity and record review-check for the exact task and current fingerprint. If the active goal is incomplete and this group is idle, take concrete authorized steps this cycle: read evidence for reported work; assign each uniquely owned, ready pending task with message_bot when="queue", full task text and request_id "goal-review:<reviewId>:<taskId>:assign"; or request exact missing evidence from each unblocked reported owner after recording review-check, using its review_next and request_id "goal-review:<reviewId>:<taskId>:evidence" with when="now". For each earlier delivery to a uniquely identifiable owner that is unresolved, call group_goal review-follow-up once with the exact task ID and fingerprint from show. Different tasks may be followed in the same review; do not stop after the first owner or duplicate a task. Each status-only group reply must put the exact plain-text @Name outside backticks, code blocks and Markdown links, with task ID, receipt/status question and deadline; explicitly do not repeat the original work. Never use @all. Respect dependencies; do not repeat a follow-up before its deadline; after the recorded deadline, escalate once to the linked board reviewer or record that the user needs to name a reviewer. Never use a new request ID to retry an uncertain assignment. Do not change task status or pass a stage from this inspection. A goal panel is not proof of acceptance or completion; unknown facts remain unknown.'
 const RESUME_LINE = 'The user resumed the goal. Take the next step now.'
 
-export const goalReviewGuard = (live, roomOf = () => undefined, pickRoom = () => undefined, scoped = () => false) => exec => {
+export const goalReviewGuard = (live, roomOf = () => undefined, pickRoom = () => undefined, scoped = () => false, botOf = () => undefined) => exec => {
   const info = live?.get(exec.agent?.id)?.info
   if (info?.reviewInspect !== true || !info.reviewId) return undefined
   if (exec.name === 'list_bots' || (exec.name === 'group_goal' && exec.arguments?.action === 'show')) return undefined
@@ -690,6 +690,9 @@ export const goalReviewGuard = (live, roomOf = () => undefined, pickRoom = () =>
   if (exec.name === 'read_group_chat' && room && typeof exec.arguments?.group === 'string'
     && exec.arguments.group.trim() === room.name && pickRoom(exec.arguments.group, exec.agent?.id)?.room?.id === room.id) return undefined
   if (room && scoped(room, info, exec) === true) return undefined
+  if (chineseRolePrompt(botOf(exec.agent?.id)?.instructions)) {
+    return '本操作已被拦截：当前回合仅限交付巡检。当前允许的工具：read、glob、grep、本群的 read_group_chat、group_goal show/review-check/review-follow-up，以及本群的 board_task list/show。请勿重试此操作或其他被拒绝的动作；请基于已有证据与明确的下一位责任人完成本轮汇报。'
+  }
   return 'This action is blocked: this turn is a delivery inspection. Allowed now: read, glob, grep, read_group_chat for this group, group_goal show/review-check/review-follow-up, and board_task list/show for this room. Do not retry this or any other refused action; finish with the evidence you have and the exact next owner.'
 }
 
@@ -1448,11 +1451,12 @@ export function install(rt) {
 
   // When same-room recovery notes have unknown provenance, let the admin
   // inspect and report, but do not permit tools with possible side effects.
+  const reviewBot = sessionId => rt.botOf(rt.selfOf(sessionId))
   ctx.tools.guard(exec => {
     const info = rt.live.get(exec.agent?.id)?.info
     if (info?.reviewReceipt === true) {
       if (!info.reviewId || info.reviewInspect !== true) return 'This status question is not bound to a review.'
-      return goalReviewGuard(rt.live, rt.roomOf, (name, agentId) => rt.pickRoom(name, rt.selfOf(agentId)))(exec)
+      return goalReviewGuard(rt.live, rt.roomOf, (name, agentId) => rt.pickRoom(name, rt.selfOf(agentId)), undefined, reviewBot)(exec)
     }
     if (info?.reviewId && !goalReviewAllowed(rt.roomOf(info.roomId), info.reviewId)) {
       const room = rt.roomOf(info.roomId)
@@ -1467,7 +1471,7 @@ export function install(rt) {
       if (exec.name === 'list_bots' || (exec.name === 'group_goal' && exec.arguments?.action === 'show')) return undefined
       return 'The goal review was stopped or its identity changed; no further action is allowed.'
     }
-    return goalReviewGuard(rt.live, rt.roomOf, (name, agentId) => rt.pickRoom(name, rt.selfOf(agentId)), scopedReviewAction)(exec)
+    return goalReviewGuard(rt.live, rt.roomOf, (name, agentId) => rt.pickRoom(name, rt.selfOf(agentId)), scopedReviewAction, reviewBot)(exec)
   })
 
   async function goalReviewBind(room, id, sessionId) {
