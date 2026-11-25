@@ -43,6 +43,14 @@ test('personal board schedule binds to active Main Bot, tracks part moves and pr
   }
   const mgr = createPersonalBoardSchedule(rt, () => host)
   t.after(async () => { for (const fn of drains) await fn() })
+  rt.state.bots.pm.kickoff = { text: 'first greeting' }
+  await mgr.reconcile()
+  assert.equal(rows.size, 0)
+  delete rt.state.bots.pm.kickoff
+  rt.greetingOut = () => true
+  await mgr.reconcile()
+  assert.equal(rows.size, 0)
+  rt.greetingOut = () => false
   await mgr.reconcile()
   assert.equal(rows.size, 1)
   const [row] = rows.values()
@@ -57,9 +65,20 @@ test('personal board schedule binds to active Main Bot, tracks part moves and pr
   await mgr.reconcile()
   assert.equal(row.target.sessionId, 'chat-pm-2')
   row.status = 'paused'
+  row.prompt = [
+    '主机器人每 30 分钟回看一次用户个人任务看板（board_task list/show，涵盖 personal:user 及指派给用户的待办或待验收项）。用简体中文沟通与记录，文本采用 UTF-8，时间用北京时间 CST（Asia/Shanghai，UTC+08:00）。',
+    '核对每张未结卡的编号唯一性、负责人、状态、阻碍、子任务与父任务联动状态及截止时间；未在看板注册的任务不得推进，完成前必须同步最新状态回原卡。',
+    '对已分派给机器人且条件齐全的任务，通过 message_bot 推动责任人执行或独立验收并在原卡 board_task comment 留痕；对受阻、逾期或需要用户本人确认与决断的卡片，按优先级汇总清单（任务编号、状态、待决点与建议选项）提醒用户推进。无未结事项或无新增变化时静默结束。',
+  ].join('\n') + ` [DS-Bot personal board timer ${rt.state.personalBoardSchedule.token}]\n自定义说明`
   await mgr.reconcile()
   assert.equal(row.status, 'paused')
   assert.equal(rt.state.personalBoardSchedule.paused, true)
+  assert.equal(rt.state.personalBoardSchedule.id, row.id)
+  assert.match(row.prompt, /稳定 request_id/)
+  assert.ok(row.prompt.endsWith('\n自定义说明'))
+  const updated = row.updatedAt
+  await mgr.reconcile()
+  assert.equal(row.updatedAt, updated)
 
   rt.state.mainBotIds = []
   await mgr.reconcile()
@@ -95,6 +114,14 @@ test('schedules hook skips DSBOT-PERSONAL/user tick when personal board has no o
   }
   installSchedules(rt)
   t.after(async () => { await Promise.all([...drains].map(fn => fn())); await ctx.dispose() })
+  const change = id => ({source:{kind:'schedule'}, content:[{type:'text',
+    text:`[SCHEDULE CHANGE]\nThis notice is not a delivery of the task and needs no action.\nschedule_id_json: ${JSON.stringify(id)}`}]})
+  const user = {source:{kind:'user'}, content:[{type:'text',text:'建群'}]}
+  const ordinaryChange = change('some-user-schedule')
+  const incoming = [user, change(row.id), ordinaryChange]
+  const [preStep] = ctx.listeners.get('agent/pre-step')
+  const decision = await preStep({agent:{id:'chat-main'}, messages:incoming}, async () => ({kind:'enter', messages:incoming}))
+  assert.deepEqual(decision.messages, [user, ordinaryChange])
   const agent = { followup: msg => delivered.push(msg), whenIdle: async () => {} }
   const reminder = {
     source: { kind: 'schedule' },

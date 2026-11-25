@@ -208,7 +208,7 @@ export const referenceNote = (references, zh = false) => (references?.length
   : '')
 
 const roomReply = zh => zh
-  ? '直接回复群聊，无需署名。需要行动时在同一步说明动作并调用首个工具，之后只报关键进展和结果。普通讨论无新增可回复 [PASS] 静默。'
+  ? '直接回复群聊，无需署名。需要用工具时，同一步简述动作并调用首个工具。发现阻塞时写明缺项和处理人。普通讨论无待处理事项且无新增信息时用 [PASS] 静默。'
   : 'Reply without a name prefix. For work, call the first tool alongside your opening note, report meaningful progress, and end with the result. In ordinary discussion, [PASS] stays silent when you have nothing to add.'
 const roomCalls = zh => zh
   ? '纯文本 @姓名 会立即唤醒成员；只引用名字时省略 @。同一条消息中的成员并行开始，有依赖时按顺序交接。收到自己派出的结果后接续。'
@@ -1255,8 +1255,10 @@ export function install(rt) {
   // `heard` takes each such line once it is posted.
   async function roomTurn(room, member, sessionId, { text, images = [], files = [] }, note, signal, round, by, said = [], heard = () => {}, onWork = () => {}, roomFromSeq) {
     if (signal.aborted) return null
-    const reviewId = rt.isAdminOf(room, member.id) ? round.goalReviewId : undefined
-    if (reviewId !== undefined && rt.goalReviewAllowed?.(room, reviewId) !== true) return null
+    const reviewId = round.goalReviewId
+    const currentReview = () => !signal.aborted && rt.isAdminOf(room, member.id)
+      && room.sessions?.[member.id] === sessionId && rt.goalReviewAllowed?.(room, reviewId) === true
+    if (reviewId && !currentReview()) return null
     const startedAt = Date.now()
     const exchangeId = randomUUID()
     const turn = { botId: member.id, sessionId, exchangeId }
@@ -1295,13 +1297,18 @@ export function install(rt) {
       rt.roomWaiters.set(exchangeId, { sessionId, botId: member.id, roomId: room.id, resolve: finish, fail: failure => finish({ failure }), touch, work, say, approval: () => finish({ approval: true }) })
       signal.addEventListener('abort', () => finish(null), { once: true })
     })
+    let reviewExpired = false
     try {
       await rt.deliver({
         fromId: undefined, toId: member.id, sessionId, role: 'room', roomId: room.id,
         ...(Number.isSafeInteger(roomFromSeq) ? { roomFromSeq } : {}),
         ...(reviewId ? { reviewId, reviewInspect: round.goalInspectOnly === true } : {}),
-        exchangeId, note, text, images, files, steer: busy, ...(by ? { askedBy: by } : {}),
-      })
+        exchangeId, note, text, images, files, steer: busy && !reviewId, ...(by ? { askedBy: by } : {}),
+      }, reviewId ? { beforeAdmission() {
+        if (currentReview()) return
+        reviewExpired = true
+        throw new Error('The goal review changed before delivery')
+      } } : undefined)
       // The prompt reached the member: its read position moves on.
       room.seen[member.id] = seenAt
       // Still held by an earlier request: this turn cannot start until the user answers.
@@ -1310,6 +1317,11 @@ export function install(rt) {
       // Still at earlier work: the call steers it at its next step; the round goes on.
       else if (busy) rt.roomWaiters.get(exchangeId)?.resolve({ working: true })
     } catch (error) {
+      if (reviewExpired) {
+        rt.roomWaiters.get(exchangeId)?.resolve(null)
+        started.splice(started.indexOf(turn), 1)
+        return null
+      }
       rt.warn('ds-bot: group delivery to %s failed: %s', member.name, error)
       // A delivery that failed is not a pass: the round shows it. Nothing here can
       // repair a lost Session, so the member's next turn in the group starts a new one.
@@ -1526,6 +1538,8 @@ export function install(rt) {
   // nobody: that step is what a group answering itself runs on. Once the room is paused
   // (or this step reaches the limit) the calls it would make wait for the user.
   function callFrom(room, round, member, text, called, { worked = false, byBot = false } = {}) {
+    // Status mentions in an inspection are not new assignments.
+    if (round.goalInspectOnly) return
     const everyone = room.members.map(rt.botOf).filter(Boolean)
     const others = everyone.filter(other => other.id !== member.id)
     const { all, found: named } = mentionsIn(text, everyone)
@@ -1621,6 +1635,11 @@ export function install(rt) {
     if (session === undefined) {
       slot.status = 'left'
       dropMemberFromBatch(room, member.id)
+      return
+    }
+    if (round.goalReviewId && (signal.aborted
+      || await rt.goalReviewBind?.(room, round.goalReviewId, session.id) !== true)) {
+      slot.status = 'stopped'
       return
     }
     const finished = await finishedLines(room, slot)
@@ -1905,6 +1924,7 @@ export function install(rt) {
         delete post.goalId
       }
     }
+    if (posts.length === 0) return
     // A post a running round already logged stays inside the round this relay opens.
     const startSeq = Math.min(room.seq + 1, ...posts.map(post => post.logged).filter(seq => typeof seq === 'number'))
     // The opening greeting is a cue for the admin, not a line of the group; a member's
@@ -1978,6 +1998,8 @@ export function install(rt) {
     const attempt = room.goal?.reviewAttempt
     const review = opener.goal === 'nudge' && opener.reviewId && rt.goalReviewAllowed?.(room, opener.reviewId) === true
       && admin?.id === attempt?.adminId ? attempt : undefined
+    // Never turn a stale inspection into an ordinary unrestricted nudge.
+    if (opener.reviewId && !review) return
     const round = {
       roomId: room.id,
       members: room.members,
@@ -2321,6 +2343,11 @@ export function install(rt) {
     const member = rt.botOf(owner?.botId)
     if (room === undefined || member === undefined || !room.members.includes(member.id)) return
     const text = stripOwnName(member.name, reply)
+    if (info.reviewInspect === true) {
+      if (!isPass(text)) await postToRoom(room, member, text, { late:true, quiet:true })
+        .catch(error => rt.warn('ds-bot: late inspection reply from %s failed: %s', member.name, error))
+      return
+    }
     if (rt.state.questions[sessionId] !== undefined || rt.state.views[sessionId] !== undefined) {
       if (!isPass(text)) {
         await postToRoom(room, member, text, { progress: true, quiet: true })
@@ -2403,7 +2430,7 @@ export function install(rt) {
   const callsIn = (room, member, text) => mentionsIn(text, room.members.map(rt.botOf).filter(Boolean)).found.some(bot => bot.id !== member.id)
   rt.callsRoomMember = (sessionId, info, raw) => {
     const { room, member } = memberIn(sessionId, info) ?? {}
-    return room !== undefined && member !== undefined && callsIn(room, member, stripOwnName(member.name, raw ?? ''))
+    return info?.reviewInspect !== true && room !== undefined && member !== undefined && callsIn(room, member, stripOwnName(member.name, raw ?? ''))
   }
 
   // What a member says while it works, into the group. While the member holds its place
@@ -2416,7 +2443,7 @@ export function install(rt) {
     const { room, member } = memberIn(sessionId, info) ?? {}
     if (room === undefined) return
     ensureRoomLog(room)
-    const calls = callsIn(room, member, text)
+    const calls = info?.reviewInspect !== true && callsIn(room, member, text)
     const running = [...rt.roomProgress.values()].find(round => round.roomId === room.id)
     if (!calls && running !== undefined) {
       postInRound(room, member, text)
@@ -2585,6 +2612,10 @@ export function install(rt) {
     const room = rt.roomOf(owner?.roomId ?? info.roomId)
     const member = rt.botOf(owner?.botId)
     if (room === undefined || member === undefined || !room.members.includes(member.id)) return
+    if (info.reviewInspect === true) {
+      noteFailure(room, member, failure)
+      return
+    }
     // The failed turn answers one call; without that call, every batch of the member ends.
     const owed = info.askedBy !== undefined ? [batchOf(room.id, member.id, info.askedBy)].filter(Boolean) : batchesOf(room.id, member.id)
     for (const batch of owed) leaveBatch(room, batch, member.id, { keep: true })

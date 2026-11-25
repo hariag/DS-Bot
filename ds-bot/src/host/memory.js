@@ -37,7 +37,8 @@ import { inside, pendingPath, read as readPending, record as pendingRecord, rela
 import { estimateTokens, splitRef, textOf, unquote } from './text.js'
 import { EMPTY_MAIN, GONE, DENIED, HEADING, MAIN, MEMORY_LIMITS, NO_MATCH, ROUTED, addLink, bodySize, cleanDay, cleanEntry, cleanTopic, entryId, fitWindow, formatEntry, insertEntry, isExpired, isPinned, joinLines, looksSecret, matchEntries, newEntryId, parseAsk, parseMemory, promptEntry, TEAM_SHARED, removeLink, splitMeta, squash, topicAbout, WINDOW_SHARE } from './memory-entries.js'
 import { entryWords, pickRecalled, rankEntries } from './memory-search.js'
-import { GROUP_HEADING, GROUP_MEMORY_SOURCE, MEMORY_RECALL_SOURCE, MEMORY_UPDATE_SOURCE, RECALL_HEADING, RECALL_NOTE, SUMMARY_SYSTEM, UPDATE_HEADING, UPDATE_NOTE, askRequest, askSystem, groupNote, groupSummaryRequest, memoryRules, summaryRequest, teamRule } from './memory-copy.js'
+import { GROUP_HEADING, GROUP_MEMORY_SOURCE, MEMORY_RECALL_SOURCE, MEMORY_UPDATE_SOURCE, RECALL_HEADING, RECALL_NOTE, SUMMARY_SYSTEM, UPDATE_HEADING, UPDATE_NOTE, askRequest, askSystem, groupNote, groupSummaryRequest, memoryPromptZh, memoryRules, summaryRequest, teamRule } from './memory-copy.js'
+import { chineseRolePrompt } from './prompt-language.mjs'
 import { installReview } from './memory-review.js'
 import { installTidy } from './memory-tidy.js'
 import { output } from './tools.js'
@@ -989,7 +990,15 @@ export function install(rt) {
     name: 'bot-memory',
     order: 645,
     interpolate: false,
-    text: context => sectionFor(context?.agent?.id),
+    text: context => {
+      const sessionId = context?.agent?.id
+      const text = sectionFor(sessionId)
+      if (!text) return text
+      const bot = rt.botOf(rt.selfOf(sessionId))
+      return chineseRolePrompt(bot?.instructions)
+        ? memoryPromptZh(text, reviewOn, rt.isMain(bot.id), writesTeam(bot.id), rt.isPrivate(bot.id))
+        : text
+    },
   }), 'ds-bot: memory section')
 
   // A group Session reads its group's memory from a snapshot message, put in before

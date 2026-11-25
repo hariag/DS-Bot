@@ -305,6 +305,23 @@ test('events keep the newest 50 and pastGoals retain the newest 5 plus audited h
   assert.equal(room.pastGoals.at(-1).status, 'stopped')
 })
 
+test('a review invalidated while saving the round never becomes an ordinary nudge', async (t) => {
+  const host = await start(t)
+  await startGoal(host)
+  const room = host.rt.roomOf('r1')
+  const reviewId = 'review-invalidated-on-save'
+  room.goal.reviewAttempt = { id:reviewId, at:Date.now(), state:'admitting', adminId:'a', rootSessionId:'r1', adminSessionId:'ga', inspectOnly:true }
+  let checks = 0
+  t.mock.method(host.rt, 'goalReviewAllowed', () => ++checks === 1)
+  const result = host.round('stale-review', {
+    source:{kind:'bot', form:'relay', role:'goal', goal:'nudge', goalId:room.goal.id, reviewId, reviewInspect:true},
+    content:[{type:'text', text:'[Scheduled group board review]'}],
+  })
+  await settle(() => result() !== undefined)
+  assert.ok(checks >= 2)
+  assert.equal(host.agentOf('ga').calls.length, 0)
+})
+
 test('the admin and member prompts carry the goal block', async (t) => {
   const host = await start(t)
   await startGoal(host)
@@ -409,7 +426,9 @@ test('an idle round wakes the admin for a goal check; [PASS] keeps an unfinished
   assert.match(prompt, /goal check/)
   assert.match(prompt, /Goal check from DS Bot/)
   assert.match(prompt, /A lack of progress is not itself a user blocker/)
-  assert.match(prompt, /If the deadline is missed or two scheduled checks pass without confirmation, escalate to the specific person authorized to unblock or decide and continue independent authorized work/)
+  assert.match(prompt, /Honor any agreed feedback deadline and follow up once through the original handoff when it passes/)
+  assert.match(prompt, /Escalate to the person authorized to unblock or decide if receipt remains unconfirmed after that follow-up/)
+  assert.match(prompt, /Use two scheduled checks without confirmation only when no deadline was agreed/)
   assert.match(prompt, /If a real user decision is the only way forward, report the exact question, recommendation, impact and next check time/)
   assert.match(prompt, /continue independent authorized work and do not repeat an unchanged decision request/)
   assert.match(prompt, /Ask the user only for decisions you cannot make/)

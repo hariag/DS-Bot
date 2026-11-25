@@ -23,6 +23,7 @@ import { userRedoView } from './user-redo-view.mjs'
 import { createUserRedoPreparation } from './user-redo-preparation.mjs'
 import { isPrivateDirectory, isPrivateFile } from './private-storage.mjs'
 import { syncDirectory } from './directory-sync.mjs'
+import { chineseRolePrompt } from './prompt-language.mjs'
 
 export const BOARD_UPLOAD_PATH = '/api/bot-board-upload'
 export const BOARD_UPLOAD_MAX_BYTES = Math.ceil(20 * 1024 * 1024 / 3) * 4 + 1024 * 1024
@@ -551,8 +552,10 @@ export function install(rt) {
       for (const actor of targets) {
         const recipient=activeBoardRecipient(actor,roomId,room.sessions?.[actor],true)
         if (!recipient) continue
-        const text='A human updated shared project '+JSON.stringify(event.projectId)+' at revision '+event.revision
-          +'. Read project_coordination show with this revision before continuing affected work, then acknowledge it in this group. Keep the original task and owner.'
+        const text = chineseRolePrompt(rt.botOf(actor)?.instructions)
+          ? `用户更新了项目 ${JSON.stringify(event.projectId)}（修订 ${event.revision}）。继续前用 project_coordination show 核对该版本，并在本群确认。沿用原任务与负责人。`
+          : 'A human updated shared project '+JSON.stringify(event.projectId)+' at revision '+event.revision
+            +'. Read project_coordination show with this revision before continuing affected work, then acknowledge it in this group. Keep the original task and owner.'
         const id=createHash('sha256').update(JSON.stringify([event.projectId,event.revision,roomId,actor])).digest('hex')
         await steerBoardUpdate(recipient,text,'project:'+id)
       }
@@ -584,9 +587,12 @@ export function install(rt) {
         } catch (error) { rt.warn?.('ds-bot: board mention join failed: %s', error?.message || error) }
       }
       const boardLabel = room ? 'group task board' : 'personal task board'
+      const notice = chineseRolePrompt(rt.botOf(id)?.instructions)
+        ? `[Board card ${task.id}] ${author === 'user' ? '用户' : author}在评论中提到你：\n${text}\n\n用 board_task show 查原卡，回复用 board_task comment。`
+        : `[Board card ${task.id}] ${author === 'user' ? 'The user' : author} mentioned you in a comment:\n${text}\n\nOpen this card in the ${boardLabel} (board_task show) to read the discussion; you can reply with board_task comment.`
       try {
         await rt.deliver({ ...(room ? { roomId:room.id } : {}), toId:id, sessionId, role:room ? 'room' : 'request', fromName:'DS Bot', boardMention:true,
-          text:`[Board card ${task.id}] ${author === 'user' ? 'The user' : author} mentioned you in a comment:\n${text}\n\nOpen this card in the ${boardLabel} (board_task show) to read the discussion; you can reply with board_task comment.`,
+          text:notice,
           exchangeId:createHash('sha256').update(`${operationId}:mention:${id}`).digest('hex') })
       } catch (error) { rt.warn?.('ds-bot: board mention delivery failed: %s', error?.message || error) }
     }
@@ -605,7 +611,11 @@ export function install(rt) {
     if (!task || !['working','reported','cancelled'].includes(task.status)) return
     const roomId = task.scope.startsWith('room:') ? task.scope.slice(5) : undefined
     const recipient = activeBoardRecipient(task.owner, roomId, task.workSessionId)
-    const text = `Human board update for existing task ${task.id} (${change.type}, status ${task.status}, revision ${task.revision}). `
+    const text = chineseRolePrompt(rt.botOf(task.owner)?.instructions)
+      ? `用户更新了原卡 ${task.id}（${change.type}，状态 ${task.status}，修订 ${task.revision}）。`
+        + (change.value?.changeTaskId ? `同时查看变更申请 ${change.value.changeTaskId}。` : '')
+        + '继续前用 board_task show 核对最新范围、阶段和用户回复，已取消则停止。沿用原卡。'
+      : `Human board update for existing task ${task.id} (${change.type}, status ${task.status}, revision ${task.revision}). `
       + (change.value?.changeTaskId ? `Read change request ${change.value.changeTaskId} as well. ` : '')
       + 'Read this card with board_task show before the next work step. Reconcile the new scope, stage or user reply; stop work if cancelled. Do not create or dispatch a second task.'
     await steerBoardUpdate(recipient, text, operationId)
@@ -876,8 +886,10 @@ export function install(rt) {
             return goalEditor.mutate(scope,payload,kind)
           })
           if (recipient && outcome.state === 'committed') {
-            const text = `Human board update for existing goal item ${card.id} (goal ${card.legacy.goalId}, stage ${card.legacy.stageId}, task ${card.legacy.taskId}). `
-              + 'Read this original item with board_task show before your next step; group_goal show provides its stage context. Use its latest instructions and status; stop if it no longer calls for work. Do not create or dispatch another task.'
+            const text = chineseRolePrompt(rt.botOf(recipient.owner)?.instructions)
+              ? `用户更新了原卡 ${card.id}（目标 ${card.legacy.goalId}、阶段 ${card.legacy.stageId}、任务 ${card.legacy.taskId}）。先用 board_task show 核对最新要求和状态，阶段背景查 group_goal show。按原卡继续或停止。`
+              : `Human board update for existing goal item ${card.id} (goal ${card.legacy.goalId}, stage ${card.legacy.stageId}, task ${card.legacy.taskId}). `
+                + 'Read this original item with board_task show before your next step; group_goal show provides its stage context. Use its latest instructions and status; stop if it no longer calls for work. Do not create or dispatch another task.'
             void steerBoardUpdate(recipient, text, payload.operationId).catch(error => rt.warn?.('ds-bot: goal board update delivery: %s',error))
           }
           return outcome
