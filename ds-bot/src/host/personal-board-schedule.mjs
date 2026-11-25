@@ -110,12 +110,12 @@ export function createPersonalBoardSchedule(rt, service) {
     await rt.load()
     if (source !== host()) return
     if (rt.readOnly() !== undefined) { schedule(30000); return }
-    const target = targetSession()
-    if (target && !rt.state.personalBoardSchedule) {
+    const opening = targetSession()
+    if (opening && !rt.state.personalBoardSchedule) {
       // Creating a schedule produces a native change notice in the target
       // session. Do not let it get ahead of the Main Bot's opening turn.
-      if (rt.botOf(target.botId)?.kickoff) return
-      if (rt.greetingOut?.(target.botId) || rt.live?.get(target.sessionId)?.turn !== undefined) {
+      if (rt.botOf(opening.botId)?.kickoff) return
+      if (rt.greetingOut?.(opening.botId) || rt.live?.get(opening.sessionId)?.turn !== undefined) {
         schedule(5000)
         return
       }
