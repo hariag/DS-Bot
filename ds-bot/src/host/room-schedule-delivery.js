@@ -84,16 +84,42 @@ export function installRoomScheduleDelivery(rt) {
   }, { prepend: true })
 
   async function checkBoardWithoutGoal(room, binding, key, messageId, root) {
+    const [scheduleId] = JSON.parse(key)
+    const openingSessionId = messageId === undefined ? undefined : root.id
+    const blocker = target => {
+      const active = rt.managedRoomSchedule?.(scheduleId, root.id)
+      const occurrence = room.scheduledReviewOccurrence
+      if (disposed || rt.readOnly?.() !== undefined || active?.roomId !== room.id
+        || active.adminId !== binding.adminId || active.prompt !== binding.prompt
+        || rt.roomOf(room.id) !== room || room.admin !== binding.adminId || room.goal
+        || rt.sessionOfRoom(room) !== root.id || occurrence?.key !== key || occurrence.outcome !== 'no-goal'
+        || (target !== undefined && room.sessions?.[binding.adminId] !== target)) return 'invalid'
+      if (busy(room, messageId, openingSessionId)) return 'busy'
+    }
+    const beforeResolve = blocker()
+    if (beforeResolve) return beforeResolve
     const target = await rt.ensureGroupTaskSession(room.id, binding.adminId)
-    const current = () => rt.roomOf(room.id) === room && room.admin === binding.adminId && !room.goal
-      && rt.sessionOfRoom(room) === root.id && room.sessions?.[binding.adminId] === target
-      && !busy(room, messageId, root.id)
-    if (!current()) return
+    if (!target) return 'invalid'
+    const beforeSend = blocker(target)
+    if (beforeSend) return beforeSend
     const text = '本群尚无群目标。按已有任务看板和授权推进，记录结果或阻碍及负责人；没有可办事项时静默结束。\n' + (binding.instructions ?? binding.prompt)
-    await rt.deliver({ roomId:room.id, toId:binding.adminId, sessionId:target, role:'room', fromName:'DS Bot', text,
-      exchangeId:createHash('sha256').update(JSON.stringify([room.id,key])).digest('hex'), note:'scheduled group board check' }, {
-      beforeAdmission() { if (!current()) throw new Error('The group or its administrator changed before the board check') },
-    })
+    const exchangeId = createHash('sha256').update(JSON.stringify([room.id,key])).digest('hex')
+    const rejected = new Error('The group or its administrator cannot receive the board check now')
+    let beforeAdmission
+    try {
+      await rt.deliver({ roomId:room.id, toId:binding.adminId, sessionId:target, role:'room', fromName:'DS Bot', text,
+        exchangeId, note:'scheduled group board check' }, {
+        beforeAdmission() {
+          beforeAdmission = blocker(target)
+          if (beforeAdmission) throw rejected
+        },
+      })
+      return 'delivered'
+    } catch (error) {
+      if (error !== rejected) throw error
+      rt.forgetDelivery?.(exchangeId)
+      return beforeAdmission
+    }
   }
 
   // A managed reminder that lands together with ordinary room traffic is stripped
@@ -105,19 +131,25 @@ export function installRoomScheduleDelivery(rt) {
   let disposed = false
   rt.ctx.effect?.(() => () => {
     disposed = true
-    for (const timer of retriggers.values()) clearTimeout(timer)
+    for (const retry of retriggers.values()) clearTimeout(retry.timer)
     retriggers.clear()
   }, 'ds-bot: managed room schedule retries')
-  function retryScheduledReview(room, binding, key, tries = 0) {
-    if (disposed || rt.readOnly?.() !== undefined || !room || retriggers.has(key) || tries >= 6) return
-    const timer = setTimeout(() => {
-      retriggers.delete(key)
+  function retryScheduledReview(room, binding, key, tries = 0, boardOnly = false) {
+    if (disposed || rt.readOnly?.() !== undefined || !room || tries >= 6) return
+    const pending = retriggers.get(key)
+    if (pending) {
+      if (boardOnly) pending.boardOnly = true
+      return
+    }
+    const retry = { boardOnly }
+    retry.timer = setTimeout(() => {
       if (disposed) return
       void (async () => {
         // `load()` may adopt a newer state object between the schedule and this timer.
         // Reusing the captured room or agent would fail the review's object/session
         // identity checks and silently consume every delayed retry as invalid.
         await rt.load()
+        await rt.refreshRoomScheduleBindings?.()
         const currentRoom = rt.roomOf(room.id)
         if (disposed || rt.readOnly?.() !== undefined || !currentRoom) return 'invalid'
         const sessionId = rt.sessionOfRoom(currentRoom)
@@ -128,15 +160,23 @@ export function installRoomScheduleDelivery(rt) {
           || currentBinding.adminId !== binding.adminId || currentBinding.prompt !== binding.prompt) return 'invalid'
         const currentAgent = await rt.resolveAgent(sessionId)
         if (disposed || currentAgent?.session?.id !== sessionId) return 'invalid'
-        return rt.runScheduledRoomReview(currentRoom, key, currentAgent, undefined, currentBinding.instructions ?? currentBinding.prompt, undefined)
+        // A no-goal occurrence already owns the durable claim. If the room turns
+        // busy before delivery, retry only its board check, never the claim.
+        const outcome = retry.boardOnly ? 'no-goal' : await rt.runScheduledRoomReview(currentRoom, key, currentAgent, undefined, currentBinding.instructions ?? currentBinding.prompt, undefined)
+        if (outcome === 'no-goal') retry.boardOnly = true
+        return retry.boardOnly ? checkBoardWithoutGoal(currentRoom, currentBinding, key, undefined, currentAgent) : outcome
       })()
         .then(outcome => {
-          if (!disposed && (outcome === 'busy' || outcome === 'pending')) retryScheduledReview(room, binding, key, tries + 1)
+          retriggers.delete(key)
+          if (!disposed && (outcome === 'busy' || outcome === 'pending')) retryScheduledReview(room, binding, key, tries + 1, retry.boardOnly)
         })
-        .catch(error => rt.warn?.('ds-bot: deferred group check in %s failed: %s', room.id, error))
+        .catch(error => {
+          retriggers.delete(key)
+          rt.warn?.('ds-bot: deferred group check in %s failed: %s', room.id, error)
+        })
     }, 15000 + tries * 15000)
-    timer.unref?.()
-    retriggers.set(key, timer)
+    retry.timer.unref?.()
+    retriggers.set(key, retry)
   }
 
   rt.ctx.on('agent/pre-step', async ({ agent, messages, step, turn }, next) => {
@@ -189,7 +229,9 @@ export function installRoomScheduleDelivery(rt) {
           return { ...decision, messages: [result.message, ...retained.filter(contextOnly)] }
         }
         if (result === 'busy' || result === 'pending') retryScheduledReview(room, binding, key)
-        if (result === 'no-goal') await checkBoardWithoutGoal(room, binding, key, message.id, agent)
+        if (result === 'no-goal' && await checkBoardWithoutGoal(room, binding, key, message.id, agent) === 'busy') {
+          retryScheduledReview(room, binding, key, 0, true)
+        }
       } else retryScheduledReview(room, binding, key)
     }
     skippedTurns.set(agent.id, turn)

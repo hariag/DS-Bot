@@ -19,7 +19,12 @@ function fixture() {
   const rt={ctx:{on:(name,fn)=>hooks.set(name,fn),effect:fn=>{const cleanup=fn();if(typeof cleanup==='function')cleanups.push(cleanup)}},load:async()=>{if(state.replaceOnLoad){state.replaceOnLoad=false;replaceRoom()}},roomOf:id=>['root','room'].includes(id)?room:undefined,
     sessionOfRoom:()=>agent.id,resolveAgent:async id=>id===agent.id?agent:undefined,roomBusyForPatrol:()=>state.busy,isManagedRoomScheduleId:id=>id==='managed',
     managedRoomSchedule:(id,sid)=>id==='managed'&&sid===agent.id?{roomId:room.id,adminId:room.admin,prompt:'Review the board'}:undefined,
-    runScheduledRoomReview:async(...args)=>{if(args[0]!==room||args[2]!==agent)return 'invalid';calls.push(args);return state.result},
+    runScheduledRoomReview:async(...args)=>{
+      if(args[0]!==room||args[2]!==agent)return 'invalid'
+      calls.push(args)
+      if(state.result==='no-goal')room.scheduledReviewOccurrence={key:args[1],outcome:'no-goal'}
+      return state.result
+    },
     ensureGroupTaskSession:async()=>{state.afterResolve?.();return 'pm-in-room'},
     deliver:async(args,guards)=>{guards.beforeAdmission();delivered.push(args)}}
   installRoomScheduleDelivery(rt)
@@ -63,6 +68,88 @@ test('a reminder filtered because the group is busy retries when the room quiets
   assert.equal(f.calls[0][1],JSON.stringify(['managed',at]))
   assert.strictEqual(f.calls[0][2],f.agent)
   assert.deepEqual(f.calls[0].slice(3),[undefined,'Review the board',undefined])
+})
+
+test('a busy group without a goal checks its board once when the room quiets', async t => {
+  const f=fixture();t.after(()=>f.dispose())
+  f.state.busy=true
+  f.state.result='no-goal'
+  const agent=await f.target('root'), message=single(entry())
+  const timers=await captureTimers(async()=>{
+    agent.followup(message)
+    agent.followup(message)
+  })
+  assert.equal(timers.length,1)
+  assert.deepEqual(f.native,[])
+  f.state.busy=false
+  timers[0].callback()
+  await new Promise(resolve=>setImmediate(resolve))
+  assert.equal(f.delivered.length,1)
+  assert.equal(f.delivered[0].toId,'pm')
+  assert.equal(f.delivered[0].sessionId,'pm-in-room')
+  assert.equal(f.delivered[0].role,'room')
+  assert.match(f.delivered[0].text,/Review the board/)
+})
+
+test('a deferred board check waits out room work that starts while resolving the administrator', async t => {
+  const f=fixture();t.after(()=>f.dispose())
+  f.state.busy=true
+  f.state.result='no-goal'
+  const agent=await f.target('root')
+  const timers=await captureTimers(async()=>agent.followup(single(entry())))
+  let rootRunning=false
+  f.rt.roomBusyForPatrol=(_room,_messageId,ignoredSession)=>rootRunning && ignoredSession!==f.agent.id
+  f.state.afterResolve=()=>{rootRunning=true}
+  const resumed=await captureTimers(async()=>{
+    timers[0].callback()
+    await new Promise(resolve=>setImmediate(resolve))
+  })
+  assert.equal(rootRunning,true)
+  assert.deepEqual(f.delivered,[])
+  assert.equal(resumed.length,1)
+  assert.equal(resumed[0].delay,30000)
+  f.state.afterResolve=undefined
+  rootRunning=false
+  resumed[0].callback()
+  await new Promise(resolve=>setImmediate(resolve))
+  assert.equal(f.delivered.length,1)
+  assert.equal(f.calls.length,1)
+})
+
+test('a board check from the opening step retries if the room becomes busy before admission', async t => {
+  const f=fixture();t.after(()=>f.dispose())
+  f.state.result='no-goal'
+  const deliver=f.rt.deliver, withdrawn=[]
+  f.rt.forgetDelivery=id=>withdrawn.push(id)
+  f.rt.deliver=async(args,guards)=>{
+    f.state.busy=true
+    return deliver(args,guards)
+  }
+  const timers=await captureTimers(async()=>f.step([single(entry())]))
+  assert.equal(f.delivered.length,0)
+  assert.equal(withdrawn.length,1)
+  assert.equal(timers.length,1)
+  f.rt.deliver=deliver
+  f.state.busy=false
+  timers[0].callback()
+  await new Promise(resolve=>setImmediate(resolve))
+  assert.equal(f.delivered.length,1)
+  assert.equal(f.delivered[0].exchangeId,withdrawn[0])
+  assert.equal(f.calls.length,1)
+})
+
+test('a deferred group check refreshes the binding before proceeding', async t => {
+  const f=fixture();t.after(()=>f.dispose())
+  f.state.busy=true
+  f.state.result='no-goal'
+  const agent=await f.target('root')
+  const timers=await captureTimers(async()=>agent.followup(single(entry())))
+  f.state.busy=false
+  f.rt.refreshRoomScheduleBindings=async()=>{f.rt.managedRoomSchedule=()=>undefined}
+  timers[0].callback()
+  await new Promise(resolve=>setImmediate(resolve))
+  assert.deepEqual(f.calls,[])
+  assert.deepEqual(f.delivered,[])
 })
 
 test('an idle occurrence goes once through the host and does not become an ordinary group broadcast',async()=>{
