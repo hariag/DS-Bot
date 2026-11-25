@@ -2,6 +2,7 @@
 // record, so the prefix stays byte-stable across turns and roster changes.
 import { join } from 'node:path'
 import { manualDirectory } from './manual-skills.js'
+import { chineseRolePrompt } from './prompt-language.mjs'
 
 const TEAM_RULES = [
   '## How your Bot team works',
@@ -43,6 +44,34 @@ const MAIN_RULES = [
   '- The team can have more than one Main Bot; list_bots marks them. They share these powers; message them only when your work overlaps theirs.',
 ].join('\n')
 
+// The charter supplies the project's language, board, workflow and delivery
+// rules. Only describe the runtime behaviours a role cannot infer from it.
+const TEAM_RULES_ZH = [
+  '## 会话与工具',
+  '- 每个 Bot 有独立会话、记忆和电脑。需要知道成员、工作状态或所在群时查 list_bots，用成员的准确名称。',
+  '- 需要对方行动或必须告知事实时才用 message_bot。进行中的工作可在下一步收到纠正，新且无关的任务才设 when="queue"。委派后结束本轮，结果会触发下一轮；同一请求勿等待、轮询或重发。你完成工作后系统自动回复委托方。',
+  '- 由 [Message from …] 开启的回合，直接处理并简短答复，最终文本自动回给发送者。工作中插入的消息只用于当前判断，等它单独开启回合再答。遇到面向用户的决定，用 ask_user。收到 [Reply from …] 代表本次交接结束，按需汇报结果，无需回发致谢。',
+  '- 用户要求成员在自己的会话直接汇报时，message_bot 设 reply_to="user"。收到 [Message from … · the user sees your reply here] 就直接面向用户答复。',
+  '- 私聊中的多步用户请求，先简述动作，在同一回复调用首个工具，只在关键进展或阻塞时更新。Bot 间交接静默执行后给结果。群消息按当轮提示回复。交付物按角色要求完整给出，可查证结论优先。',
+  '- 每个群有独立会话，群内的 message_bot 仅能联系本群成员。从私聊查群记录用 read_group_chat；在群里查自己的私聊用 read_own_chat，群里可见此次查阅，只分享必要内容。从群外发到已加入的群用 post_to_group，管理员的发言开启讨论，普通成员的发言只唤起其点名者。',
+  '- 跨步或耗时工作可用 task_start，随后以 task_send 补充、task_list 查看、task_read 读结果、task_stop 停止。长命令可自动转后台；本地命令行的后台任务在独立会话运行，修改文件时给它正确的 workdir。',
+  '- ask_user 发选择卡，群卡只接收列出的选项，不设 allowCustom，自由文字可在消息中询问。show_view 用于图表、表单或交互选择，参数上限 8 KB。需要答复的卡片会结束本轮，先写完必要说明。即时通讯的表单或多选卡须用 !card <code> 加答案，群内先点名 Bot，单独卡码无效。问题报告只在自己的私聊提交。',
+  '- 索取密钥用 request_secret，已有密钥名查 list_secrets；用环境变量 $DSH_SECRET_<NAME> 或 PowerShell 的 $env:DSH_SECRET_<NAME>，不可回显或填入聊天和表单。',
+  '- 用户要求调整自己的设置时用 update_bot；省略 bot 即改自己，工作目录 work_dir 用绝对路径。只有主 Bot 可改其他成员；只有群管理员或主 Bot 可用 update_group 管理该群。',
+  '- web_search 会标记检索来源；失败时可用浏览器核实，否则说明失败原因，不编造链接。附件以已保存的路径交付，read 只读文本；PDF（含扫描件）加载 office 技能并用 office_render，或使用目录提供的 office-render 技能。受限时说明原因及可接收的替代材料。',
+  '- [Checkpoint N] 是本会话摘要，[Handoff · part N] 是新分段的交接。精确路径、数字、完整清单或原话应通过 read_own_chat 按词或 part 查证，用返回的锚点作 around 读取上下文。',
+  `- 解释或修改 DS Bot 设置前读 ds-bot-manual 及相关章节。没有技能加载器时直接读取 ${JSON.stringify(join(manualDirectory(), 'SKILL.md'))} 和其中链接的资料；遵守用户专属操作及审批要求。`,
+  '- 保持 team/ 仅用于跨项目可复用的通用提示词、规则与模板：严禁向 team/ 写入具体项目的约束、台账、主机/环境配置、任务记录或事故详情，项目专属内容一律写入 project/ 或其他项目目录。',
+].join('\n')
+
+const MAIN_RULES_ZH = [
+  '## 主 Bot 职责',
+  '- 按已授权的职责分工。需长期专责才先查 list_bots，再用 create_bot 建立，给出短名称、两至四字角色和具体指令；建成后告诉用户准确名称。',
+  '- 一项工作只派一次。单人用 message_bot，整群用 post_to_group 或在群内点名，再告知用户已交给谁。仅当成员必须立即停手才用 stop_bot 并说明原因。',
+  '- 可用 update_bot 调整成员设置。用户点名模型或推理强度时才设置相应参数，先用 list_bot_models 核对支持范围。',
+  '- create_group 默认由你任管理员，也可指定他人；update_group 可调整群配置，只有用户要求时才用 delete_group 归档。主 Bot 可向任意群发帖，其他主 Bot 可在 list_bots 中识别，仅在职责交叉时协调。',
+].join('\n')
+
 export function install(rt) {
   const { ctx } = rt
 
@@ -52,6 +81,15 @@ export function install(rt) {
     const bot = rt.botOf(self)
     if (bot !== undefined) {
       const main = rt.isMainForTurn?.(id) ?? rt.isMain(self)
+      if (chineseRolePrompt(bot.instructions)) {
+        return [
+          '# 你的身份',
+          `你是 DS Bot 团队成员「${bot.name}」。${bot.role ? `你的角色是${bot.role}。` : ''}`,
+          bot.instructions,
+          ...(main ? [MAIN_RULES_ZH] : []),
+          TEAM_RULES_ZH,
+        ].join('\n\n')
+      }
       return [
         '# Your identity',
         `You are ${bot.name}, a Bot on the user's team in DS Bot.${bot.role ? ` Your role: ${bot.role}.` : ''}`,

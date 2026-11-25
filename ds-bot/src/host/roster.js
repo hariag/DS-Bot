@@ -6,6 +6,7 @@ import { mkdir } from 'node:fs/promises'
 import { MAX_AVATAR_IMAGE, ROOM_MAX_MEMBERS, ROOM_MODES, ROOM_NAME_MAX, ROOM_NOTICE_MAX, ROOM_TODO_MAX, ROOM_TODO_TEXT_MAX, SECTION_COLORS, SECTION_NAME_MAX } from './constants.js'
 import { currentColor, isColor, normalize, unquote } from './text.js'
 import { nameProblem } from '../shared/mentions.js'
+import { chineseRolePrompt } from './prompt-language.mjs'
 
 const BROWSER_GRANT_KINDS = new Set(['post', 'upload', 'download', 'delete', '*'])
 const HOSTNAME = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/
@@ -14,6 +15,16 @@ const OWN_RULES = 'Where your instructions say otherwise, follow them.'
 const writeIn = language => `Write in ${language ?? 'the user\'s language if known; otherwise Chinese'}.`
 // The first Main Bot's greeting when the user wrote before it had a model that works.
 const AFTER_USER = 'You were just set up as the user\'s Main Bot. The user wrote to you before your model could answer; their message above has no answer yet. Answer it now, and say in one short sentence that you run their Bot team.'
+
+const CHINESE_KICKOFF_RULE = '用简体中文回复，遵循你的角色指令。'
+function chineseKickoff({ main, afterUser, original, creator, brief }) {
+  if (afterUser) return '你是新设置的主 Bot。先回答用户之前尚未得到答复的问题，再用一句话介绍你负责协调团队。'
+  if (main) return '你是新设置的主 Bot。简要说明你负责协调团队，询问用户想先做什么。'
+  if (original) return `你继承了「${original.name}」的职责，记忆从本次会话开始。简短问候用户，询问本次侧重点。`
+  if (creator) return `「${creator.name}」为用户创建了你。${brief ? `任务背景：${brief}\n` : ''}简短问候用户，询问从哪里开始。`
+  if (brief) return `用户创建了你，首条消息如下：\n\n${brief}\n\n先用一句话介绍自己，再处理这条消息。`
+  return '用户刚创建了你。简短问候用户，询问首要任务。'
+}
 
 function cleanBrowserGrants(input) {
   if (input === null) return null
@@ -242,8 +253,10 @@ export function install(rt) {
               ? `The user just created you and sent this first message:\n\n${brief}\n\nIntroduce yourself in one short line, then help with it.`
               : 'The user just created you. Greet the user in one short message, then ask in one short question what you should focus on.'
       const opener = `${kickoff}\n${OWN_RULES}`
-      const text = !main && language ? `${opener}\nWrite in ${language}.` : opener
       const bot = state.bots[id]
+      const text = chineseRolePrompt(bot.instructions)
+        ? `${chineseKickoff({ main, original, creator, brief })}\n${CHINESE_KICKOFF_RULE}`
+        : !main && language ? `${opener}\nWrite in ${language}.` : opener
       const greeting = { text, from: createdBy ?? null, ...(main ? { main: true } : {}) }
       // The Bot is saved by now; a failure here must not archive it in the catch below.
       const scopeTools = () => rt.resolveAgent(id)
@@ -290,7 +303,21 @@ export function install(rt) {
     // A greeting waiting for its model may still be waiting when the host goes away.
     if (rt.hostClosing?.() === true) return
     sentKickoffs.set(bot.id, greeting)
-    const text = greeting.afterUser ? `${AFTER_USER} ${writeIn(rt.uiLanguage?.())}\n${OWN_RULES}` : greeting.text
+    let text = greeting.text
+    if (chineseRolePrompt(bot.instructions)) {
+      // A model-less Main Bot can acquire its role instructions while its first
+      // greeting is held. Select the language when delivering that greeting.
+      if (greeting.main || greeting.afterUser) text = `${chineseKickoff(greeting)}\n${CHINESE_KICKOFF_RULE}`
+      else if (!text.endsWith(CHINESE_KICKOFF_RULE)) {
+        // Keep the original brief of an older held greeting. Only the generated
+        // locale hint after OWN_RULES is obsolete.
+        const marker = `\n${OWN_RULES}`
+        const end = text.lastIndexOf(marker)
+        const suffix = end < 0 ? undefined : text.slice(end + marker.length)
+        if (suffix === '' || /^\nWrite in [^\n]+\.$/.test(suffix ?? '')) text = text.slice(0, end)
+        text += `\n${CHINESE_KICKOFF_RULE}`
+      }
+    } else if (greeting.afterUser) text = `${AFTER_USER} ${writeIn(rt.uiLanguage?.())}\n${OWN_RULES}`
     void rt.deliver({ fromId: greeting.from ?? undefined, toId: bot.id, text, role: 'kickoff' })
       .catch(error => rt.warn('ds-bot: kickoff failed: %s', error))
   }
@@ -478,8 +505,11 @@ export function install(rt) {
     // several rounds behind it follows the old kickoff's pull until a message
     // lands; notify the Bot's chat so the next turn honors the new profile.
     const notes = []
-    if (bot.role !== roleBefore) notes.push(`Your role is now "${bot.role || '(none)'}"`)
-    if (bot.instructions !== instructionsBefore) notes.push(`Your instructions now read:\n${bot.instructions || '(none)'}`)
+    const chinese = chineseRolePrompt(bot.instructions)
+    if (bot.role !== roleBefore) notes.push(chinese ? `当前角色：${bot.role || '未设置'}` : `Your role is now "${bot.role || '(none)'}"`)
+    if (bot.instructions !== instructionsBefore) notes.push(chinese
+      ? `角色指令已更新：\n${bot.instructions}`
+      : `Your instructions now read:\n${bot.instructions || '(none)'}`)
     // A held greeting means the model pick is still open: the kickoff it later sends
     // already reads the new profile, and a notice would start a turn before that.
     // A Bot editing itself in its own chat just got the tool result in the turn

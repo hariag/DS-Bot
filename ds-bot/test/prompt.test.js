@@ -6,11 +6,11 @@ import { install } from '../src/host/prompt.js'
 import { fakeContext } from './fake-ctx.js'
 import { install as installBuiltinPacks, BUILTIN_PACKS } from '../src/host/builtin-packs.js'
 
-function start() {
+function start(instructions) {
   const ctx = fakeContext()
   const bots = new Map([
-    ['main', { name: 'Chief' }],
-    ['worker', { name: 'Dev', instructions: 'Check files.' }],
+    ['main', { name: 'Chief', instructions }],
+    ['worker', { name: 'Dev', instructions: instructions ?? 'Check files.' }],
   ])
   install({
     ctx,
@@ -22,6 +22,36 @@ function start() {
   const prompt = id => ctx.sections.get('bot-identity').text({ agent: { id } })
   return { ctx, prompt }
 }
+
+test('v1.2 roles keep their full instructions once and receive only their available team powers', t => {
+  const instructions = '团队章程 v1.2\n全员使用中文、UTF-8 和 CST（Asia/Shanghai）。\n角色附加规则：部署前回读版本。'
+  const { ctx, prompt } = start(instructions)
+  t.after(() => ctx.dispose())
+  assert.equal(prompt('group-worker'), prompt('worker'))
+  for (const id of ['main', 'worker']) {
+    const text = prompt(id)
+    assert.equal(text.split(instructions).length - 1, 1)
+    assert.doesNotMatch(text, /How your Bot team works|Chief of Staff|^You are |\[PASS\]/m)
+    for (const token of ['[Message from …]', '[Reply from …]', 'reply_to="user"', '!card <code>', 'request_secret',
+      'read_own_chat', 'update_bot', 'update_group', 'task_start', 'office_render', 'ds-bot-manual']) assert.ok(text.includes(token), token)
+    assert.match(text, /保持 team\/ 仅用于跨项目可复用的通用提示词、规则与模板/)
+    for (const name of BUILTIN_PACKS['team-admin'].tools) assert.equal(text.includes(name), id === 'main', name)
+  }
+  assert.match(prompt('main'), /^## 主 Bot 职责$/m)
+  assert.doesNotMatch(prompt('worker'), /^## 主 Bot 职责$/m)
+})
+
+test('dated Chinese charter selects the same runtime rules; unrelated profiles keep their current language', t => {
+  for (const [instructions, chinese] of [
+    ['你是开发。\n团队章程 v1.2｜2026-11-05｜适用于全部角色\n附加规则', true],
+    ['Please translate the phrase 团队章程 v1.2 into English.', false],
+  ]) {
+    const { ctx, prompt } = start(instructions)
+    t.after(() => ctx.dispose())
+    assert.equal(prompt('worker').includes('## 会话与工具'), chinese)
+    assert.equal(prompt('worker').includes('## How your Bot team works'), !chinese)
+  }
+})
 
 test('Bots get a scoped progress rule without changing the private/group prompt prefix', (t) => {
   const { ctx, prompt } = start()

@@ -23,18 +23,9 @@ const activePromptBeforeTracking = [
   'For blockers that require a user decision, the group administrator reports the exact decision needed to the user and records the blocker and next check. For blockers within the group’s authority, the administrator coordinates owners and dependencies until the work moves; record the outcome on the original board item.',
   'If a shared lock is held, verify the current holder, ask that person to finish/report/release, and do not dispatch conflicting work. Once the lock is verified idle, continue the queued task. Honor an explicit user pause or stop and never mark reported work done without acceptance evidence.',
 ]
-const activePromptBeforeTracking30 = [
-  `Every ${ROOM_POLL_SECONDS / 60} minutes, inspect this group’s active goal and original task board.`,
-  ...activePromptBeforeTracking.slice(1),
-]
 const activePromptBeforeTrackingOf = token => activePromptBeforeTracking.join(' ') + ' ' + marker(token)
-const activePromptBeforeTracking30Of = token => activePromptBeforeTracking30.join(' ') + ' ' + marker(token)
 const trackedEnglishPromptOf = token => [
   ...activePromptBeforeTracking,
-  'At each scheduled check, review every open item on the group’s shared task board. Reconcile its status, owner, blocker, evidence, and next check with the latest verified information, and record status changes on the original item. Keep following up until the work is complete or a user decision is required; never mark reported work done without acceptance evidence.',
-].join(' ') + ' ' + marker(token)
-const trackedEnglish30PromptOf = token => [
-  ...activePromptBeforeTracking30,
   'At each scheduled check, review every open item on the group’s shared task board. Reconcile its status, owner, blocker, evidence, and next check with the latest verified information, and record status changes on the original item. Keep following up until the work is complete or a user decision is required; never mark reported work done without acceptance evidence.',
 ].join(' ') + ' ' + marker(token)
 const chineseV1PromptOf = token => [
@@ -51,7 +42,7 @@ const chineseV2PromptOf = token => [
   '交接不明时查原回执，只向原接收人核实；不要重派或更换请求编号。未到期先做其他独立工作。逾期或连续两次巡查未获确认，找有权解决的人协调。需要用户决断时，由群管理员向用户说明待决定的问题并登记下次检查；其余阻碍由管理员协调至解决。',
   '遇共享锁先核持有人，联系其反馈并释放，锁空闲后再安排冲突任务。遵守用户的暂停和停止指令。',
 ].join('\n') + ' ' + marker(token)
-const promptOf = token => [
+const chineseV3PromptOf = token => [
   `群管理员每 ${ROOM_POLL_SECONDS / 60} 分钟巡查一次。用简体中文沟通与记录，文本采用 UTF-8，时间用北京时间 CST（Asia/Shanghai，UTC+08:00）。`,
   '收到本巡检即表示宿主已判定群内安静；目标未达成且仅有聊天、排队或长期阻塞而无实质进展时，不得仅回复 [PASS] 或“等待中”，须推进最紧要的已授权任务或发起定向催办/升级。',
   '巡查时必须通过 board_task list/show（并对照 group_goal show）逐项核对群共享看板的未结任务，核对编号唯一性与立卡状态，在原卡更新负责人、状态（draft/proposed/ready/working/reported/done/waiting）、阻碍、证据及下次检查时间；子任务有任何状态变化时，同步检查并更新父任务状态。未注册任务须先同轮 board_task register 取唯一号立卡再 @责任人开工，完成前必须同步最新状态与验收证据回看板。完成须有独立验收证据。',
@@ -59,18 +50,22 @@ const promptOf = token => [
   '交接或派单状态不明（uncertain）时先用 board_task operation 或查原回执核实，只向原接收人确认，不重派、不换 operation_id/request_id。未到期先做其他独立工作；逾期或连续两次巡查未获确认，升级有决定权的人；需用户决断时由群管理员汇总选项、影响与下次检查时间上报，其余阻碍协调至解决。',
   '遇共享锁先核持有人，联系其反馈并释放，锁空闲后再安排冲突任务。遵守用户的暂停和停止指令。',
 ].join('\n') + ' ' + marker(token)
+const promptOf = token => [
+  `群管理员每 ${ROOM_POLL_SECONDS / 60} 分钟巡查一次。使用简体中文和 UTF-8，时间用北京时间 CST（Asia/Shanghai，UTC+08:00）。`,
+  '用 board_task list/show 对照 group_goal show 核对每项未结任务的唯一编号、负责人、状态、阻碍、证据及下次检查。未立卡先用 board_task register 取得唯一编号再通知开工，子项状态变化同步父项，完成前核对独立验收并留证。',
+  '目标未达成且无可核验进展时，推进就绪的授权任务。聊天、排队和接单不算进展。仍有应办事项时不能只回复 [PASS]。用纯文本 @姓名 定向联系，不嵌入代码或链接，不用 @all，附任务编号、动作或证据及反馈期限，同轮同人同项只跟进一次。交接不明查 board_task operation 或原回执，不重派、不换 operation_id/request_id。',
+  '逾期或连续两次巡查未获确认，向有权处理的人升级。需用户决断时列出选项、影响和下次检查；其余阻碍由管理员协调。尊重暂停、停止及本回合工具权限。锁占用时对照持有人核实，锁释放后安排冲突工作，先推进其他独立事项。',
+].join('\n') + ' ' + marker(token)
 const currentPrompt = (prompt, token) => {
+  if (typeof prompt !== 'string') return prompt
+  // Some installations changed only the leading cadence on an English default.
+  // Both spellings have equal length, so the original room suffix stays byte-exact.
+  const candidate = prompt.replace(/^Every 30 minutes,/, 'Every 10 minutes,')
   for (const previous of [
-    previousPromptOf(token),
-    previousCurrentPromptOf(token),
-    activePromptBeforeTrackingOf(token),
-    activePromptBeforeTracking30Of(token),
-    trackedEnglishPromptOf(token),
-    trackedEnglish30PromptOf(token),
-    chineseV1PromptOf(token),
-    chineseV2PromptOf(token),
+    previousPromptOf(token), previousCurrentPromptOf(token), activePromptBeforeTrackingOf(token), trackedEnglishPromptOf(token),
+    chineseV1PromptOf(token), chineseV2PromptOf(token), chineseV3PromptOf(token),
   ]) {
-    if (prompt === previous || prompt?.startsWith(previous)) return promptOf(token) + prompt.slice(previous.length)
+    if (candidate.startsWith(previous)) return promptOf(token) + prompt.slice(previous.length)
   }
   return prompt
 }
@@ -116,7 +111,7 @@ export function createRoomScheduleRegistry(rt, service) {
     if (!host() || !room || bindings()[roomId]?.restorePaused || !sessionId || rt.sessionOfRoom(room) !== sessionId || !room.members.includes(room.admin)
       || !rt.botOf(room.admin) || rt.botOf(room.admin).private === true || sessionOf(row) !== sessionId || row.status !== 'active'
       || row.kind !== 'every' || row.everySeconds !== ROOM_POLL_SECONDS || row.title !== titleOf(roomId)) return
-    return { roomId, adminId:room.admin, scheduleId:id, sessionId, prompt:row.prompt }
+    return { roomId, adminId:room.admin, scheduleId:id, sessionId, prompt:row.prompt, instructions:row.prompt.replace(marker(bindings()[roomId].token), '').trim() }
   }
 
   async function pass() {

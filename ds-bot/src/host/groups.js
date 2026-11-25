@@ -35,6 +35,7 @@ import { threadCurrentOfPart } from './threads.js'
 import { failureLine } from './turns.js'
 import { parseBook } from './ledger.js'
 import { scheduleChangeId } from './room-schedule-delivery.js'
+import { chineseRolePrompt } from './prompt-language.mjs'
 
 const ROOM_LOG_MAX = 60
 const ROOM_FIRST_LOOK = 12
@@ -202,14 +203,24 @@ function mentionsOf(opener, everyone) {
 }
 
 // What the user referenced in this round, for a member that has not been shown it yet.
-export const referenceNote = references => (references?.length
-  ? `Conversations the user referenced in this round:\n\n${references.map(reference => reference.text).join('\n\n')}`
+export const referenceNote = (references, zh = false) => (references?.length
+  ? `${zh ? '用户在本轮引用的会话' : 'Conversations the user referenced in this round'}:\n\n${references.map(reference => reference.text).join('\n\n')}`
   : '')
 
-const ROOM_REPLY = 'Reply with your message for the group, no name prefix: in a discussion, one or two short messages. When you are asked to do something, call your first tool in the same step as your opening note — if you stop without a tool call, your turn ends and no work runs. The group does not wait for you and sees what you write while you work: say what you will do, write again only when something matters, and end with the result, never a promise to do it later. Reply [PASS] to stay silent when you have nothing new to add or the message is for someone else.'
-const ROOM_CALLS = 'Writing "@Name" calls that member at once, to answer or to do what you ask, as soon as your message is posted: call members before you start on your own part. Members called in one message start together and do not see each other\'s replies until they post, so when one needs another\'s result, call the first and ask it to call the next. When a member finishes work you gave it, you answer its result. To only mention a member, write its name without "@".'
+const roomReply = zh => zh
+  ? '直接回复群聊，无需署名。需要行动时在同一步说明动作并调用首个工具，之后只报关键进展和结果。普通讨论无新增可回复 [PASS] 静默。'
+  : 'Reply without a name prefix. For work, call the first tool alongside your opening note, report meaningful progress, and end with the result. In ordinary discussion, [PASS] stays silent when you have nothing to add.'
+const roomCalls = zh => zh
+  ? '纯文本 @姓名 会立即唤醒成员；只引用名字时省略 @。同一条消息中的成员并行开始，有依赖时按顺序交接。收到自己派出的结果后接续。'
+  : 'A plain-text @Name immediately calls the member. Use the name alone for a reference. Members called together start in parallel; hand off dependencies in order. Continue when the work you requested comes back.'
 
-const slotLabel = (slot, self) => {
+const slotLabel = (slot, self, zh) => {
+  if (zh) {
+    const labels = { speaking: slot === self ? '你，正在回复' : '正在回复', posted: '已发言',
+      passed: '已略过', missed: '未回应', working: '处理中', 'waiting-approval': '等用户授权',
+      'waiting-answer': '等用户答复', failed: '回复失败', left: '已离群' }
+    return labels[slot.status] ? `${slot.name}（${labels[slot.status]}）` : slot.name
+  }
   if (slot.status === 'speaking') return slot === self ? `${slot.name} (you, now)` : `${slot.name} (answering now)`
   if (slot.status === 'posted') return `${slot.name} (posted)`
   if (slot.status === 'passed') return `${slot.name} (passed)`
@@ -222,16 +233,14 @@ const slotLabel = (slot, self) => {
   return slot.name
 }
 
-const adminNote = room => [
-  'You are this group\'s admin.',
-  room.mode === 'admin' ? 'Plain messages come to you first: answer them, or call the members who should answer with @Name.' : '',
-  'Track this group\'s shared task board: keep each open item\'s owner, status, blocker, evidence, and next step current, and coordinate the group until its goal is complete.',
-  '"@all" calls every member — avoid it unless every member truly must act; prefer plain-text @Name for the specific owner. When the user asks, change the group with update_group.',
-  'When the user wants this group to reach a goal, set it with group_goal (show first, align with the user via goal-grill if unclear, then start); track individual deliverables and acceptance items on board_task.',
-].filter(Boolean).join(' ')
+const adminNote = (room, zh) => zh
+  ? `你是本群管理员。${room.mode === 'admin' ? '没有点名的群消息先交给你，按职责答复或定向转交。' : ''}群设置按用户要求用 update_group 修改；新目标用 group_goal 先 show，需澄清用 goal-grill，明确后 start。`
+  : `You are this group's admin.${room.mode === 'admin' ? ' Reply to unaddressed messages or route them to the right members.' : ''} Track the shared board using board_task. Use update_group when the user requests a group change. For a new goal use group_goal: show first, clarify with goal-grill if needed, then start.`
 
 // The opening turn of a group the user just made without a first message.
-const roomKickoff = language => `The user just created this group and has not written yet. Greet the user in one short message and ask what they want this group to work on. Do not call members with @ yet, and do not reply [PASS]. No name prefix. Write in ${language ?? 'the user\'s language if known; otherwise Chinese'}.`
+const roomKickoff = (language, zh) => zh
+  ? '本群刚建立，用户尚未发言。用一句话问候并询问希望本群完成的目标，不带署名，不 @成员，也不回复 [PASS]。'
+  : `The user just created this group. Greet the user and ask what the group should do in one message, with no name prefix, @mentions, or [PASS]. Write in ${language ?? 'the user\'s language if known; otherwise Chinese'}.`
 
 const ROOM_READ_MAX = 30
 
@@ -939,18 +948,23 @@ export function install(rt) {
   // that finished without a closing message.
   function roomPrompt(room, member, round, slot, finished = { results: [], quiet: [] }, fromSeq) {
     const { results, quiet } = finished
+    const zh = chineseRolePrompt(member.instructions)
     const peers = room.members.filter(id => id !== member.id).map(rt.botOf).filter(Boolean)
-      .map(bot => `${bot.name}${rt.isAdminOf(room, bot.id) ? ' (admin)' : ''}`)
+      .map(bot => `${bot.name}${rt.isAdminOf(room, bot.id) ? (zh ? '（管理员）' : ' (admin)') : ''}`)
     const leads = rt.isAdminOf(room, member.id)
     const lines = unseenLines(room, member.id, fromSeq)
     const earlier = lines.filter(line => line.seq < round.startSeq).slice(-ROOM_EARLIER_MAX)
     const current = lines.filter(line => line.seq >= round.startSeq)
     const owed = results.filter(result => ![...earlier, ...current].some(line => line.seq === result.seq))
     const spokeThisRound = (room.seen[member.id] ?? 0) >= round.startSeq
-    const members = `Members: the user${peers.length ? `, ${peers.join(', ')}` : ''} and you${leads ? ' (admin)' : ''}. ${ROOM_CALLS}`
-    const notice = room.notice ? `Group notice (shared instructions for every member):\n${room.notice}` : ''
-    if (round.kickoff) return { text: [members, notice, leads ? adminNote(room) : '', roomKickoff(rt.uiLanguage?.())].filter(Boolean).join('\n\n'), images: [], files: [] }
-    const goal = rt.goalBlock?.(room, member, { nudge: round.goalNudge === true, resume: round.goalResume === true }) ?? ''
+    const members = zh
+      ? `群成员：${['用户', ...peers, leads ? '你（管理员）' : '你'].join('、')}。`
+      : `Members: the user${peers.length ? `, ${peers.join(', ')}` : ''} and you${leads ? ' (admin)' : ''}.`
+    const notice = room.notice ? `${zh ? '群公告' : 'Group notice'}:\n${room.notice}` : ''
+    if (round.kickoff) return { text: [members, notice, roomKickoff(rt.uiLanguage?.(), zh)].filter(Boolean).join('\n\n'), images: [], files: [] }
+    const reviewId = leads ? round.goalReviewId : undefined
+    const inspectOnly = reviewId !== undefined && round.goalInspectOnly === true
+    const goal = rt.goalBlock?.(room, member, { nudge: round.goalNudge === true, resume: round.goalResume === true, inspectOnly, reviewId }) ?? ''
     // Members answering in this round are named with the round below.
     const answering = new Set(round.slots.filter(other => other.status === 'speaking').map(other => other.id))
     const working = workingIn(room).filter(item => item.bot.id !== member.id && !answering.has(item.bot.id))
@@ -959,19 +973,24 @@ export function install(rt) {
       members,
       notice,
       goal,
-      leads ? adminNote(room) : '',
-      earlier.length ? `Earlier in the group, before this round (context only):\n${transcript(earlier, memberText(room))}` : '',
-      owed.length ? `Results of the work you asked for that the lines here leave out (oldest first):\n${owed.map(result => (result.line
+      leads && !inspectOnly ? adminNote(room, zh) : '',
+      earlier.length ? `${zh ? '本轮之前的群消息（仅供参考）' : 'Earlier in the group, before this round (context only)'}:\n${transcript(earlier, memberText(room))}` : '',
+      owed.length ? `${zh ? '尚未展示的交接结果（按时间）' : 'Results of the work you asked for that the lines here leave out (oldest first)'}:\n${owed.map(result => (result.line
         ? transcript([result.line], memberText(room))
-        : `[${result.name}'s result, message #${result.seq}, is not available here; read_group_chat with seq ${result.seq} reads it]`)).join('\n')}` : '',
-      quiet.length ? `Finished without a closing message: ${quiet.join(' and ')}. What they said while they worked is their result; read_group_chat reads it.` : '',
+        : zh ? `[${result.name} 的结果见消息 #${result.seq}，用 read_group_chat 读取]`
+          : `[${result.name}'s result, message #${result.seq}, is not available here; read_group_chat with seq ${result.seq} reads it]`)).join('\n')}` : '',
+      quiet.length ? (zh ? `${quiet.join('、')}已结束，可用 read_group_chat 查阅过程中的结果。`
+        : `Finished without a closing message: ${quiet.join(' and ')}. What they said while they worked is their result; read_group_chat reads it.`) : '',
       current.length
-        ? `This round so far${spokeThisRound ? ', since your last message' : ', starting with the new message'} (oldest first):\n${transcript(current, memberText(room))}`
-        : 'Nothing new in this round since your last message.',
-      round.shown?.includes(member.id) ? '' : referenceNote(round.references),
-      working.length > 0 ? `Still at work on what they were asked; each posts here when done: ${working.map(item => `${item.bot.name} (${minutesSince(item.since)} min${item.unread > 0 ? `, with ${item.unread} group message(s) it has not read yet` : ''})`).join(', ')}.` : '',
-      ...placeLines(round, slot),
-      ROOM_REPLY,
+        ? `${zh ? '本轮群消息（按时间）' : `This round so far${spokeThisRound ? ', since your last message' : ', starting with the new message'} (oldest first)`}:\n${transcript(current, memberText(room))}`
+        : zh ? '本轮暂无新消息。' : 'Nothing new in this round since your last message.',
+      round.shown?.includes(member.id) ? '' : referenceNote(round.references, zh),
+      working.length > 0 ? (zh
+        ? `尚在处理，完成后回报：${working.map(item => `${item.bot.name}（${minutesSince(item.since)} 分钟${item.unread > 0 ? `，未读 ${item.unread} 条` : ''}）`).join('、')}。`
+        : `Still at work on what they were asked; each posts here when done: ${working.map(item => `${item.bot.name} (${minutesSince(item.since)} min${item.unread > 0 ? `, with ${item.unread} group message(s) it has not read yet` : ''})`).join(', ')}.`) : '',
+      ...placeLines(round, slot, zh),
+      inspectOnly ? '' : roomCalls(zh),
+      inspectOnly ? '' : roomReply(zh),
     ].filter(Boolean).join('\n\n')
     const shown = [...earlier, ...owed.flatMap(result => result.line ?? []), ...current]
     return { text, images: shown.flatMap(line => line.images ?? []), files: shown.flatMap(line => line.files ?? []) }
@@ -992,21 +1011,24 @@ export function install(rt) {
   // Where a turn stands in its round: its place in the order when members take turns,
   // or who was called with it and answers at the same time; then the others' latest
   // calls in this round.
-  function placeLines(round, slot) {
+  function placeLines(round, slot, zh) {
     const lines = []
     if (slot.ordered) {
       const order = round.slots.filter(other => other.ordered)
       const index = order.indexOf(slot)
       const after = order.length - index - 1
-      lines.push(`Members answer this message one at a time: ${order.map(other => slotLabel(other, slot)).join(' → ')}.`,
+      if (zh) lines.push(`按顺序回复：${order.map(other => slotLabel(other, slot, true)).join(' → ')}。你是第 ${index + 1} 位，后续 ${after} 位可看到你的回复。`)
+      else lines.push(`Members answer this message one at a time: ${order.map(other => slotLabel(other, slot)).join(' → ')}.`,
         `You are number ${index + 1} of ${order.length}. ${index === 0 ? 'Nobody spoke before you' : `${index} went before you`}${after === 0 ? ', and you are the last.' : `; ${after} after you will see your message.`}`)
     } else {
       const together = round.slots.filter(other => other !== slot && other.batch === slot.batch && other.id !== slot.id)
-      if (together.length > 0) lines.push(`Called together with you: ${together.map(other => other.name).join(', ')}. You answer at the same time and do not see each other's replies until they post.`)
+      if (together.length > 0) lines.push(zh ? `和你同时被点名：${together.map(other => other.name).join('、')}。发出后才能看到彼此的回复。`
+        : `Called together with you: ${together.map(other => other.name).join(', ')}. You answer at the same time and do not see each other's replies until they post.`)
     }
     const latest = new Map()
     for (const other of round.slots) if (other.id !== slot.id && !(slot.ordered && other.ordered)) latest.set(other.id, other)
-    if (latest.size > 0) lines.push(`Also in this round: ${[...latest.values()].map(other => slotLabel(other, slot)).join(', ')}.`)
+    if (latest.size > 0) lines.push(zh ? `本轮其他成员：${[...latest.values()].map(other => slotLabel(other, slot, true)).join('、')}。`
+      : `Also in this round: ${[...latest.values()].map(other => slotLabel(other, slot)).join(', ')}.`)
     return lines
   }
 
@@ -1233,6 +1255,8 @@ export function install(rt) {
   // `heard` takes each such line once it is posted.
   async function roomTurn(room, member, sessionId, { text, images = [], files = [] }, note, signal, round, by, said = [], heard = () => {}, onWork = () => {}, roomFromSeq) {
     if (signal.aborted) return null
+    const reviewId = rt.isAdminOf(room, member.id) ? round.goalReviewId : undefined
+    if (reviewId !== undefined && rt.goalReviewAllowed?.(room, reviewId) !== true) return null
     const startedAt = Date.now()
     const exchangeId = randomUUID()
     const turn = { botId: member.id, sessionId, exchangeId }
@@ -1275,6 +1299,7 @@ export function install(rt) {
       await rt.deliver({
         fromId: undefined, toId: member.id, sessionId, role: 'room', roomId: room.id,
         ...(Number.isSafeInteger(roomFromSeq) ? { roomFromSeq } : {}),
+        ...(reviewId ? { reviewId, reviewInspect: round.goalInspectOnly === true } : {}),
         exchangeId, note, text, images, files, steer: busy, ...(by ? { askedBy: by } : {}),
       })
       // The prompt reached the member: its read position moves on.
@@ -1869,7 +1894,12 @@ export function install(rt) {
     // a goal that was written or stopped keeps only its user line.
     for (const post of [...posts]) {
       if (post.goal === 'nudge' || post.goal === 'resume') {
-        if (room.goal?.id !== post.goalId || room.goal.status !== 'active' || (post.goal === 'nudge' && room.goal.idle === true)) posts.splice(posts.indexOf(post), 1)
+        const goal = room.goal
+        const valid = goal?.status === 'active' && goal.id === post.goalId
+          && (post.reviewId ? post.goal === 'nudge' && rt.goalReviewAllowed?.(room, post.reviewId) === true
+            && post.reviewInspect === (goal.reviewAttempt.inspectOnly === true)
+            : post.goal !== 'nudge' || goal.idle !== true)
+        if (!valid) posts.splice(posts.indexOf(post), 1)
       } else if (post.goal === 'draft' && (room.goal?.id !== post.goalId || room.goal.status !== 'drafting')) {
         delete post.goal
         delete post.goalId
@@ -1945,6 +1975,9 @@ export function install(rt) {
     // A goal draft queued with another post still brings the admin in, on its note.
     const draftPost = posts.find(post => post.goal === 'draft' && post !== opener)
     if (draftPost !== undefined && admin !== undefined && !speakers.some(member => member.id === admin.id)) speakers.push(admin)
+    const attempt = room.goal?.reviewAttempt
+    const review = opener.goal === 'nudge' && opener.reviewId && rt.goalReviewAllowed?.(room, opener.reviewId) === true
+      && admin?.id === attempt?.adminId ? attempt : undefined
     const round = {
       roomId: room.id,
       members: room.members,
@@ -1953,6 +1986,7 @@ export function install(rt) {
       ...(posts.some(userPost) ? { userMessage: true } : {}),
       ...(opener.kickoff ? { kickoff: true } : {}),
       ...(opener.goal === 'nudge' ? { goalNudge: true } : {}),
+      ...(review ? { goalReviewId: review.id, goalInspectOnly: review.inspectOnly === true } : {}),
       ...(opener.goal === 'resume' ? { goalResume: true } : {}),
       ...(stoppedOnly ? { stoppedOnly: true } : {}),
       ...(references.length > 0 ? { references, shown: [] } : {}),

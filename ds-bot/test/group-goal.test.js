@@ -332,6 +332,33 @@ test('the admin and member prompts carry the goal block', async (t) => {
   await settle(() => again() !== undefined)
 })
 
+test('v1.2 members receive a scoped Chinese goal ledger and administrators keep the inspection boundaries', async t => {
+  const host = await start(t)
+  await startGoal(host)
+  const room = host.rt.state.rooms.r1
+  const admin = host.rt.botOf('a'), member = host.rt.botOf('b')
+  admin.instructions = member.instructions = '团队章程 v1.2'
+  const memberBlock = host.rt.goalBlock(room, member)
+  assert.match(memberBlock, /你的任务：write the draft/)
+  assert.doesNotMatch(memberBlock, /Your task in it|Current goal binding|review_fingerprint=/)
+  const block = host.rt.goalBlock(room, admin, { nudge: true })
+  assert.match(block, /review_fingerprint=[a-f0-9]{64}/)
+  assert.match(block, /未核实填未知、review_complete=false/)
+  assert.equal(block.split('交接不明只查原回执').length, 2)
+  assert.doesNotMatch(block, /You run this goal|Current goal binding|Apply each saved goal rule/)
+  room.goal.reviewAttempt = { id:'r-test', adminId:admin.id, scheduledPrompt:'只核对本群签收记录。' }
+  const inspection = host.rt.goalBlock(room, admin, { nudge: true, inspectOnly: true, reviewId:'r-test' })
+  assert.match(inspection, /本回合禁止 message_bot/)
+  assert.match(inspection, /只核对本群签收记录/)
+  assert.doesNotMatch(inspection, /必须派工|先用 board_task register 登记再通知开工/)
+  const other = host.rt.goalBlock(room, admin, { nudge: true, reviewId:'other' })
+  assert.doesNotMatch(other, /只核对本群签收记录/)
+  room.goal.status = 'paused'
+  const paused = host.rt.goalBlock(room, admin, { nudge:true, resume:true, inspectOnly:true, reviewId:'r-test' })
+  assert.match(paused, /此目标已暂停/)
+  assert.doesNotMatch(paused, /用户已恢复目标|本次检查先核对|只核对本群签收记录/)
+})
+
 test('a goal draft opens as the user\'s line and calls only the admin', async (t) => {
   const host = await start(t)
   assert.equal((await host.call('goal-draft', { roomId: 'r1', text: 'Ship the thing' })).ok, true)

@@ -1224,6 +1224,7 @@ export function install(rt) {
             text: textOf(event.data.content).replace(/^\[(?:[^\r\n]*\]\r?\n|[^\]\r\n]*\])/, ''),
             ...(source.goal !== undefined ? { goal: source.goal } : {}),
             ...(source.goalId !== undefined ? { goalId: source.goalId } : {}),
+            ...(source.reviewId ? { reviewId: source.reviewId, reviewInspect: source.reviewInspect === true } : {}),
           })
         } else if (source?.kind === SOURCE_KIND) {
           if (entry.turn === undefined) {

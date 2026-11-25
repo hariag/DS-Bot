@@ -195,6 +195,26 @@ for (const kind of ['main', 'copy', 'made by a Main Bot', 'made by the user']) {
   })
 }
 
+test('a Chinese charter overrides the interface language for new and held greetings without changing the brief', async t => {
+  const { call, stop, sent } = start(undefined, { models: ['deepseek-v4-flash'] })
+  t.after(stop)
+  const chief = (await call('state', { locale: 'en-US' })).value.mainBotId
+  const instructions = '团队章程 v1.2\n按角色指令执行。'
+  const brief = 'Check the literal path C:/work/review.md.'
+  const worker = (await call('create-bot', { name: '开发', instructions, brief })).value
+  await call('update-bot', { id: chief, instructions, model: 'deepseek/deepseek-v4-flash' })
+  for (const id of [worker.id, chief]) {
+    const greeting = () => sent.find(entry => entry.sessionId === id && entry.message.source.role === 'kickoff')
+    await until(greeting)
+    const text = greeting().message.content[0].text
+    assert.match(text, /^\[Bot team setup\]/)
+    assert.match(text, /用简体中文回复，遵循你的角色指令。/)
+    assert.doesNotMatch(text, /Write in|Where your instructions|Greet the user/)
+    if (id === worker.id) assert.ok(text.includes(brief))
+    else assert.match(text, /主 Bot/)
+  }
+})
+
 test('a greeting whose model wait fails still goes out, with no unhandled rejection', async (t) => {
   const { call, stop, sent, warnings } = start(undefined, { models: ['deepseek-v4-flash'] })
   t.after(stop)

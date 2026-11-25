@@ -17,6 +17,8 @@ import { completedInspection, inspectionMessageHash, inspectionSourceMatches } f
 import { syncDirectory } from './directory-sync.mjs'
 import { scheduleChangeId } from './room-schedule-delivery.js'
 import { ROOM_POLL_SECONDS } from './room-schedule-registry.mjs'
+import { chineseRolePrompt } from './prompt-language.mjs'
+import { goalDutiesZh as zhDuty } from './goal-prompt-zh.mjs'
 
 // DSH can inject a schedule-change notice without waking an agent. Only a
 // verified no-action notice may remain queued while the room is considered idle.
@@ -61,7 +63,15 @@ const inspectionFingerprint = (goal, includeRevision = true) => {
   })).digest('hex')
 }
 
-const receiptStatus = (receipt, now = Date.now()) => {
+const shanghaiTime = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'medium', hourCycle: 'h23' })
+const cst = time => shanghaiTime.format(time) + '（北京时间）'
+const receiptStatus = (receipt, now = Date.now(), zh = false) => {
+  if (zh) {
+    if (receipt.state === 'needs-decision') return '缺独立复核人，请用户指定'
+    if (receipt.state === 'answered') return '已收到回复，须核对自报证据'
+    if (now < receipt.deadline) return `跟进状态 ${receipt.state}，反馈期限 ${cst(receipt.deadline)}`
+    return `跟进状态 ${receipt.state}，已逾期未回复。查原记录后升级给有权复核的人，或请用户决断；不要重复提问。`
+  }
   if (receipt.state === 'needs-decision') return 'user decision needed; no independent board reviewer is assigned'
   if (receipt.state === 'answered') return 'reply recorded (self-report; check evidence)'
   if (now < receipt.deadline) return `follow-up ${receipt.state}; response due ${new Date(receipt.deadline).toISOString()}`
@@ -177,9 +187,17 @@ export const TASK_LABEL = { pending: 'not started', working: 'working', reported
 
 // Notes without trustworthy status/version/time metadata are historical clues,
 // not proof of the task's current condition. This also handles pre-upgrade data.
-export function taskNoteText(task, now = Date.now()) {
+export function taskNoteText(task, now = Date.now(), zh = false) {
   if (typeof task.note !== 'string' || task.note === '') return ''
   const context = goalNoteContext(task, now)
+  if (zh) {
+    const label = { current: '当前状态备注', historical: '旧状态备注', conflict: '时间冲突，来源待核', unknown: '来源和时间待核' }[context.kind] ?? '来源和时间待核'
+    const time = context.noteTimeKnown ? '，' + cst(task.noteAt) : ''
+    const statusTime = context.statusTime === 'known' ? '状态变更于 ' + cst(task.statusUpdatedAt) : '状态变更时间未知'
+    const history = Array.isArray(task.noteHistory) ? task.noteHistory.filter(entry => typeof entry?.text === 'string' && entry.text) : []
+    const previous = history.length ? `；历史备注 ${history.length} 条，最新一条：${headOf(history.at(-1).text, 160)}` : ''
+    return ` — [${label}${time}；${statusTime}] ${task.note}${previous}`
+  }
   const label = context.kind === 'current' ? 'note recorded for this status'
     : context.kind === 'historical' ? 'historical note from an earlier status'
       : context.kind === 'conflict' ? 'note provenance/time unknown; time conflict, verify' : 'note provenance/time unknown'
@@ -190,7 +208,8 @@ export function taskNoteText(task, now = Date.now()) {
   return ` — [${label}${time}${statusTime}] ${task.note}${previous}`
 }
 
-function taskStatusTimeText(task, now = Date.now()) {
+function taskStatusTimeText(task, now = Date.now(), zh = false) {
+  if (zh) return validGoalTime(task.statusUpdatedAt, now) ? ` — [状态变更于 ${cst(task.statusUpdatedAt)}]` : ' — [状态变更时间未知]'
   return validGoalTime(task.statusUpdatedAt, now)
     ? ` — [status changed ${new Date(task.statusUpdatedAt).toISOString()}]`
     : ' — [status change time unknown]'
@@ -640,6 +659,7 @@ const OWNER_REVIEW = 'Read the current group goal and this group’s task board 
 const DUTY_CONTINUITY = 'Keep an unfinished goal active until its acceptance is verified, or the user explicitly pauses or stops it. A lack of progress is not itself a user blocker. If a real user decision is the only way forward, report the exact question, recommendation, impact and next check time; continue independent authorized work and do not repeat an unchanged decision request.'
 const DUTY_PASSED = 'Every stage passed. Check the overall "done when", then call group_goal complete with the evidence and a summary for the user.'
 const DUTY_PAUSED = "This group goal is paused. Do not assume who paused it without evidence, assign new work or pass stages for it. Continue unrelated user-authorized work that does not depend on the paused goal. Resume only on an explicit user request."
+const dutyZh = goal => goal.status === 'paused' ? zhDuty.paused : goal.stages[goal.current] === undefined ? zhDuty.passed : zhDuty.active + '\n' + zhDuty.owner
 const dutyOf = goal => (goal.status === 'paused' ? DUTY_PAUSED : goal.stages[goal.current] === undefined ? DUTY_PASSED : `${DUTY_ACTIVE} ${OWNER_REVIEW} ${DUTY_CONTINUITY}`)
 
 const DUTY_DRAFT = [
@@ -648,12 +668,12 @@ const DUTY_DRAFT = [
   '2. List the decisions only the user can make. Ask them in one message, numbered, each with your recommended answer, so the user can reply "as recommended". Skip this when nothing is open.',
   '3. When the goal is sufficiently clear, call group_goal start with objective, acceptance, rules and stages; use at most one aggregated task per Bot in each stage and track independent items on the project board.',
 ].join('\n')
-const NUDGE_LINE = `Goal check from DS Bot: no work is currently running in this group and this goal is not finished; members may still be working elsewhere. ${OWNER_REVIEW} Dispatch only ready, authorized tasks that need assignment and fit capacity; review reported work without redispatching it. Process every independent eligible owner in this review, while keeping dependent tasks in order. Record external blockers and their owners, or complete the goal only when all requirements are verified. Use group_goal review-follow-up with the exact task ID and fingerprint from show for a real status question; each distinct task may be followed once in the same review, so do not stop after the first. Do not post a second copy for the same task. Do not reply [PASS] while an authorized action, targeted follow-up, or overdue escalation is due. If an existing follow-up is still within its stated deadline, do not repeat it; continue independent authorized work and record the exact next-check time.`
+const NUDGE_LINE = `Goal check from DS Bot: no work is currently running in this group and this goal is not finished; members may still be working elsewhere. Dispatch only ready, authorized tasks that need assignment and fit capacity; review reported work without redispatching it. Process every independent eligible owner in this review, while keeping dependent tasks in order. Record external blockers and their owners, or complete the goal only when all requirements are verified. Use group_goal review-follow-up with the exact task ID and fingerprint from show for a real status question; each distinct task may be followed once in the same review, so do not stop after the first. Do not post a second copy for the same task. Do not reply [PASS] while an authorized action, targeted follow-up, or overdue escalation is due. If an existing follow-up is still within its stated deadline, do not repeat it; continue independent authorized work and record the exact next-check time.`
 const INSPECTION_DUTY = 'This is a bounded inspection because an earlier delivery or stop is unresolved. First call group_goal show for the current group; read the original board items with board_task list/show using the exact room_id and check read_group_chat for handoffs if needed. Do not assign or restart the uncertain work, change task state, pass a stage, or override an explicit user pause/stop. Do not leave the group with only “waiting”. If the active goal is incomplete, call group_goal review-follow-up once for each distinct eligible current task that needs a receipt or exact missing evidence, using that task ID and fingerprint from show; the review permits different tasks to be followed in the same cycle. Do not stop after the first owner. Each follow-up sends a status-only group reply with one exact plain-text @Name outside backticks, code blocks and Markdown links, task ID, concrete receipt/status or exact missing-evidence question, and response deadline. For uncertain delivery, explicitly say not to repeat or restart the original work. Do not repeat the same task before its deadline. Once its recorded deadline passes without a reply, call review-follow-up again to escalate once to the linked board reviewer or record that the user needs to name a reviewer; keep only that affected action frozen and continue independent authorized work. Respect dependencies, and if no safe owner can be identified, state the exact uncertainty and who must resolve it; do not guess or wait without a next-check time. A goal panel is not proof of acceptance or completion; reported work remains incomplete until verified.'
 // Printed before the longer inspection duty so a review turn cannot spend steps on
 // tools the guard refuses: live data showed blocked shell/message calls retried
 // several times per inspection.
-const INSPECTION_TOOLS = 'Inspection limits: allowed tools are read, glob and grep on evidence files, read_group_chat for this group, group_goal show, review-check and review-follow-up, and board_task list and show for this room. Refused for this turn: shell commands, message_bot, group posts, memory writes, schedule changes, board writes and connector calls. Do not retry a refused call; report the evidence you have and the exact owner who must resolve the rest.'
+const inspectionTools = scoped => `Inspection limits: allowed tools are read, glob and grep on evidence files, read_group_chat for this group, group_goal show, review-check and review-follow-up, and board_task list and show for this room. Refused for this turn: shell commands, ${scoped ? 'unscoped message_bot' : 'message_bot'}, group posts, memory writes, schedule changes, board writes and connector calls. Do not retry a refused call; report the evidence you have and the exact owner who must resolve the rest.`
 const SCOPED_INSPECTION_DUTY = 'First call group_goal show for this group and read its original board items with board_task list/show using the exact room_id. Earlier deliveries have unresolved outcomes for specific owners; never repeat or redispatch that work. For every other current owner, inspect status, evidence, dependencies and capacity and record review-check for the exact task and current fingerprint. If the active goal is incomplete and this group is idle, take concrete authorized steps this cycle: read evidence for reported work; assign each uniquely owned, ready pending task with message_bot when="queue", full task text and request_id "goal-review:<reviewId>:<taskId>:assign"; or request exact missing evidence from each unblocked reported owner after recording review-check, using its review_next and request_id "goal-review:<reviewId>:<taskId>:evidence" with when="now". For each earlier delivery to a uniquely identifiable owner that is unresolved, call group_goal review-follow-up once with the exact task ID and fingerprint from show. Different tasks may be followed in the same review; do not stop after the first owner or duplicate a task. Each status-only group reply must put the exact plain-text @Name outside backticks, code blocks and Markdown links, with task ID, receipt/status question and deadline; explicitly do not repeat the original work. Never use @all. Respect dependencies; do not repeat a follow-up before its deadline; after the recorded deadline, escalate once to the linked board reviewer or record that the user needs to name a reviewer. Never use a new request ID to retry an uncertain assignment. Do not change task status or pass a stage from this inspection. A goal panel is not proof of acceptance or completion; unknown facts remain unknown.'
 const RESUME_LINE = 'The user resumed the goal. Take the next step now.'
 
@@ -890,7 +910,8 @@ export function install(rt) {
       const decision = { reviewId:attempt.id, taskId:task.id, fingerprint, state:'needs-decision' }
       goal.reviewFollowUps = { stageId:stage.id, records:{ ...stageRecords(), [recordKey]:decision } }
       await rt.save({ required:true })
-      await rt.postToRoom(room, rt.botOf(self), `Task ${task.id} @${nameOf(self)}: the owner’s response deadline passed and there is no available independent board reviewer. Ask the user to name the person who should verify the original handoff.`, { quiet:true })
+      const admin = rt.botOf(self)
+      await rt.postToRoom(room, admin, chineseRolePrompt(admin?.instructions) ? `@${nameOf(self)} 任务 ${task.id} 已过反馈期限且缺少独立复核人，请用户指定谁核验原交接。` : `Task ${task.id} @${nameOf(self)}: the owner’s response deadline passed and there is no available independent board reviewer. Ask the user to name the person who should verify the original handoff.`, { quiet:true })
       return receiptStatus(decision)
     }
     const target = await rt.ensureGroupTaskSession(room.id, contact.id)
@@ -902,10 +923,13 @@ export function install(rt) {
       taskId:task.id, contactId:contact.id, adminId:self, sessionId:target, deadline:Date.now() + 20 * 60 * 1000, state:'claimed' }
     goal.reviewFollowUps = { stageId:stage.id, records:{ ...latest, [recordKey]:receipt } }
     await rt.save({ required:true })
-    const request = escalating
+    const zh = chineseRolePrompt(contact.instructions)
+    const request = zh ? (escalating
+      ? `@${nameOf(task.botId)} 已过反馈期限。请作为原卡复核人核对群记录，说明谁可确认交接、还缺哪些证据。`
+      : '请确认是否收到原交接，并说明当前状态、已有证据或阻碍。') : escalating
       ? `The follow-up to @${nameOf(task.botId)} missed its response deadline. As the original board reviewer, check the group record and say who can confirm the handoff and what evidence is still needed.`
       : 'Confirm whether you received the original handoff, its current status and existing evidence or blocker.'
-    const question = `Task ${task.id}: ${request} Do not start, repeat or resume work. Reply in this group by ${new Date(receipt.deadline).toISOString()}.`
+    const question = zh ? `任务 ${task.id}：${request} 请勿启动、重复或恢复原工作，请于 ${cst(receipt.deadline)} 前在本群回复。` : `Task ${task.id}: ${request} Do not start, repeat or resume work. Reply in this group by ${new Date(receipt.deadline).toISOString()}.`
     let refused = false
     try {
       await rt.deliver({ roomId:room.id, toId:contact.id, sessionId:target, role:'room', fromId:self, exchangeId:receipt.exchangeId,
@@ -1003,6 +1027,7 @@ export function install(rt) {
     return bot !== undefined && room.members.includes(bot.id) ? bot : undefined
   }
   const memberNames = room => room.members.map(id => rt.botOf(id)?.name).filter(Boolean)
+  const taskLabel = (task, zh) => zh ? (task.status ?? '未知') : (TASK_LABEL[task.status] ?? 'status unknown')
   const nameOf = id => rt.botOf(id)?.name ?? 'a member'
 
   function boardLocator(room, goal, stage, task) {
@@ -1011,59 +1036,61 @@ export function install(rt) {
   }
 
   // The full ledger is returned on demand. The routine admin prompt omits per-item board IDs.
-  function ledgerLines(room, goal, { board = true } = {}) {
-    const lines = [`Goal: ${goal.title}`, `Objective: ${goal.objective}`, `Done when: ${goal.acceptance}`]
-    if (goal.constraints.length > 0) lines.push('Rules:', ...goal.constraints.map(rule => `- ${rule}`))
-    lines.push('Stages:')
+  function ledgerLines(room, goal, { board = true, zh = false } = {}) {
+    const lines = zh ? [`群目标：${goal.title}`, `目标说明：${goal.objective}`, `验收条件：${goal.acceptance}`] : [`Goal: ${goal.title}`, `Objective: ${goal.objective}`, `Done when: ${goal.acceptance}`]
+    if (goal.constraints.length > 0) lines.push(zh ? '约束：' : 'Rules:', ...goal.constraints.map(rule => `- ${rule}`))
+    lines.push(zh ? '阶段：' : 'Stages:')
     goal.stages.forEach((stage, index) => {
       const n = index + 1
-      if (stage.status === 'passed') lines.push(`[passed] ${n}. ${stage.title}`)
+      if (stage.status === 'passed') lines.push(`${zh ? '[已通过]' : '[passed]'} ${n}. ${stage.title}`)
       else if (index === goal.current) {
-        lines.push(`[current] ${n}. ${stage.title} — done when: ${stage.acceptance}`)
-        for (const task of stage.tasks) lines.push(`  - ${nameOf(task.botId)}: ${task.task} [${TASK_LABEL[task.status] ?? 'status unknown'}]${taskNoteText(task) || taskStatusTimeText(task)} (stage ${stage.id}, task ${task.id}, review fingerprint ${reviewFingerprint(task)})${board ? boardLocator(room, goal, stage, task) : ''}`)
+        lines.push(`${zh ? '[当前]' : '[current]'} ${n}. ${stage.title} — ${zh ? '验收条件：' : 'done when: '}${stage.acceptance}`)
+        for (const task of stage.tasks) lines.push(`  - ${nameOf(task.botId)}: ${task.task} [${taskLabel(task, zh)}]${taskNoteText(task, Date.now(), zh) || taskStatusTimeText(task, Date.now(), zh)} (${zh ? 'stage_id=' : 'stage '}${stage.id}, ${zh ? 'review_task=' : 'task '}${task.id}, ${zh ? 'review_fingerprint=' : 'review fingerprint '}${reviewFingerprint(task)})${board ? boardLocator(room, goal, stage, task) : ''}`)
         if (goal.reviewFollowUps?.stageId === stage.id) {
           for (const task of stage.tasks) {
             const receipt = goal.reviewFollowUps.records?.[task.id]
             const escalation = goal.reviewFollowUps.records?.[`${task.id}:escalation`]
-            if (receipt?.fingerprint === reviewFingerprint(task)) lines.push(`  - Status question ${task.id} @${nameOf(receipt.contactId)}: ${receiptStatus(receipt)}`)
-            if (escalation?.fingerprint === reviewFingerprint(task)) lines.push(`  - Escalation for ${task.id}: ${receiptStatus(escalation)}`)
+            if (receipt?.fingerprint === reviewFingerprint(task)) lines.push(`  - ${zh ? '进度询问' : 'Status question'} ${task.id} @${nameOf(receipt.contactId)}: ${receiptStatus(receipt, Date.now(), zh)}`)
+            if (escalation?.fingerprint === reviewFingerprint(task)) lines.push(`  - ${zh ? '升级' : 'Escalation for'} ${task.id}: ${receiptStatus(escalation, Date.now(), zh)}`)
           }
         }
-        if (stage.reworks > 0) lines.push(`  Sent back ${stage.reworks} ${stage.reworks === 1 ? 'time' : 'times'}. Latest feedback: ${stage.feedback ?? ''}`)
-      } else lines.push(`[next] ${n}. ${stage.title}: ${[...new Set(stage.tasks.map(task => nameOf(task.botId)))].join(', ')}`)
+        if (stage.reworks > 0) lines.push(zh ? `  已返工 ${stage.reworks} 次，最近反馈：${stage.feedback ?? ''}` : `  Sent back ${stage.reworks} ${stage.reworks === 1 ? 'time' : 'times'}. Latest feedback: ${stage.feedback ?? ''}`)
+      } else lines.push(`${zh ? '[后续]' : '[next]'} ${n}. ${stage.title}: ${[...new Set(stage.tasks.map(task => nameOf(task.botId)))].join(', ')}`)
     })
-    if (goal.stages[goal.current]?.tasks.length) lines.push(board
+    if (goal.stages[goal.current]?.tasks.length) lines.push(zh
+      ? (board ? `用 board_task show 和 room_id=${room.id} 查原卡、功能或修复父卡及所属小版本。` : '用 group_goal show 查当前各项的 board_task 原卡编号。')
+      : board
       ? `Use board_task show in room_id=${room.id} for the original item, its feature/bugfix parent and minor release when assigned.`
       : 'group_goal show gives the original board_task ID for each current task.')
     const corrections = (goal.events ?? []).filter(event => event.kind === 'revise' && event.text).slice(-3).map(event => event.text)
-    if (corrections.length > 0) lines.push(`Latest corrections from the user: ${corrections.join(' / ')}`)
-    if (goal.inspectionBackoff?.fingerprint === inspectionFingerprint(goal, false) && Number.isSafeInteger(goal.inspectionBackoff.count) && goal.inspectionBackoff.count > 0 && Number.isFinite(goal.ownerReviewAt)) lines.push(`Inspection incomplete ${goal.inspectionBackoff.count} consecutive time(s): no current goal ledger was generated. Owner checks remain pending for the next scheduled group inspection.`)
-    if (goal.reviewAttempt?.terminalFailure) lines.push(`Periodic review ${goal.reviewAttempt.id} failed before administrator tools. Future reviews wait for the room's pending work to settle.`)
-    else if (goal.reviewAttempt) lines.push(`Periodic review ${goal.reviewAttempt.id} is ${goal.reviewAttempt.state}; do not send it again until its original outcome is known.`)
+    if (corrections.length > 0) lines.push(`${zh ? '最近的目标修订：' : 'Latest corrections from the user: '}${corrections.join(' / ')}`)
+    if (goal.inspectionBackoff?.fingerprint === inspectionFingerprint(goal, false) && Number.isSafeInteger(goal.inspectionBackoff.count) && goal.inspectionBackoff.count > 0 && Number.isFinite(goal.ownerReviewAt)) lines.push(zh ? `连续 ${goal.inspectionBackoff.count} 次巡查未生成现行台账；下次巡查须核对负责人。` : `Inspection incomplete ${goal.inspectionBackoff.count} consecutive time(s): no current goal ledger was generated. Owner checks remain pending for the next scheduled group inspection.`)
+    if (goal.reviewAttempt?.terminalFailure) lines.push(zh ? `巡查 ${goal.reviewAttempt.id} 在管理员调用工具前失败，待群在办事项有结果后复查。` : `Periodic review ${goal.reviewAttempt.id} failed before administrator tools. Future reviews wait for the room's pending work to settle.`)
+    else if (goal.reviewAttempt) lines.push(zh ? `巡查 ${goal.reviewAttempt.id} 状态为 ${goal.reviewAttempt.state}，原结果不明时不重发。` : `Periodic review ${goal.reviewAttempt.id} is ${goal.reviewAttempt.state}; do not send it again until its original outcome is known.`)
     const observed = blockedReviewReads.get(goal.reviewAttempt)
-    if (observed) lines.push(`Read-only host observation at ${new Date(observed.at).toISOString()} (revision ${observed.revision}): ${observed.open} unfinished task(s); current owner checks missing for ${observed.missing.join(', ') || 'none'}. The original review remains unresolved.`)
-    if (goal.ownerReview?.stageId === goal.stages[goal.current]?.id) lines.push(`Periodic owner review still needs: ${missingFor(room).map(task => task.id).join(', ') || 'none'}. Records are administrator assertions with cited evidence, not independent proof.`)
+    if (observed) lines.push(zh ? `宿主只读记录：${cst(observed.at)}，版本 ${observed.revision}，未结 ${observed.open} 项，待核负责人 ${observed.missing.join('、') || '无'}；原巡查仍未解决。` : `Read-only host observation at ${new Date(observed.at).toISOString()} (revision ${observed.revision}): ${observed.open} unfinished task(s); current owner checks missing for ${observed.missing.join(', ') || 'none'}. The original review remains unresolved.`)
+    if (goal.ownerReview?.stageId === goal.stages[goal.current]?.id) lines.push(zh ? `本次尚待核查：${missingFor(room).map(task => task.id).join('、') || '无'}。管理员引用的证据仍须独立核验。` : `Periodic owner review still needs: ${missingFor(room).map(task => task.id).join(', ') || 'none'}. Records are administrator assertions with cited evidence, not independent proof.`)
     return lines
   }
 
   // A member's share of the goal: the current stage and its own task in it.
-  function memberLines(room, goal, member) {
+  function memberLines(room, goal, member, zh = false) {
     const count = goal.stages.length
     const stage = goal.stages[goal.current]
     const lines = [
-      `The group works toward: ${goal.title} — ${headOf(goal.objective, 600)}`,
-      ...(goal.constraints.length > 0 ? [`Rules: ${goal.constraints.join('; ')}`] : []),
+      `${zh ? '群目标：' : 'The group works toward: '}${goal.title} — ${headOf(goal.objective, 600)}`,
+      ...(goal.constraints.length > 0 ? [`${zh ? '约束：' : 'Rules: '}${goal.constraints.join(zh ? '；' : '; ')}`] : []),
     ]
-    if (stage === undefined) lines.push('Every stage passed; the admin is checking the whole goal.')
+    if (stage === undefined) lines.push(zh ? '各阶段已通过，管理员正在核对总体验收。' : 'Every stage passed; the admin is checking the whole goal.')
     else {
-      lines.push(`Current stage ${goal.current + 1} "${stage.title}", done when: ${stage.acceptance}`)
+      lines.push(zh ? `当前阶段 ${goal.current + 1}「${stage.title}」，验收条件：${stage.acceptance}` : `Current stage ${goal.current + 1} "${stage.title}", done when: ${stage.acceptance}`)
       const tasks = stage.tasks.filter(task => task.botId === member.id)
-      if (tasks.length === 0) lines.push('You have no task in this stage.')
-      else for (const task of tasks) lines.push(`Your task in it: ${task.task} (${TASK_LABEL[task.status] ?? 'status unknown'}).${taskNoteText(task) || taskStatusTimeText(task)}${boardLocator(room, goal, stage, task)}`)
-      if (tasks.length) lines.push(`Use board_task show in room_id=${room.id} to read the original item and its current instructions. Record progress or evidence on that item under the existing workflow.`)
+      if (tasks.length === 0) lines.push(zh ? '本阶段没有分配给你的任务。' : 'You have no task in this stage.')
+      else for (const task of tasks) lines.push(`${zh ? '你的任务：' : 'Your task in it: '}${task.task} (${taskLabel(task, zh)}).${taskNoteText(task, Date.now(), zh) || taskStatusTimeText(task, Date.now(), zh)}${boardLocator(room, goal, stage, task)}`)
+      if (tasks.length) lines.push(zh ? `用 board_task show 和 room_id=${room.id} 查原卡，按现行流程记录进展或证据。` : `Use board_task show in room_id=${room.id} to read the original item and its current instructions. Record progress or evidence on that item under the existing workflow.`)
     }
-    lines.push('Work toward this group goal and any other active goals explicitly requested by the user, within your assigned role and scope. A new request does not cancel an earlier goal unless the user clearly changes, pauses, or cancels it. When you finish your task, end your reply with the evidence: the files you changed, the commands you ran and what they printed.')
-    if (goal.status === 'paused') lines.push('This group goal is paused: finish only work already underway for it and start no new work on this goal. Follow separate user requests within their authorization.')
+    lines.push(zh ? '按职责推进此目标及用户明确要求的其他目标。用户未明确更改、暂停或取消时续办原任务。完成后列明变更文件、已执行命令及结果。' : 'Work toward this group goal and any other active goals explicitly requested by the user, within your assigned role and scope. A new request does not cancel an earlier goal unless the user clearly changes, pauses, or cancels it. When you finish your task, end your reply with the evidence: the files you changed, the commands you ran and what they printed.')
+    if (goal.status === 'paused') lines.push(zh ? '此目标已暂停，仅收尾已在办事项。其他获授权的用户请求可独立处理。' : 'This group goal is paused: finish only work already underway for it and start no new work on this goal. Follow separate user requests within their authorization.')
     return { lines, stage: `${stage === undefined ? count : goal.current + 1}/${count}` }
   }
 
@@ -1073,47 +1100,54 @@ export function install(rt) {
     const goal = room.goal
     if (goal === undefined || goal.status === 'complete' || goal.status === 'stopped') return ''
     const isAdmin = rt.isAdminOf(room, member.id)
+    const zh = chineseRolePrompt(member.instructions)
+    const activeCheck = isAdmin && nudge && goal.status === 'active'
+    const restrictedCheck = activeCheck && inspectOnly
     let block
     if (goal.status === 'drafting') {
       block = isAdmin
-        ? ['<group_goal status="drafting">', `The user wants this group to reach a goal: ${goal.brief ?? ''}`, DUTY_DRAFT, '</group_goal>'].join('\n')
-        : ['<group_goal status="drafting">', `The admin is aligning a new goal for this group with the user: ${headOf(goal.brief ?? '', 300)}. Help with facts when you are asked.`, '</group_goal>'].join('\n')
+        ? ['<group_goal status="drafting">', `${zh ? '用户希望本群达成的目标：' : 'The user wants this group to reach a goal: '}${goal.brief ?? ''}`, zh ? zhDuty.draft : DUTY_DRAFT, '</group_goal>'].join('\n')
+        : ['<group_goal status="drafting">', zh ? `管理员正在与用户确认本群新目标：${headOf(goal.brief ?? '', 300)}。请按需提供事实。` : `The admin is aligning a new goal for this group with the user: ${headOf(goal.brief ?? '', 300)}. Help with facts when you are asked.`, '</group_goal>'].join('\n')
     } else if (isAdmin) {
-      const scoped=inspectOnly && (goal.stages?.[goal.current]?.tasks ?? []).some(task=>scopedReviewTask(room,task.id)!==undefined)
-      const evidence = inspectOnly && !inspectionOnlyIdle(goal) && openReviewTasks(goal).some(task => reportedReviewTask(room, task.id))
-        ? 'For reported tasks, inspect existing evidence with read, glob or grep under normal file permissions. Record findings with group_goal review-check and review_complete=false while an original outcome is unresolved. This does not change the card status. Shell commands are unavailable during a delivery inspection.' : ''
-      block = [`<group_goal status="${goal.status}">`, ...ledgerLines(room, goal, { board: false }), inspectOnly ? INSPECTION_TOOLS : '', inspectOnly ? (scoped ? SCOPED_INSPECTION_DUTY : INSPECTION_DUTY) : dutyOf(goal), evidence, '</group_goal>'].filter(Boolean).join('\n')
+      const scoped=restrictedCheck && (goal.stages?.[goal.current]?.tasks ?? []).some(task=>scopedReviewTask(room,task.id)!==undefined)
+      const evidence = restrictedCheck && !inspectionOnlyIdle(goal) && openReviewTasks(goal).some(task => reportedReviewTask(room, task.id))
+        ? (zh ? '在正常文件权限内核验已汇报任务的现有证据；原结果未明时按允许范围用 group_goal review-check 留证，review_complete=false，保留原卡状态。' : 'For reported tasks, inspect existing evidence with read, glob or grep under normal file permissions. Record findings with group_goal review-check and review_complete=false while an original outcome is unresolved. This does not change the card status. Shell commands are unavailable during a delivery inspection.') : ''
+      const duty = restrictedCheck
+        ? (zh ? [zhDuty.inspectionTools, zhDuty.inspect, scoped ? zhDuty.inspectScoped : zhDuty.inspectOnly].join('\n')
+          : [inspectionTools(scoped), scoped ? SCOPED_INSPECTION_DUTY : INSPECTION_DUTY].join('\n'))
+        : (zh ? dutyZh(goal) : dutyOf(goal))
+      block = [`<group_goal status="${goal.status}">`, ...ledgerLines(room, goal, { board: false, zh }), duty, evidence, '</group_goal>'].filter(Boolean).join('\n')
     } else {
-      const view = memberLines(room, goal, member)
+      const view = memberLines(room, goal, member, zh)
       block = [`<group_goal status="${goal.status}" stage="${view.stage}">`, ...view.lines, '</group_goal>'].join('\n')
     }
-    if (isAdmin && nudge && reviewId && goal.reviewAttempt?.id === reviewId && goal.reviewAttempt.adminId === member.id
+    if (activeCheck && reviewId && goal.reviewAttempt?.id === reviewId && goal.reviewAttempt.adminId === member.id
       && goal.reviewAttempt.scheduledPrompt) {
-      block += '\n按当前群目标、授权和复核范围执行以下轮询任务：\n' + goal.reviewAttempt.scheduledPrompt
-        + '\n通过 group_goal review-follow-up 查询进度。按依赖逐项核对可跟进的未结任务，优先处理逾期项。同一任务只问一次，先查目标记录以免重复。每个有效的 @姓名 单独占一行纯文本。'
+      block += '\n' + (zh ? '以下是本群计划要求，仅执行本次检查权限允许的操作：' : 'Room schedule instructions apply only within this review’s permissions:') + '\n' + goal.reviewAttempt.scheduledPrompt
     }
-    if (goal.status !== 'drafting') block += '\nApply each saved goal rule only to its stated scope. Honor the latest explicit user instruction and any still-valid approval for the same action, object, environment and conditions; do not ask for the same approval again. Do not extend a lock rule beyond the operations it actually covers: evidence from a different scope can be reported for its own scope but is not a substitute for the required gate evidence. If the applicable authorization or rule scope cannot be verified, pause only the affected action and continue independent authorized work. Tell the goal owner when saved rules need a scoped update.'
-    if (isAdmin && nudge && !inspectOnly) block += '\nEvery next action in this reply must name its owner with an exact plain-text @Name on its own line — including an evidence request, a test re-run, a decision, or registering a card. If a task is not registered on board_task yet, register it in the same turn before @-calling the owner to start, or @-call the responsible person strictly to supply missing registration fields/read-only checks (never start unregistered implementation). An arrangement whose owner is not @-called does not count as driving the work.'
-    if (isAdmin && nudge && !inspectOnly) block += `\n${NUDGE_LINE}\nFor each current unfinished task you actually checked, call group_goal review-check with its task ID and exact review fingerprint from show plus the requested structured fields and evidence. Unknown or unverified facts must be marked unknown and review_complete false; only set review_complete true when the required check is actually finished. The runtime records your assertion and will continue missing or changed tasks in another turn; it does not verify the truth of your evidence.`
-    if (isAdmin && resume) block += `\n${RESUME_LINE}`
-    return `${block}\nCurrent goal binding: ${goalBinding(room)}. Use these fields for changes; read the goal again when they change.`
+    if (goal.status !== 'drafting') block += zh ? '\n' + zhDuty.scope : '\nApply each saved goal rule only to its stated scope. Honor the latest explicit user instruction and any still-valid approval for the same action, object, environment and conditions; do not ask for the same approval again. Do not extend a lock rule beyond the operations it actually covers: evidence from a different scope can be reported for its own scope but is not a substitute for the required gate evidence. If the applicable authorization or rule scope cannot be verified, pause only the affected action and continue independent authorized work. Tell the goal owner when saved rules need a scoped update.'
+    if (activeCheck && !restrictedCheck) block += zh ? '\n' + zhDuty.registration : '\nEvery next action in this reply must name its owner with an exact plain-text @Name on its own line — including an evidence request, a test re-run, a decision, or registering a card. If a task is not registered on board_task yet, register it in the same turn before @-calling the owner to start, or @-call the responsible person strictly to supply missing registration fields/read-only checks (never start unregistered implementation). An arrangement whose owner is not @-called does not count as driving the work.'
+    if (activeCheck && !restrictedCheck) block += zh ? `\n${zhDuty.nudge}\n${zhDuty.reviewRecord}` : `\n${NUDGE_LINE}\nFor each current unfinished task you actually checked, call group_goal review-check with its task ID and exact review fingerprint from show plus the requested structured fields and evidence. Unknown or unverified facts must be marked unknown and review_complete false; only set review_complete true when the required check is actually finished. The runtime records your assertion and will continue missing or changed tasks in another turn; it does not verify the truth of your evidence.`
+    if (isAdmin && resume && goal.status === 'active') block += `\n${zh ? zhDuty.resume : RESUME_LINE}`
+    return zh ? `${block}\n更新时使用 ${goalBinding(room)}，绑定变化后重新读取。` : `${block}\nCurrent goal binding: ${goalBinding(room)}. Use these fields for changes; read the goal again when they change.`
   }
 
   // The tool's answer: the ledger as the caller sees it, without the block's tags.
   function goalLedger(room, member, { showBackup = false } = {}) {
     const goal = room.goal
-    if (goal === undefined) return noGoal(room)
-    if (goal.status === 'complete') return `Goal "${goal.title}" is complete.`
-    if (goal.status === 'stopped') return `Goal "${goal.title}" was stopped${goal.reason ? `: ${goal.reason}` : ''}.`
+    const zh = chineseRolePrompt(member.instructions)
+    if (goal === undefined) return zh ? `「${room.name}」尚无目标。用 group_goal draft 或 start 建立目标。` : noGoal(room)
+    if (goal.status === 'complete') return zh ? `目标「${goal.title}」已完成。` : `Goal "${goal.title}" is complete.`
+    if (goal.status === 'stopped') return zh ? `目标「${goal.title}」已停止。${goal.reason ?? ''}` : `Goal "${goal.title}" was stopped${goal.reason ? `: ${goal.reason}` : ''}.`
     if (goal.status === 'drafting') {
       return rt.isAdminOf(room, member.id)
-        ? `The user wants this group to reach a goal: ${goal.brief ?? ''}`
-        : `The admin is aligning a new goal for this group with the user: ${headOf(goal.brief ?? '', 300)}. Help with facts when you are asked.`
+        ? `${zh ? '用户希望本群达成的目标：' : 'The user wants this group to reach a goal: '}${goal.brief ?? ''}`
+        : zh ? `管理员正在与用户确认本群新目标：${headOf(goal.brief ?? '', 300)}。请按需提供事实。` : `The admin is aligning a new goal for this group with the user: ${headOf(goal.brief ?? '', 300)}. Help with facts when you are asked.`
     }
     // A Main Bot may audit a group it belongs to as the admin's backup, but
     // only when it explicitly asks to show the goal; its routine prompt stays scoped.
-    if (rt.isAdminOf(room, member.id) || (showBackup && rt.isMain(member.id) && room.members.includes(member.id))) return ledgerLines(room, goal).join('\n')
-    return memberLines(room, goal, member).lines.join('\n')
+    if (rt.isAdminOf(room, member.id) || (showBackup && rt.isMain(member.id) && room.members.includes(member.id))) return ledgerLines(room, goal, { zh }).join('\n')
+    return memberLines(room, goal, member, zh).lines.join('\n')
   }
 
   // Every non-task change is a group event: a notice the members read, which the

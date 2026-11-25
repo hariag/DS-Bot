@@ -89,7 +89,7 @@ export function installRoomScheduleDelivery(rt) {
       && rt.sessionOfRoom(room) === root.id && room.sessions?.[binding.adminId] === target
       && !busy(room, messageId, root.id)
     if (!current()) return
-    const text = '群管理员请用 board_task list/show 核对本群任务看板（含父子任务状态联动及编号唯一性），在原卡推进已分派且获授权的工作；子任务变动时同步检查父任务状态，完成前先同步状态回看板。记录结果或具体阻碍与下一负责人；没有可执行事项时静默结束。\n' + binding.prompt
+    const text = '本群尚无群目标。按已有任务看板和授权推进，记录结果或阻碍及负责人；没有可办事项时静默结束。\n' + (binding.instructions ?? binding.prompt)
     await rt.deliver({ roomId:room.id, toId:binding.adminId, sessionId:target, role:'room', fromName:'DS Bot', text,
       exchangeId:createHash('sha256').update(JSON.stringify([room.id,key])).digest('hex'), note:'scheduled group board check' }, {
       beforeAdmission() { if (!current()) throw new Error('The group or its administrator changed before the board check') },
@@ -128,7 +128,7 @@ export function installRoomScheduleDelivery(rt) {
           || currentBinding.adminId !== binding.adminId || currentBinding.prompt !== binding.prompt) return 'invalid'
         const currentAgent = await rt.resolveAgent(sessionId)
         if (disposed || currentAgent?.session?.id !== sessionId) return 'invalid'
-        return rt.runScheduledRoomReview(currentRoom, key, currentAgent, undefined, currentBinding.prompt, undefined)
+        return rt.runScheduledRoomReview(currentRoom, key, currentAgent, undefined, currentBinding.instructions ?? currentBinding.prompt, undefined)
       })()
         .then(outcome => {
           if (!disposed && (outcome === 'busy' || outcome === 'pending')) retryScheduledReview(room, binding, key, tries + 1)
@@ -182,7 +182,7 @@ export function installRoomScheduleDelivery(rt) {
       const room = rt.roomOf(binding.roomId)
       const key = JSON.stringify([entry.schedule_id,entry.occurrence_at])
       if (!busy(room, message.id, agent.id)) {
-        const result = await rt.runScheduledRoomReview(room, key, agent, message.id, binding.prompt, message)
+        const result = await rt.runScheduledRoomReview(room, key, agent, message.id, binding.instructions ?? binding.prompt, message)
         // Use this claimed native step for the verified root relay. DSH can
         // park a new followup forever if the opening step returns empty.
         if (result?.outcome === 'admitted' && result.message) {

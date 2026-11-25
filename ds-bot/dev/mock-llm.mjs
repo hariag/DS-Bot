@@ -143,8 +143,8 @@ function decide(body) {
       && textBlocks(message.content).some(value => value.startsWith('Side note:'))).length
     return [text(`Side note: ${pairs} earlier pair(s) seen.`)]
   }
-  const me = /You are (.+?), a Bot on the user's team/.exec(system)?.[1] ?? 'Bot'
-  const isMain = system.includes('You are the Main Bot')
+  const me = /You are (.+?), a Bot on the user's team/.exec(system)?.[1] ?? /^你是 DS Bot 团队成员「(.+?)」。/m.exec(system)?.[1] ?? 'Bot'
+  const isMain = system.includes('You are the Main Bot') || /^## 主 Bot 职责$/m.test(system)
   const isRelay = system.includes('# Group chat relay')
 
   // Summary requests: the Bot's handoff prompt, or the backend's own one when the
