@@ -9,7 +9,7 @@ import { Session } from '@deepseek-ai/dsh-session'
 import TokenMeter from '@deepseek-ai/dsh-token-meter'
 import { createRuntime } from '../index.js'
 import { fakeAttachments, fakeContext, partsPreStep } from './fake-ctx.js'
-import { install as installTurns } from '../src/host/turns.js'
+import { answerSender, install as installTurns } from '../src/host/turns.js'
 import { install as installParts } from '../src/host/parts.js'
 import { HANDOFF_ACK, SOURCE_KIND } from '../src/host/constants.js'
 import { estimateTokens } from '../src/host/text.js'
@@ -414,6 +414,32 @@ test('a stopped notice routes the acknowledgement back like a request', () => {
   assert.equal(delivered[0].role, 'reply')
   assert.equal(delivered[0].replyTo, 's1')
   assert.equal(delivered[0].text, 'understood')
+})
+
+test('a senderless board request stays visible without an outbound reply', () => {
+  const { rt, emit, delivered } = turnsHost()
+  const source = { kind: SOURCE_KIND, role: 'request', senderName: 'You', exchangeId: 'board-1',
+    taskAction: { id: 'execute-board-1', taskRevision: 2, actionRevision: 1 } }
+  emit('b', 'turn/start', { turn: 1 })
+  emit('b', 'user/message', { content: textBlock('Check the original board card'), source })
+  emit('b', 'assistant/message', assistantText('Recorded the result on the card'))
+  emit('b', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+  assert.deepEqual(rt.state.exchangeTurns, {})
+  assert.deepEqual(delivered, [])
+  assert.equal(answerSender(rt, 'b', source, 'Recorded the result on the card'), false)
+  assert.deepEqual(delivered, [])
+})
+
+test('a senderless system request read during a turn does not create a second turn', () => {
+  const { emit, delivered } = turnsHost()
+  emit('b', 'turn/start', { turn: 1 })
+  emit('b', 'user/message', { content: textBlock('Continue work'), source: { kind: 'user' } })
+  emit('b', 'assistant/message', assistantText('Checking the card'))
+  emit('b', 'user/message', { content: textBlock('The user commented on the card'),
+    source: { kind: SOURCE_KIND, role: 'request', senderName: 'DS Bot', exchangeId: 'notice-1' } })
+  emit('b', 'assistant/message', assistantText('Recorded the result'))
+  emit('b', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+  assert.deepEqual(delivered, [])
 })
 
 // What the turn hands back for a joined request: the request itself, to answer next.

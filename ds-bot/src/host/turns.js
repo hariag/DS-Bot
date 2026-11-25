@@ -101,19 +101,24 @@ function dropSuppressedWork(rt, exchangeId, name, text) {
   if (parent !== undefined) rt.takenWork?.(parent, exchangeId)
 }
 
+const replyRecipientOf = source => typeof source?.senderSessionId === 'string' && source.senderSessionId !== ''
+  ? source.senderSessionId : undefined
+const requestRole = info => info?.role === 'request' || info?.role === 'stopped'
+
 // The reply a sender waits for, sent the way a finished turn sends it: the work it was
 // for closes, and the answer goes up to the Bot that asked. `id` is the Session the
 // answer comes from; `source` is the trigger the turn answered.
 export function answerSender(rt, id, source, text, long, options = {}) {
-  const back = rt.roomOf(source.senderRoomId)?.sessions?.[source.senderSessionId]
+  const toId = replyRecipientOf(source)
+  if (toId === undefined) return false
+  const back = rt.roomOf(source.senderRoomId)?.sessions?.[toId]
   // The asking Bot may have written from a background part of its own chat: its reply
   // goes back to that part's thread, not to the part the user is reading. When the part
   // is gone, or no part was recorded, the reply goes to the Bot's current chat, as before.
-  const asker = source.senderPart === undefined ? undefined : rt.botOf(source.senderSessionId)
+  const asker = source.senderPart === undefined ? undefined : rt.botOf(toId)
   const part = back === undefined && asker !== undefined ? threadCurrentOfPart(asker, source.senderPart) : undefined
   const target = back ?? part
   const fromId = rt.selfOf(id)
-  const toId = source.senderSessionId
   const targetSessionId = target ?? rt.chatOf?.(toId) ?? toId
   const name = rt.botOf(fromId)?.name ?? 'The other Bot'
   const guards = guardsOf(rt)
@@ -304,7 +309,7 @@ export function install(rt) {
   // The retry goes where the turn's trigger came from: a group round's waiter or a
   // Bot's request keeps its exchange; anything else is a nudge in the Bot's own chat.
   const retryTurn = (id, info, note, text) => {
-    const keeps = info !== undefined && (info.role === 'room' || expectsReply(info))
+    const keeps = info?.role === 'room' || requestRole(info)
     return rt.deliver({
       ...(keeps && info.senderSessionId ? { fromId: info.senderSessionId } : {}),
       toId: rt.selfOf(id),
@@ -666,13 +671,13 @@ export function install(rt) {
   // A request whose audience is the user is answered in the recipient's own chat: that
   // turn stays visible there and its reply is not routed back to the sender.
   const answersUser = info => info.role === 'request' && info.audience === 'user'
-  // Roles whose turn owes the sender a reply: a 'stopped' notice asks the Bot to
-  // acknowledge, exactly like a request.
-  const expectsReply = info => info.role === 'request' || info.role === 'stopped'
+  // Board work and system notifications also use request. They stay visible in
+  // the receiving chat and never create a private reply or a deferred exchange.
+  const expectsReply = info => requestRole(info) && replyRecipientOf(info) !== undefined
   // A group Session speaks only in its group, so what its turns write goes there, also
   // for turns that a finished background job or a fresh part starts; a Bot's private
   // message to it is answered privately.
-  const speaksInGroup = (id, info) => rt.groupOwners.has(id) && !(info !== undefined && expectsReply(info))
+  const speaksInGroup = (id, info) => rt.groupOwners.has(id) && !requestRole(info)
 
   // The group hears what the member says while it works. A text with a tool call goes
   // on at once; one without may be the turn's last, so it waits for the next text or the
