@@ -208,7 +208,7 @@ export const referenceNote = (references, zh = false) => (references?.length
   : '')
 
 const roomReply = zh => zh
-  ? '直接回复群聊，无需署名。需要行动时在同一步说明动作并调用首个工具，之后只报关键进展和结果。普通讨论无新增可回复 [PASS] 静默。'
+  ? '直接回复群聊，无需署名。需要用工具时，同一步简述动作并调用首个工具。发现阻塞时写明缺项和处理人。普通讨论无待处理事项且无新增信息时用 [PASS] 静默。'
   : 'Reply without a name prefix. For work, call the first tool alongside your opening note, report meaningful progress, and end with the result. In ordinary discussion, [PASS] stays silent when you have nothing to add.'
 const roomCalls = zh => zh
   ? '纯文本 @姓名 会立即唤醒成员；只引用名字时省略 @。同一条消息中的成员并行开始，有依赖时按顺序交接。收到自己派出的结果后接续。'
