@@ -1637,6 +1637,11 @@ export function install(rt) {
       dropMemberFromBatch(room, member.id)
       return
     }
+    if (round.goalReviewId && (signal.aborted
+      || await rt.goalReviewBind?.(room, round.goalReviewId, session.id) !== true)) {
+      slot.status = 'stopped'
+      return
+    }
     const finished = await finishedLines(room, slot)
     let fromSeq = room.seen[member.id]
     let effectiveBy = slot.by
@@ -2338,6 +2343,11 @@ export function install(rt) {
     const member = rt.botOf(owner?.botId)
     if (room === undefined || member === undefined || !room.members.includes(member.id)) return
     const text = stripOwnName(member.name, reply)
+    if (info.reviewInspect === true) {
+      if (!isPass(text)) await postToRoom(room, member, text, { late:true, quiet:true })
+        .catch(error => rt.warn('ds-bot: late inspection reply from %s failed: %s', member.name, error))
+      return
+    }
     if (rt.state.questions[sessionId] !== undefined || rt.state.views[sessionId] !== undefined) {
       if (!isPass(text)) {
         await postToRoom(room, member, text, { progress: true, quiet: true })
@@ -2420,7 +2430,7 @@ export function install(rt) {
   const callsIn = (room, member, text) => mentionsIn(text, room.members.map(rt.botOf).filter(Boolean)).found.some(bot => bot.id !== member.id)
   rt.callsRoomMember = (sessionId, info, raw) => {
     const { room, member } = memberIn(sessionId, info) ?? {}
-    return room !== undefined && member !== undefined && callsIn(room, member, stripOwnName(member.name, raw ?? ''))
+    return info?.reviewInspect !== true && room !== undefined && member !== undefined && callsIn(room, member, stripOwnName(member.name, raw ?? ''))
   }
 
   // What a member says while it works, into the group. While the member holds its place
@@ -2433,7 +2443,7 @@ export function install(rt) {
     const { room, member } = memberIn(sessionId, info) ?? {}
     if (room === undefined) return
     ensureRoomLog(room)
-    const calls = callsIn(room, member, text)
+    const calls = info?.reviewInspect !== true && callsIn(room, member, text)
     const running = [...rt.roomProgress.values()].find(round => round.roomId === room.id)
     if (!calls && running !== undefined) {
       postInRound(room, member, text)
@@ -2602,6 +2612,10 @@ export function install(rt) {
     const room = rt.roomOf(owner?.roomId ?? info.roomId)
     const member = rt.botOf(owner?.botId)
     if (room === undefined || member === undefined || !room.members.includes(member.id)) return
+    if (info.reviewInspect === true) {
+      noteFailure(room, member, failure)
+      return
+    }
     // The failed turn answers one call; without that call, every batch of the member ends.
     const owed = info.askedBy !== undefined ? [batchOf(room.id, member.id, info.askedBy)].filter(Boolean) : batchesOf(room.id, member.id)
     for (const batch of owed) leaveBatch(room, batch, member.id, { keep: true })

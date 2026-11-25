@@ -43,6 +43,14 @@ test('personal board schedule binds to active Main Bot, tracks part moves and pr
   }
   const mgr = createPersonalBoardSchedule(rt, () => host)
   t.after(async () => { for (const fn of drains) await fn() })
+  rt.state.bots.pm.kickoff = { text: 'first greeting' }
+  await mgr.reconcile()
+  assert.equal(rows.size, 0)
+  delete rt.state.bots.pm.kickoff
+  rt.greetingOut = () => true
+  await mgr.reconcile()
+  assert.equal(rows.size, 0)
+  rt.greetingOut = () => false
   await mgr.reconcile()
   assert.equal(rows.size, 1)
   const [row] = rows.values()

@@ -1861,7 +1861,8 @@ export function install(rt) {
     // normal goal drive or change task progress.
     if (round.goalReviewId && goal?.reviewResolutions?.some(record =>
       record.id === round.goalReviewId && record.decision === 'inspection-ended')) return
-    if (round.goalReviewId && goalReviewAllowed(room, round.goalReviewId)) {
+    if (round.goalReviewId) {
+      if (!goalReviewAllowed(room, round.goalReviewId)) return
       const slot = round.slots.find(item => item.id === admin?.id)
       if ((slot !== undefined && ['passed', 'posted'].includes(slot.status)) || goal.reviewAttempt?.adminCompleted === true) {
         finishReview(room, slot?.status === 'passed' ? 'admin-pass' : 'nudge-limit')

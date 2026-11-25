@@ -317,10 +317,15 @@ export function install(rt) {
       ...(keeps && info.askedBy ? { askedBy: info.askedBy } : {}),
       ...(keeps && info.senderRoomId ? { fromRoomId: info.senderRoomId } : {}),
       ...(keeps && info.senderPart ? { fromPart: info.senderPart } : {}),
+      ...(info?.reviewId ? { reviewId:info.reviewId, reviewInspect:info.reviewInspect, reviewReceipt:info.reviewReceipt } : {}),
       note,
       retried: true,
       text,
-    })
+    }, info?.reviewId && !info.reviewReceipt ? { beforeAdmission() {
+      if (rt.goalReviewAllowed?.(rt.roomOf(info.roomId), info.reviewId) !== true) {
+        throw new Error('The goal review changed before retry')
+      }
+    } } : undefined)
   }
   const retryWrittenCall = (id, info) => retryTurn(id, info, 'your tool call did not run', RETRY_TEXT)
   const retryPromisedWork = (id, info) => retryTurn(id, info, 'you stopped before calling any tool', RETRY_PROMISE_TEXT)
@@ -1435,13 +1440,15 @@ export function install(rt) {
         if (failure !== undefined) {
           if (watched) rememberFailure(id, turn, failure, session)
           if (blockBot(id, session, failure) && owner !== undefined && info?.role === 'kickoff') rt.holdKickoffAgain(owner)
-          if (groupOwner !== undefined) rt.blockTasks?.(groupOwner.roomId, groupOwner.botId, { cause: 'failed', code: failure.code, ...(failure.status ? { status: failure.status } : {}) })
+          if (groupOwner !== undefined && info?.reviewInspect !== true) rt.blockTasks?.(groupOwner.roomId, groupOwner.botId, { cause: 'failed', code: failure.code, ...(failure.status ? { status: failure.status } : {}) })
         } else if (reason?.kind === 'completed') {
           forgetFailure(id)
           unblockBot(rt.selfOf(id))
           // A turn picked up after a restart that did not touch its tasks leaves them in doubt.
-          if (groupOwner !== undefined && info?.resumed === true) rt.blockTasks?.(groupOwner.roomId, groupOwner.botId, { cause: 'restarted' }, since)
-          else if (groupOwner !== undefined) rt.unblockTasks?.(groupOwner.roomId, groupOwner.botId)
+          if (groupOwner !== undefined && info?.reviewInspect !== true) {
+            if (info?.resumed === true) rt.blockTasks?.(groupOwner.roomId, groupOwner.botId, { cause: 'restarted' }, since)
+            else rt.unblockTasks?.(groupOwner.roomId, groupOwner.botId)
+          }
           // A turn the user opened, or the Retry that answers the user.
           if (owner !== undefined && !rt.taskOwners?.has(id) && (info === undefined || info.role === 'continue')) rt.userAnswered(owner)
         }
@@ -1454,6 +1461,11 @@ export function install(rt) {
           && toolCount === 0 && lastCalled !== true && info?.role === 'room'
           && promisesWork(lastText) && !rt.callsRoomMember?.(id, info, lastText)
         const retry = (wroteCall || promisedOnly) && info?.retried !== true && !(info?.role === 'room' && stoppedRoomTurns.has(info.exchangeId))
+        if (!retry && info?.role === 'room' && info.reviewId && !info.reviewReceipt) {
+          const reviewRoom = rt.roomOf(info.roomId)
+          const settleReview = reason?.kind === 'completed' && failure === undefined ? rt.goalReviewFinished : rt.goalReviewFailed
+          void settleReview?.(reviewRoom, id, info.reviewId)?.catch(error => rt.warn('ds-bot: review settlement failed: %s', error))
+        }
         entry.retrying = retry
         if (retry) {
           if (promisedOnly) {

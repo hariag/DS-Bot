@@ -74,7 +74,7 @@ export function createPersonalBoardSchedule(rt, service) {
   }
   const targetKey = () => {
     const target = targetSession()
-    return target ? `${target.botId}:${target.sessionId}` : ''
+    return target ? `${target.botId}:${target.sessionId}:${!!rt.botOf(target.botId)?.kickoff}` : ''
   }
 
   async function refresh() {
@@ -110,6 +110,16 @@ export function createPersonalBoardSchedule(rt, service) {
     await rt.load()
     if (source !== host()) return
     if (rt.readOnly() !== undefined) { schedule(30000); return }
+    const target = targetSession()
+    if (target && !rt.state.personalBoardSchedule) {
+      // Creating a schedule produces a native change notice in the target
+      // session. Do not let it get ahead of the Main Bot's opening turn.
+      if (rt.botOf(target.botId)?.kickoff) return
+      if (rt.greetingOut?.(target.botId) || rt.live?.get(target.sessionId)?.turn !== undefined) {
+        schedule(5000)
+        return
+      }
+    }
     const lease = rt.homeLockVersion()
     const check = () => { if (source !== host() || rt.homeLockVersion() !== lease) fail('The personal schedule writer changed') }
     const rows = await refresh()
