@@ -69,15 +69,15 @@ test('schedule service startup applies managed room prompt migrations', async t 
   const agent = { id:'g1', session:{id:'g1'} }
   const message = {id:'m1', source:{kind:'schedule'}, content:[{type:'text',text:
     `[SCHEDULE REMINDER]\nschedule_id_json: ${JSON.stringify(record.id)}\noccurrence_at: 2026-11-25T14:00:00+08:00\nreminder_prompt_json: ${JSON.stringify(record.prompt)}`}]}
-  const [preStep] = ctx.listeners.get('agent/pre-step')
   const input = {agent, step:1, turn:1, messages:[message]}
   const enter = async () => ({kind:'enter', messages:[message]})
-  assert.deepEqual((await preStep(input, enter)).messages, [])
+  const preStep = () => ctx.listeners.get('agent/pre-step').reduceRight((next, listener) => () => listener(input, next), enter)()
+  assert.deepEqual((await preStep()).messages, [])
   assert.equal(reviews.length, 1)
   assert.match(reviews[0][4], /Keep the signed release milestone\.$/)
   assert.doesNotMatch(reviews[0][4], /DS-Bot room timer/)
   task.status = 'paused'
-  assert.deepEqual((await preStep(input, enter)).messages, [])
+  assert.deepEqual((await preStep()).messages, [])
   assert.equal(reviews.length, 1)
 })
 

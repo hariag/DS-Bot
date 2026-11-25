@@ -9,6 +9,7 @@
 import { threadCurrentOfPart, threadOfPart } from './threads.js'
 import { createRoomScheduleRegistry } from './room-schedule-registry.mjs'
 import { createPersonalBoardSchedule, filterPersonalReminderMessage } from './personal-board-schedule.mjs'
+import { scheduleChangeId } from './room-schedule-delivery.js'
 
 const MAX_TITLE = 120
 // A time input reports HH:mm, or HH:mm:ss when the browser's picker shows seconds.
@@ -354,6 +355,19 @@ export function install(rt) {
         return typeof value === 'function' ? value.bind(target) : value
       },
     })
+  }, { prepend: true })
+
+  ctx.on('agent/pre-step', async ({agent, messages}, next) => {
+    if (!messages?.some(scheduleChangeId)) return next()
+    const decision = await next()
+    if (decision.kind !== 'enter' || rt.roomOf?.(agent.id)) return decision
+    await rt.load()
+    if (!rt.state.personalBoardSchedule) return decision
+    // A host-managed plan change is metadata. Keeping it after the user's
+    // message can make the model answer the notice instead of the user.
+    if (!rt.state.personalBoardSchedule.id) await personalBoardSchedule.refresh()
+    const retained = decision.messages.filter(message => !personalBoardSchedule.known(scheduleChangeId(message)))
+    return retained.length === decision.messages.length ? decision : { ...decision, messages: retained }
   }, { prepend: true })
 
   // DSH injects its schedule service after the plugin starts; until then a task cannot move.

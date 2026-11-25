@@ -114,6 +114,14 @@ test('schedules hook skips DSBOT-PERSONAL/user tick when personal board has no o
   }
   installSchedules(rt)
   t.after(async () => { await Promise.all([...drains].map(fn => fn())); await ctx.dispose() })
+  const change = id => ({source:{kind:'schedule'}, content:[{type:'text',
+    text:`[SCHEDULE CHANGE]\nThis notice is not a delivery of the task and needs no action.\nschedule_id_json: ${JSON.stringify(id)}`}]})
+  const user = {source:{kind:'user'}, content:[{type:'text',text:'建群'}]}
+  const ordinaryChange = change('some-user-schedule')
+  const incoming = [user, change(row.id), ordinaryChange]
+  const [preStep] = ctx.listeners.get('agent/pre-step')
+  const decision = await preStep({agent:{id:'chat-main'}, messages:incoming}, async () => ({kind:'enter', messages:incoming}))
+  assert.deepEqual(decision.messages, [user, ordinaryChange])
   const agent = { followup: msg => delivered.push(msg), whenIdle: async () => {} }
   const reminder = {
     source: { kind: 'schedule' },
