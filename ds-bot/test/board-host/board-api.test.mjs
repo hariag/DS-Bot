@@ -93,6 +93,40 @@ test('listing a board uses its task snapshot and only checks actions needed by t
   assert.equal(bot.tasks.find(task => task.id === 'working').dispatchState, undefined)
 })
 
+test('pending actions distinguish the release gate from the live dispatch queue', () => {
+  const f = fixture()
+  const row = { scope:'room:room', title:'Work', owner:'one', reviewer:'two', actionRevision:2, status:'ready' }
+  f.rows.push(
+    { ...row, id:'draft-release', releaseId:'draft' },
+    { ...row, id:'draft-item', parentTaskId:'draft-release' },
+    { ...row, id:'running-release', releaseId:'running' },
+    { ...row, id:'regular-task' },
+    { ...row, id:'held-review', releaseId:'draft', status:'reported' },
+  )
+  const releases = [{ id:'draft', status:'draft', items:[] }, { id:'running', status:'running', items:[] }]
+  f.store.listReleases = scope => scope === 'room:room' ? releases : []
+  f.store.getRelease = id => releases.find(release => release.id === id)
+  f.store.listActions = id => id === 'held-review'
+    ? [{ revision:2, kind:'review', state:'uncertain' }]
+    : [{ revision:2, kind:'execute', state:'pending' }]
+
+  for (const scope of [room, { kind:'personal', id:'one' }]) {
+    const cards = Object.fromEntries(f.api.list(scope, user).tasks.map(task => [task.id, task]))
+    for (const id of ['draft-release', 'draft-item']) {
+      assert.equal(cards[id].dispatchState, 'pending')
+      assert.equal(cards[id].dispatchHold, 'release-not-running')
+    }
+    for (const id of ['running-release', 'regular-task']) {
+      assert.equal(cards[id].dispatchState, 'pending')
+      assert.equal(cards[id].dispatchHold, undefined)
+    }
+    assert.equal(cards['held-review'].dispatchState, 'uncertain')
+    assert.equal(cards['held-review'].dispatchHold, undefined)
+  }
+  releases[0].status = 'running'
+  assert.equal(f.api.list(room, user).tasks.find(task => task.id === 'draft-item').dispatchHold, undefined)
+})
+
 test('task history requires the owner principal and the same board scope', () => {
   const f = fixture(); f.api.create(room, user, proposal)
   assert.equal(f.api.history(room, user, 'task1').entries[0].after.title, 'task1')

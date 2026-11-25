@@ -868,7 +868,7 @@ function TaskCard({ scope, task, items, commands, actors, uncertain, dragging, d
   const deliveryLabel = task.dispatchState === 'uncertain' ? t('Delivery needs review')
     : task.dispatchState === 'accepted' ? t('Sent to Bot')
       : task.dispatchState === 'claimed' ? t('Preparing delivery')
-        : task.dispatchState === 'pending' ? t('Bot queued') : ''
+        : task.dispatchState === 'pending' ? t(task.dispatchHold === 'release-not-running' ? 'Release not running' : 'Bot queued') : ''
   return h('article', {
     className: 'bt-board-card' + (dragging ? ' bt-board-card-dragging' : ''), 'data-task-id': task.id,
     draggable: canDrag, onDragStart: event => onDragStart?.(task, event), onDragEnd, onDragOver: event => onDragOverCard?.(task, event),
@@ -1549,6 +1549,7 @@ function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand
     task.status === 'draft' && !canSubmit && task.parentTaskId && (!task.owner || !task.reviewer)
       ? h('p', { className: 'bt-card-note' }, t('This task item needs an owner and an independent reviewer before it can be submitted.')) : null,
     task.status === 'cancelled' ? h('p', { className: 'bt-card-note' }, t('Cancelled cards are not scheduled and can be restored.')) : null,
+    task.dispatchHold === 'release-not-running' ? h('p', { className: 'bt-card-note', role: 'status' }, t('Release not running')) : null,
     task.dispatchState === 'uncertain' ? h('p', { className: 'bt-card-warning', role: 'status' }, t('The Bot message may or may not have reached its Session. Check the delivery before scheduling again.')) : null,
     canMove ? h('label', { className: 'bt-field' }, h('span', null, t('Personal progress')), h('select', { value: task.personalProgress, disabled, 'aria-label': t('Move personal task'), onChange: event => void onCommand(task, { type: 'personal-progress' }, { progress: event.target.value }) }, PERSONAL_COLUMNS.map(([id, label]) => h('option', { key: id, value: id }, t(label))))) : null,
     canSchedule ? h('button', { type: 'button', className: 'bt-btn bt-btn-primary bt-btn-block', disabled, onClick: () => void onCommand(task, { type: 'schedule' }) }, t('Schedule Bot')) : null,

@@ -45,12 +45,20 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
     try { assertWritable(); writable = true } catch { /* read-only host still shows its board */ }
     const availableTargets = Object.create(null)
     const releases = store.listReleases?.(`${scope.kind}:${scope.id}`) ?? []
+    const releaseById = new Map(releases.map(release => [release.id, release]))
     const commands = Object.fromEntries(board.tasks.map(task => {
       const source = byId.get(task.id)
       if (!task.shared && !task.legacy && ['ready','working','reported'].includes(source?.status)) {
         const kind = source.status === 'reported' ? 'review' : 'execute'
         const action = (store.listActions?.(source.id) ?? []).find(item => item.kind === kind && item.revision === source.actionRevision)
         if (action && liveAction(action)) task.dispatchState = action.state
+        // Item dispatch also waits on its parent card's release. Personal views
+        // can include room tasks even though they list only personal releases.
+        const releaseId = source.releaseId ?? byId.get(source.parentTaskId)?.releaseId
+        if (action?.state === 'pending' && releaseId) {
+          if (!releaseById.has(releaseId) && store.getRelease) releaseById.set(releaseId, store.getRelease(releaseId))
+          if (releaseById.has(releaseId) && releaseById.get(releaseId)?.status !== 'running') task.dispatchHold = 'release-not-running'
+        }
       }
       if (!writable || task.shared) return [task.id, []]
       if (task.legacy) return [task.id, !task.legacy.retired && !task.legacy.ambiguous && !task.legacy.pending && Number.isSafeInteger(task.revision)

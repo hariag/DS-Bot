@@ -94,6 +94,7 @@ const ZH = {
   'This creates a follow-up in Preparing; reported and completed work cannot be created without evidence.': '这会在「准备中」创建后续任务；没有证据时不能直接创建已汇报或已完成的工作。',
   'Reported and completed work cannot be created without evidence.': '没有证据时，不能直接创建已汇报或已完成的工作。',
   'Bot queued': '已排队待派发',
+  'Release not running': '关联发布未运行',
   'Preparing delivery': '正在准备派发',
   'Sent to Bot': '已发送给 Bot',
   'Delivery needs review': '派发结果待核对',
