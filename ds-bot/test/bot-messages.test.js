@@ -165,7 +165,7 @@ test('a Bot busy in a group gets the message in its own chat, and the sender is 
   const out = await tool('message_bot', { to: 'Writer', message: 'status?' }, 'a')
   assert.equal(out, 'Delivered to Writer. Its reply will arrive later as a new message; do not wait for it. Writer now: working in group "Ops" for less than a minute. Your message does not reach its work in group "Ops". If it must not go on there, use stop_bot.')
   assert.deepEqual(agents.get('b').calls.map(([kind]) => kind), ['steer'])
-  assert.equal(agents.get('gb'), undefined)
+  assert.deepEqual(agents.get('gb')?.calls ?? [], [])
 
   // A non-Main sender gets no stop_bot hint.
   emit('ga', 'turn/start', { turn: 1 })

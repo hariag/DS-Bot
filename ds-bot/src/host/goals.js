@@ -89,6 +89,18 @@ const reviewMissing = (goal, checkCurrent = () => false) => {
 }
 // The reconciliation horizon for existing review receipts. Native schedules own new occurrences.
 export const GOAL_REVIEW_INTERVAL_MS = 30 * 60 * 1000
+// Native delivery's six short retries take about five minutes. After that, a
+// later quiet sweep can continue the same occurrence until the next reminder.
+const DEFERRED_REVIEW_RECHECK_MS = 6 * 60_000
+
+function retryableNativeReviewKey(schedule, occurrence, goalId) {
+  if (typeof schedule?.id !== 'string' || !schedule.id || occurrence?.goalId !== goalId || !['busy', 'pending'].includes(occurrence?.outcome)) return
+  const at = new Date(occurrence.at)
+  if (!Number.isFinite(at.getTime())) return
+  const key = JSON.stringify([schedule.id, at.toISOString()])
+  if (occurrence.key === key) return key
+}
+
 // A native reminder or fallback sweep may arrive before a goal’s saved review deadline.
 export function reviewIsDue(goal, now = Date.now()) {
   const due = [goal?.reviewAt, goal?.ownerReviewAt].filter(value => Number.isFinite(value))
@@ -1698,7 +1710,7 @@ export function install(rt) {
   // each occurrence once per room, including skips and uncertain admissions.
   // The watermark also survives part rotation, restarts and goal replacement.
   const receivingRooms = new Set()
-  async function runScheduledRoomReview(room, occurrenceKey, agent, openingMessageId, verifiedPrompt, nativeOpening, forceQuiet = false) {
+  async function runScheduledRoomReview(room, occurrenceKey, agent, openingMessageId, verifiedPrompt, nativeOpening) {
     let identity
     try { identity = JSON.parse(occurrenceKey) } catch { return 'invalid' }
     if (!Array.isArray(identity) || identity.length !== 2 || typeof identity[0] !== 'string' || !identity[0]
@@ -1730,7 +1742,7 @@ export function install(rt) {
       rt.requireHomeLock()
       room.scheduledReviewOccurrence = occurrence
       if (!activeRoom() || !room.admin || !room.members.includes(room.admin)) return await result('paused')
-      if (!quiet() && !forceQuiet) return await result('busy')
+      if (!quiet()) return await result('busy')
       if (goal?.reviewAttempt) {
         const original = goal.reviewAttempt
         await result('pending')
@@ -1783,7 +1795,7 @@ export function install(rt) {
       occurrence.reviewId = id
       await result(message ? 'admitted' : 'admitting')
       const valid = () => activeRoom() && room.scheduledReviewOccurrence === occurrence && goalReviewAllowed(room, id)
-      if (!valid() || (!quiet() && !forceQuiet) || (inspectionRequired(room) && !attempt.inspectOnly)) {
+      if (!valid() || !quiet() || (inspectionRequired(room) && !attempt.inspectOnly)) {
         if (goal.reviewAttempt === attempt && room.goal === goal) {
           const automatic = automaticIdle(goal)
           delete goal.reviewAttempt
@@ -1825,26 +1837,36 @@ export function install(rt) {
         if (inspectionOnlyIdle(goal) || !reviewEligible(goal) || !reviewIsDue(goal)) continue
         const schedule = rt.state.roomSchedules?.[room.id]
         if (schedule?.paused || schedule?.restorePaused) continue
-        if (Date.now() - (room.scheduledReviewOccurrence?.at ?? 0) < ROOM_POLL_SECONDS * 1000) continue
+        const occurrence = room.scheduledReviewOccurrence
+        if (goal.reviewAttempt || ['claimed', 'uncertain'].includes(occurrence?.outcome)) continue
+        const age = Date.now() - (occurrence?.at ?? 0)
+        const originalKey = retryableNativeReviewKey(schedule, occurrence, goal.id)
+        if (originalKey) {
+          if (age < DEFERRED_REVIEW_RECHECK_MS) continue
+        } else if (age < ROOM_POLL_SECONDS * 1000) continue
+        if (rt.roomBusyForPatrol(room)) continue
         const sessionId = rt.sessionOfRoom(room)
         if (!sessionId) continue
         const managed = schedule?.id ? await rt.readRoomSchedule?.(schedule.id, sessionId) : undefined
         if (schedule?.id && (!managed || managed.roomId !== room.id)) continue
         const agent = await rt.resolveAgent(sessionId)
+        const currentSchedule = rt.state.roomSchedules?.[room.id]
+        if (currentSchedule?.paused || currentSchedule?.restorePaused || currentSchedule?.id !== schedule?.id
+          || rt.roomOf(room.id) !== room || room.goal !== goal || !reviewEligible(goal) || goal.reviewAttempt
+          || room.scheduledReviewOccurrence !== occurrence || !reviewIsDue(goal)) continue
+        if (managed && (managed.scheduleId !== currentSchedule?.id || managed.sessionId !== sessionId || managed.adminId !== room.admin)) continue
+        if (originalKey) {
+          if (!managed || retryableNativeReviewKey(currentSchedule, occurrence, goal.id) !== originalKey) continue
+          const outcome = await runScheduledRoomReview(room, originalKey, agent, undefined, managed.instructions)
+          if (outcome === 'admitted') rt.warn?.('ds-bot: resumed the original scheduled review for %s after the room quieted', room.id)
+          continue
+        }
         const key = JSON.stringify([`sweep-${room.id}`, new Date().toISOString()])
-        // A permanently chatty room keeps quiet() false, so a due review would be
-        // 'busy' every time and the goal panel would freeze again. After two busy
-        // sweeps the nudge is admitted anyway and the admin reads it once its own
-        // queue drains.
-        const streak = (reviewBusyStreak.get(room.id) ?? 0)
-        const outcome = await runScheduledRoomReview(room, key, agent, undefined, managed?.instructions, undefined, streak >= 2)
-        if (outcome === 'busy') reviewBusyStreak.set(room.id, streak + 1)
-        else reviewBusyStreak.delete(room.id)
+        const outcome = await runScheduledRoomReview(room, key, agent, undefined, managed?.instructions)
         if (outcome === 'admitted' || outcome === 'no-goal') rt.warn?.('ds-bot: opened a scheduled review for %s without a native reminder (%s)', room.id, outcome)
       }
     } catch (error) { rt.warn?.('ds-bot: scheduled review sweeper: %s', error?.message || error) }
   }
-  const reviewBusyStreak = new Map()
   const reviewSweeper = setInterval(() => { void sweepScheduledReviews() }, 5 * 60_000)
   reviewSweeper.unref?.()
   ctx.effect(() => () => clearInterval(reviewSweeper), 'ds-bot: scheduled review sweeper')

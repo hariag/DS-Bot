@@ -930,6 +930,117 @@ test('fallback polling waits thirty minutes and skips paused room schedules', as
   assert.equal(resolves.mock.callCount(), 1)
 })
 
+test('fallback polling never forces a room review past an in-flight member', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const host = await start(t)
+  await startGoal(host)
+  const room = host.rt.roomOf('r1')
+  const active = () => host.agentOf('r1').calls.filter(call => call.source?.goal === 'nudge').length
+  const busy = t.mock.method(host.rt, 'roomBusyForPatrol')
+  room.goal.ownerReviewAt = 0
+  host.rt.live.set('gb', { turn: 1 })
+  for (let i = 0; i < 3; i += 1) {
+    // A prior sweep can only try again after its full waiting interval.
+    if (room.scheduledReviewOccurrence) room.scheduledReviewOccurrence.at = Date.now() - 31 * 60_000
+    const before = busy.mock.callCount()
+    t.mock.timers.tick(5 * 60_000)
+    await settle(() => busy.mock.callCount() > before)
+    await host.rt.save({ required: true })
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  assert.equal(active(), 0)
+  assert.equal(room.goal.reviewAttempt, undefined)
+  assert.equal(room.scheduledReviewOccurrence, undefined, 'busy sweeps do not delay the next quiet opportunity')
+
+  host.rt.live.delete('gb')
+  t.mock.timers.tick(5 * 60_000)
+  await settle(() => active() === 1)
+  assert.equal(room.scheduledReviewOccurrence.outcome, 'admitted')
+})
+
+test('fallback polling resumes the original native check after the short busy retries expire', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const host = await start(t)
+  await startGoal(host)
+  const room = host.rt.roomOf('r1')
+  const agent = host.agentOf('r1')
+  const scheduledAt = Date.now() - 7 * 60_000
+  const key = JSON.stringify(['managed', new Date(scheduledAt).toISOString()])
+  room.goal.ownerReviewAt = 0
+  host.rt.state.roomSchedules = { r1: { id: 'managed' } }
+  t.mock.method(host.rt, 'readRoomSchedule', async (id, sessionId) => ({
+    scheduleId: id, sessionId, roomId: room.id, adminId: room.admin, instructions: 'Review this group board.',
+  }))
+  host.rt.live.set('gb', { turn: 1 })
+  assert.equal(await host.rt.runScheduledRoomReview(room, key, agent), 'busy')
+  const tick = async () => {
+    t.mock.timers.tick(5 * 60_000)
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  const admitted = () => agent.calls.filter(call => call.source?.goal === 'nudge')
+  await tick()
+  assert.equal(admitted().length, 0)
+  assert.equal(room.scheduledReviewOccurrence.outcome, 'busy')
+  host.rt.live.delete('gb')
+  await tick()
+  await settle(() => admitted().length === 1)
+  assert.equal(room.scheduledReviewOccurrence.key, key)
+  assert.equal(room.scheduledReviewOccurrence.at, scheduledAt)
+  assert.equal(room.scheduledReviewOccurrence.outcome, 'admitted')
+  assert.equal(room.goal.reviewAttempt.scheduledPrompt, 'Review this group board.')
+  await tick()
+  assert.equal(admitted().length, 1)
+})
+
+test('fallback polling preserves uncertain native checks without sending a replacement', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const host = await start(t)
+  await startGoal(host)
+  const room = host.rt.roomOf('r1')
+  const scheduledAt = Date.now() - 31 * 60_000
+  const key = JSON.stringify(['managed', new Date(scheduledAt).toISOString()])
+  room.goal.ownerReviewAt = 0
+  host.rt.state.roomSchedules = { r1: { id: 'managed' } }
+  room.scheduledReviewOccurrence = { key, at: scheduledAt, goalId: room.goal.id, outcome: 'uncertain' }
+  await host.rt.save({ required: true })
+  const lookup = t.mock.method(host.rt, 'readRoomSchedule', async (id, sessionId) => ({
+    scheduleId: id, sessionId, roomId: room.id, adminId: room.admin, instructions: 'Review this group board.',
+  }))
+  t.mock.timers.tick(5 * 60_000)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(lookup.mock.callCount(), 0)
+  assert.equal(room.scheduledReviewOccurrence.key, key)
+  assert.equal(room.scheduledReviewOccurrence.outcome, 'uncertain')
+  assert.equal(host.takeGoal(), undefined)
+})
+
+test('fallback polling stops a native retry if the schedule is paused while resolving its session', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const host = await start(t)
+  await startGoal(host)
+  const room = host.rt.roomOf('r1')
+  const scheduledAt = Date.now() - 7 * 60_000
+  const key = JSON.stringify(['managed', new Date(scheduledAt).toISOString()])
+  room.goal.ownerReviewAt = 0
+  host.rt.state.roomSchedules = { r1: { id: 'managed' } }
+  room.scheduledReviewOccurrence = { key, at: scheduledAt, goalId: room.goal.id, outcome: 'pending' }
+  await host.rt.save({ required: true })
+  t.mock.method(host.rt, 'readRoomSchedule', async (id, sessionId) => ({
+    scheduleId: id, sessionId, roomId: room.id, adminId: room.admin, instructions: 'Review this group board.',
+  }))
+  const resolve = t.mock.method(host.rt, 'resolveAgent', async () => {
+    host.rt.state.roomSchedules.r1.paused = true
+    return host.agentOf('r1')
+  })
+  t.mock.timers.tick(5 * 60_000)
+  await settle(() => resolve.mock.callCount() === 1)
+  await new Promise(continueTest => setImmediate(continueTest))
+  assert.equal(room.scheduledReviewOccurrence.key, key)
+  assert.equal(room.scheduledReviewOccurrence.outcome, 'pending')
+  assert.equal(room.goal.reviewAttempt, undefined)
+  assert.equal(host.takeGoal(), undefined)
+})
+
 test('sweepScheduledReviews releases overdue admitting reviewAttempt even while other members work', async (t) => {
   t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] })
   const staleAt = Date.now() - 60 * 60 * 1000
