@@ -409,7 +409,10 @@ export function install(rt) {
     const recoverStalled = () => {
       try {
         const recovered = store.recoverStalledExecute?.({ liveSession: sessionId => rt.live?.get(sessionId)?.turn !== undefined }) ?? []
-        if (recovered.length) rt.warn?.('ds-bot: returned %d stalled card(s) to ready: %s', recovered.length, recovered.join(', '))
+        if (recovered.length) {
+          rt.warn?.('ds-bot: returned %d stalled card(s) to ready: %s', recovered.length, recovered.join(', '))
+          notifyDriver()
+        }
       } catch (error) {
         rt.warn?.('ds-bot: stalled card recovery failed: %s', error?.message || error)
       }

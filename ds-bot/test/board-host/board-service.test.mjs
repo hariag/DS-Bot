@@ -161,6 +161,41 @@ test('a scheduled room task starts in the owner private Session with room proven
   assert.equal(deliveries.length,1)
 })
 
+test('periodic recovery dispatches a stalled task without a separate board write', async t => {
+  let now = Date.now(), recover
+  t.mock.method(Date, 'now', () => now)
+  const setInterval = globalThis.setInterval
+  t.mock.method(globalThis, 'setInterval', (callback, interval, ...args) => {
+    if (interval === 15 * 60_000) recover = callback
+    return setInterval(callback, interval, ...args)
+  })
+  const { rt, deliveries } = fixture(t)
+  const created = await rt.boardCall('board-command', create)
+  const ready = await rt.boardCall('board-command', { scope, taskId:created.id, expectedRevision:created.revision, type:'schedule', operationId:'stall-schedule' })
+  await new Promise(setImmediate)
+  assert.equal(deliveries.length, 1)
+  const tool = rt.teamTools.find(definition => definition.name === 'board_task')
+  const { task:working } = JSON.parse(await tool.execute({ action:'start', task_id:created.id, room_id:scope.id, operation_id:'stall-start', expected_revision:ready.revision }, { agent:{ id:'chat-one' } }))
+  assert.equal(working.status, 'working')
+  assert.equal(typeof recover, 'function')
+
+  now += 2 * 3600_000 + 1
+  rt.live = new Map([['chat-one', { turn:1 }]])
+  recover()
+  await new Promise(setImmediate)
+  assert.equal(deliveries.length, 1, 'a live turn does not get another delivery')
+
+  rt.live.clear()
+  recover()
+  await new Promise(setImmediate)
+  assert.equal(deliveries.length, 2, 'the periodic sweep must wake the dispatcher')
+  assert.notEqual(deliveries[0].message.source.taskAction.id, deliveries[1].message.source.taskAction.id)
+  const board = await rt.boardCall('board-list', { scope })
+  const restored = board.tasks.find(item => item.id === created.id)
+  assert.equal(restored.status, 'ready')
+  assert.equal(restored.dispatchState, 'accepted')
+})
+
 test('scheduled owner and reviewer receive their exact evidence fields and can correct a rejected report', async t => {
   const {rt, deliveries} = fixture(t)
   const card = await rt.boardCall('board-command', create)
