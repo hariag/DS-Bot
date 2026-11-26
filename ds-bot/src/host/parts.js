@@ -2236,6 +2236,7 @@ export function install(rt) {
       else if (Number.isInteger(seq) && seq > 0) startSeq = seq
     }
     const stored = { ...task, sessionId, segments: [], startSeq, ...(workDir !== undefined ? { workDir } : {}) }
+    rt.noteNewTask(stored)
     ;(bot.tasks ??= []).push(stored)
     rt.chatOwners.set(sessionId, bot.id)
     rt.taskOwners.set(sessionId, { botId: bot.id, taskId: task.id, ...(room ? { roomId: room.id } : {}) })

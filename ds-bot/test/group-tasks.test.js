@@ -470,13 +470,40 @@ test('P0-3: valid subdirectory inside room.workDir passes realpath within() chec
   assert.match(refusedTeam, /must stay inside it/)
 })
 
+test('startup reconciliation preserves a newly registered group task before prompt admission', async (t) => {
+  const env = await startEnv()
+  t.after(env.stop)
+
+  const deliver = env.rt.deliver
+  let statusAfterRecovery
+  env.rt.deliver = async (opts, ...args) => {
+    if (opts.role === 'task') {
+      const task = env.rt.taskById(opts.taskId).task
+      await env.rt.reconcileTasksAfterRestart()
+      statusAfterRecovery = task.status
+    }
+    return deliver(opts, ...args)
+  }
+
+  const grpB = env.agentMap.get('grp-r1-b')
+  const started = await env.tool('task_start').execute({ title: 'New group task', brief: 'Continue work' }, execOf(grpB))
+  const task = env.rt.botOf('b').tasks[0]
+  assert.match(started, /Started background task/)
+  assert.equal(statusAfterRecovery, 'running')
+  assert.equal(env.rt.taskOwners.get(task.sessionId)?.taskId, task.id)
+  assert.equal(env.deliveries.filter(entry => entry.role === 'task' && entry.taskId === task.id).length, 1)
+  assert.equal(env.deliveries.some(entry => entry.role === 'task-report' && entry.taskId === task.id), false)
+})
+
 test('P0-4: reconcileTasksAfterRestart before settleRoomBatches settles zombie group task and unblocks batch', async (t) => {
   const env = await startEnv()
   t.after(env.stop)
 
   const grpB = env.agentMap.get('grp-r1-b')
   await env.tool('task_start').execute({ title: 'Zombie group task', brief: 'Will orphan on restart' }, execOf(grpB))
-  const taskB = env.rt.botOf('b').tasks[0]
+  const bot = env.rt.botOf('b')
+  const restoredTasks = structuredClone(bot.tasks)
+  const [taskB] = restoredTasks
 
   // Simulate that the initial prompt was already consumed before restart (no unread inflight left),
   // and drop Helper's group session so task-report cannot be delivered.
@@ -492,6 +519,7 @@ test('P0-4: reconcileTasksAfterRestart before settleRoomBatches settles zombie g
   }
 
   // Exact resume.js order: reconcileTasksAfterRestart BEFORE settleRoomBatches.
+  bot.tasks = restoredTasks
   await env.rt.reconcileTasksAfterRestart(new Set())
   assert.equal(taskB.status, 'interrupted')
   assert.equal(env.rt.hasRoomTasks('r1', 'b'), false)

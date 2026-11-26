@@ -521,7 +521,9 @@ test('reconcileTasksAfterRestart marks orphaned idle tasks interrupted while pre
   await env.tool('task_start').execute({ title: 'Queued inbox', brief: 'Waiting in inbox' }, execOf(dmA))
   await env.tool('task_start').execute({ title: 'Switching part', brief: 'Mid rollover' }, execOf(dmA))
   await env.tool('task_start').execute({ title: 'Waiting peer', brief: 'Asked Helper' }, execOf(dmA))
-  const [tOrphan, tInflight, tQueued, tSwitching, tWaiting] = env.rt.botOf('a').tasks
+  const bot = env.rt.botOf('a')
+  const restoredTasks = structuredClone(bot.tasks)
+  const [tOrphan, tInflight, tQueued, tSwitching, tWaiting] = restoredTasks
   // Simulate that tOrphan and tWaiting already consumed their initial queued delivery
   // (e.g. finished turn 1 waiting on a shell job / peer work before restart).
   for (const t of [tOrphan, tWaiting]) {
@@ -532,6 +534,8 @@ test('reconcileTasksAfterRestart marks orphaned idle tasks interrupted while pre
   env.rt.state.switching[tSwitching.sessionId] = { botId: 'a' }
   env.rt.openWork('w-peer', { from: 'a', to: 'b', fromPart: tWaiting.sessionId })
 
+  // Recreate the object identities that loading the previous runtime's state would yield.
+  bot.tasks = restoredTasks
   await env.rt.reconcileTasksAfterRestart(new Set([tInflight.sessionId]))
   assert.equal(tOrphan.status, 'interrupted')
   assert.equal(tInflight.status, 'running')

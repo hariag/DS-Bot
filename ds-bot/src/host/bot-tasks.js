@@ -35,6 +35,9 @@ export function install(rt) {
   const reportsDir = join(rt.home, 'task-reports')
   const settling = new Set()
   const delivering = new Set()
+  // The startup scan can overlap task admission. Only recover tasks from an earlier runtime.
+  const newTasks = new WeakSet()
+  const noteNewTask = task => { newTasks.add(task) }
   // A fresh Session can finish a setup turn before its task prompt is admitted.
   const launching = new Set()
   const slimSegmentRef = seg => ({
@@ -608,6 +611,7 @@ export function install(rt) {
     const keep = keepSessions instanceof Set ? keepSessions : new Set(Object.keys(keepSessions ?? {}))
     for (const bot of Object.values(state.bots)) {
       for (const task of activeTasksOf(bot)) {
+        if (newTasks.has(task)) continue
         const sid = task.sessionId
         if (keep.has(sid)) continue
         if (rt.live.get(sid)?.turn !== undefined) continue
@@ -1007,6 +1011,7 @@ export function install(rt) {
         ...(isBotHandoff && activeWork !== undefined ? { exchangeId: activeWork } : {}),
         ...(movedImOrigin !== undefined ? { imOrigin: movedImOrigin } : {}),
       }
+      noteNewTask(task)
       ;(bot.tasks ??= []).push(task)
       bot.sessionId = newSid
       rt.chatOwners.set(newSid, bot.id)
@@ -1462,6 +1467,7 @@ export function install(rt) {
     taskBySession,
     taskStatusOf: statusOf,
     forgetBotTasks,
+    noteNewTask,
     reconcileEndedTask,
     reconcileTasksAfterRestart,
     onTaskEvent,
