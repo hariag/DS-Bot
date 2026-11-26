@@ -14,6 +14,7 @@ import { createBoardApi } from './board-api.js'
 import { readBoardImage } from './board-images.js'
 import { buildReleaseReport, lifecyclePlan, resolveReleaseTeam } from './release-team.mjs'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { symbols } from '@deepseek-ai/cordis'
 import { isDeepStrictEqual } from 'node:util'
 import { OWNER_REPORT_FIELDS, REVIEW_FIELDS } from './task-tool.mjs'
 import { installHostWorkflow } from './host-workflow.mjs'
@@ -303,8 +304,43 @@ export function install(rt) {
       && (value?.kind === 'personal' || (value?.kind === 'git' && verifyGitEvidence(rt.config?.evidenceRepo, value)))
       : (phase === 'review' || phase === 'revalidate') && actor === task.reviewer && actor !== task.owner
         && (actor === 'user' || taskParticipant(task, actor)) && value?.kind !== 'git')
+  const reviewRecoveryProofs = new WeakMap()
+  const providerOf = value => value?.[symbols.original] ?? value
+  const persistenceOf = () => ctx.get?.('sessionPersistence') ?? ctx.sessionPersistence
+  const reviewRecovery = async (task, { actor, sid }, signal) => {
+    const store = instance?.store
+    if (!store || rt.chatOf(actor) !== sid) return undefined
+    const held = store.restartHeldReview(task.id, task.revision, actor, sid)
+    if (!held) return undefined
+    const persistence = persistenceOf(), session = ctx.sessions?.get?.(sid)
+    if (typeof persistence?.open !== 'function' || typeof session?.eventAt !== 'function' || session.id !== sid
+      || !Number.isSafeInteger(session.seq) || session.seq < 1 || session.inheritedEventCount !== 0) return undefined
+    const deadline = AbortSignal.timeout(5000)
+    const readSignal = signal ? AbortSignal.any([signal, deadline]) : deadline
+    const provider = providerOf(persistence)
+    const current = () => !readSignal.aborted && instance?.store === store && rt.chatOf(actor) === sid
+      && ctx.sessions?.get?.(sid) === session && providerOf(persistenceOf()) === provider
+    const through = session.seq, offset = Math.max(0, through - 1024)
+    let reader
+    try {
+      reader = await persistence.open(sid, 'read', { signal:readSignal })
+      if (!current() || reader?.id !== sid || reader.inheritedEventCount !== 0 || reader.header?.id !== sid) return undefined
+      const { events } = await reader.read(offset, through - offset, { signal:readSignal })
+      if (!current() || !Array.isArray(events) || events.some((event, index) => event?.seq !== offset + index)) return undefined
+      const consumed = events.filter(event => event?.type === 'user/message' && event.data?.id === held.messageId)
+      if (consumed.length !== 1 || !isDeepStrictEqual(consumed[0].data, held.payload)
+        || events.some(event => event?.type === 'agent/admission/cancel' && event.data?.messageId === held.messageId)) return undefined
+      const event = consumed[0]
+      const stillVerified = () => current() && isDeepStrictEqual(event, session.eventAt(event.seq))
+      if (!stillVerified()) return undefined
+      const proof = Object.freeze({ sessionId:sid })
+      reviewRecoveryProofs.set(proof, { held, stillVerified })
+      return proof
+    } catch { return undefined }
+    finally { await reader?.close().catch(() => {}) }
+  }
   const botWorkflow = installHostWorkflow(rt, {
-    defineTool, run, getStore: () => service().store, pendingGoalCard:id => instance?.goalEditor.pendingCard(id),
+    defineTool, run, getStore: () => service().store, pendingGoalCard:id => instance?.goalEditor.pendingCard(id), reviewRecovery,
     goalReply:(...args) => service().goalEditor.botReply(...args),
     // A Bot command may be the review that publishes a release inside the journal
     // transaction; sweep its report before handing the scheduler the next action.
@@ -383,6 +419,10 @@ export function install(rt) {
             actionId:action.id, taskRevision:task.revision, actionRevision:action.revision })
           return intent.targetBotId === action.actor && isDeepStrictEqual(expected, intent.payload)
         } catch { return false }
+      },
+      verifyReviewRecovery: (held, proof) => {
+        const original = reviewRecoveryProofs.get(proof)
+        return !!original && original.stillVerified() && isDeepStrictEqual(original.held, held)
       },
       verifyReceipt: (action, state, receipt, intent) => {
         const saved = store.admission(action.id), proof = admissionProofs.get(action.id)

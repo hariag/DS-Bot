@@ -13,7 +13,7 @@ const taskTypes = new Set(['requirement','design','feature','development','test'
 
 // This service is private to the host. The caller supplies a trusted runtime
 // and store, never a Bot name or actor claimed by a model/tool argument.
-export function createBotWorkflow({ rt, store, verifyBinding = () => false, verifyShare = () => false, goalReply, pendingGoalCard, wake = () => {}, onError = () => {} }) {
+export function createBotWorkflow({ rt, store, verifyBinding = () => false, verifyShare = () => false, goalReply, pendingGoalCard, reviewRecovery, wake = () => {}, onError = () => {} }) {
   if (!rt || !store || typeof verifyBinding !== 'function' || typeof verifyShare !== 'function') throw new TypeError('Workflow dependencies required')
   const scope = new AsyncLocalStorage()
 
@@ -396,6 +396,9 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
     const command = { operationId: args.operationId, taskId: task.id, expectedRevision: args.expectedRevision,
       actor: caller.actor, type: args.action, ...(args.action === 'start' ? {sessionId:caller.sid} : {}),
       ...(args.action === 'reply' ? {value:{text:args.note}} : args.value === undefined ? {} : {value:args.value}) }
+    if (args.action === 'review' && task.status === 'reported' && task.revision === args.expectedRevision && !isManualBoardTask(task)) {
+      command.reviewRecovery = await reviewRecovery?.(task, caller, exec.signal)
+    }
     const result = scope.run(context, () => store.command(command))
     // The transaction creates the durable next action. A lost notification
     // is recovered by scanning that journal; never replay a claimed input.

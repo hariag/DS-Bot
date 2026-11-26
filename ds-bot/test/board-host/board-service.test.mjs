@@ -243,6 +243,68 @@ test('scheduled owner and reviewer receive their exact evidence fields and can c
   assert.doesNotMatch(reviewerPrompt, /adjust what is needed|board_task report/)
 })
 
+test('a reviewer can finish a restart-held card only after its original input is proved consumed', async t => {
+  const { rt, home, deliveries } = fixture(t)
+  const card = await rt.boardCall('board-command', create)
+  const ready = await rt.boardCall('board-command', { scope, taskId:card.id, type:'schedule', expectedRevision:card.revision, operationId:'recover-review-schedule' })
+  await settle(async () => deliveries.length === 1)
+  const tool = rt.teamTools.find(item => item.name === 'board_task')
+  const call = async (sid, action, operationId, revision, value) => JSON.parse(await tool.execute({
+    action, task_id:card.id, room_id:scope.id, operation_id:operationId, expected_revision:revision, ...(value ? { value } : {}),
+  }, { agent:{ id:sid } })).task
+  const working = await call('chat-one', 'start', 'recover-review-start', ready.revision)
+  const reported = await call('chat-one', 'report', 'recover-review-report', working.revision, { kind:'personal', evidence:'Implemented the work', environment:'test' })
+  await settle(async () => deliveries.length === 2)
+  const db = openTaskStore(join(home, 'board-v1', 'tasks.sqlite'), { assertWriteLock() {} })
+  try { assert.equal(db.holdInterruptedAdmissions(), 1) } finally { db.close() }
+
+  const original = deliveries[1].message
+  const event = { type:'user/message', seq:0, data:structuredClone(original) }
+  const getTarget = await rt.ctx.sessionController.resolveAgent('chat-two')
+  const session = getTarget.agent.session
+  Object.assign(session, { seq:1, inheritedEventCount:0, eventAt:seq => seq === 0 ? event : undefined })
+  rt.ctx.sessions.get = sid => sid === session.id ? session : undefined
+  let persisted = { ...event, data:{ ...event.data, source:{ ...event.data.source, note:'different input' } } }
+  let removeReviewer = false
+  rt.ctx.sessionPersistence = { open:async (sid, access) => {
+    assert.equal(sid, 'chat-two')
+    assert.equal(access, 'read')
+    return { id:sid, header:{ id:sid }, inheritedEventCount:0,
+      read:async () => {
+        if (removeReviewer) rt.state.rooms.group.members = ['one']
+        return { events:[persisted] }
+      },
+      close:async () => {},
+    }
+  } }
+  const commented = await rt.boardCall('board-command', { scope, taskId:card.id, type:'card-comment', expectedRevision:reported.revision,
+    operationId:'recover-review-note', value:{ text:'The original review delivery still needs recovery' } })
+  assert.equal(commented.actionRevision, reported.revision)
+  assert.ok(commented.revision > reported.revision)
+  const review = { result:'pass', evidence:'Independently checked the output' }
+  const reviewCard = () => call('chat-two', 'review', 'recover-review-verdict', commented.revision, review)
+  await assert.rejects(reviewCard(), /verified action receipt required/)
+  const read = async () => (await rt.boardCall('board-list', { scope })).tasks.find(item => item.id === card.id)
+  assert.equal((await read()).dispatchState, 'uncertain')
+
+  persisted = structuredClone(event)
+  removeReviewer = true
+  await assert.rejects(reviewCard(), /not authorized/)
+  rt.state.rooms.group.members = ['one','two']
+  assert.equal((await read()).dispatchState, 'uncertain')
+
+  removeReviewer = false
+  const verdict = await reviewCard()
+  assert.equal(verdict.status, 'done')
+  assert.equal(deliveries.length, 2, 'the verified review input must never be redelivered')
+  assert.equal((await reviewCard()).revision, verdict.revision, 'the same verdict remains idempotent')
+  const journal = new DatabaseSync(join(home, 'board-v1', 'tasks.sqlite'), { readOnly:true })
+  try {
+    assert.deepEqual(journal.prepare("SELECT previous_state,outcome FROM admission_decisions WHERE reason='verified original review input was consumed'").all().map(row => [row.previous_state,row.outcome]), [['uncertain','accepted']])
+    assert.equal(journal.prepare("SELECT state FROM actions WHERE task_id=? AND kind='review'").get(card.id).state, 'done')
+  } finally { journal.close() }
+})
+
 test('a personal Bot task can be created and delivered to its private Session', async t => {
   const {rt,deliveries}=fixture(t),scope={kind:'personal',id:'one'}
   const created=await rt.boardCall('board-command',{scope,operationId:'personal-scheduled-create',taskId:'personal-scheduled',type:'create',value:{
