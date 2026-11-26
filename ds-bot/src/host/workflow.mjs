@@ -4,9 +4,11 @@ import { prepareBoardIntake, isManualBoardTask } from './board-intake.mjs'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
+import { assertTaskDefinitionEdit, taskDefinitionFields } from './task-store.mjs'
 
 const id = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\x00-\x1f]/.test(value)
 const refused = () => new Error('Task is unavailable or the action is not authorized')
+const invalid = message => Object.assign(new Error(message), { code:'bot/invalid' })
 const actions = new Set(['reply', 'start', 'progress', 'report', 'review', 'block', 'unblock'])
 const proposalUpdateFields = ['description', 'type', 'stage', 'labels', 'dueDate', 'dueComplete', 'checklist']
 const taskTypes = new Set(['requirement','design','feature','development','test','deployment','operations','bugfix','ui','ux','other'])
@@ -89,6 +91,19 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
     return caller.roomId === undefined || caller.roomId === origin.id
   }
 
+  const canOwnBlock = (task, actor) => actor === 'user'
+    || (id(actor) && !!rt.botOf?.(actor) && direct(task, { actor }))
+
+  const currentBlockOwner = task => {
+    const owner = task.blocked?.owner
+    if (!id(owner)) return undefined
+    if (canOwnBlock(task, owner)) return owner
+    if (rt.botOf?.(owner)) return undefined
+    // Old cards stored names. Resolve an exact unique match only for clearing that block.
+    const matches = Object.keys(rt.state?.bots ?? {}).filter(actor => rt.botOf(actor)?.name === owner && canOwnBlock(task, actor))
+    return matches.length === 1 ? matches[0] : undefined
+  }
+
   const canMutate = (task, caller, action) => {
     if (!direct(task, caller) || (!actions.has(action) && action !== 'propose')) return false
     if (action === 'propose') return task.stale !== true && !task.archivedAt
@@ -109,7 +124,7 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
     if (action === 'start' || action === 'progress' || action === 'report') return caller.actor === task.owner
     if (action === 'review') return caller.actor === task.reviewer && caller.actor !== task.owner
     if (action === 'block') return caller.actor === task.owner || caller.actor === task.reviewer
-    if (action === 'unblock') return task.blocked?.owner === caller.actor
+    if (action === 'unblock') return currentBlockOwner(task) === caller.actor
     return false
   }
 
@@ -351,15 +366,35 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       return { proposal }
     }
     if (args.action === 'propose') {
-      if (!canMutate(task, caller, 'propose') || args.expectedRevision !== undefined && args.expectedRevision !== task.revision) throw refused()
+      if (!canMutate(task, caller, 'propose')) throw refused()
+      if (args.expectedRevision !== undefined && args.expectedRevision !== task.revision) {
+        throw invalid('The task revision changed. Call board_task show and use its current revision.')
+      }
       const change = args.change
-      if (!change || typeof change !== 'object' || Array.isArray(change) || !['update','status','release'].includes(change.kind)) throw refused()
+      if (!change || typeof change !== 'object' || Array.isArray(change) || !['update','status','release'].includes(change.kind)) {
+        throw invalid('Set change.kind to update, status, or release for the current card.')
+      }
       let command
+      let previewFields = proposalUpdateFields
       if (change.kind === 'update') {
-        if (!change.value || typeof change.value !== 'object' || Array.isArray(change.value)) throw refused()
+        if (!change.value || typeof change.value !== 'object' || Array.isArray(change.value)) {
+          throw invalid('Put the requested field changes together in a change.value object.')
+        }
         const fields = Object.keys(change.value)
-        if (!fields.length || fields.some(field => !proposalUpdateFields.includes(field))) throw refused()
-        command = { type:'card-details', value:change.value }
+        const supported = [...proposalUpdateFields, ...taskDefinitionFields]
+        if (!fields.length || fields.some(field => !supported.includes(field))) {
+          throw invalid(`Supply at least one of the supported fields in change.value (${supported.join(', ')}).`)
+        }
+        const definition = taskDefinitionFields.filter(field => Object.hasOwn(change.value, field))
+        if (definition.length && caller.actor !== task.owner && caller.actor !== task.reviewer) throw refused()
+        if (definition.length && (!Number.isSafeInteger(args.expectedRevision) || !id(args.operationId))) {
+          throw invalid('A title or acceptance proposal requires the current expected_revision from board_task show and a stable operation_id.')
+        }
+        assertTaskDefinitionEdit(task, change.value)
+        previewFields = [...proposalUpdateFields, ...definition]
+        const value = { ...change.value }
+        for (const field of definition) value[field] = value[field].trim()
+        command = { type:'card-details', value }
       } else if (change.kind === 'status') {
         if (!change.value || !['submit','cancel','restore'].includes(change.value.type)) throw refused()
         if (change.value.type === 'cancel' && change.value.reason !== undefined && (typeof change.value.reason !== 'string' || change.value.reason.length > 500)) throw refused()
@@ -370,10 +405,10 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       }
       if (args.note !== undefined && (typeof args.note !== 'string' || args.note.length > 2000)) throw refused()
       const proposalId = args.operationId ? `proposal:${args.operationId}` : `proposal:${randomUUID()}`
-      const before = Object.fromEntries(proposalUpdateFields.filter(field => Object.hasOwn(task, field)).map(field => [field, task[field]]))
+      const before = Object.fromEntries(previewFields.filter(field => Object.hasOwn(task, field)).map(field => [field, task[field]]))
       const proposal = {
         id: proposalId, scope: task.scope, taskId: task.id, kind: change.kind, baseRevision: task.revision,
-        command, before, after: change.kind === 'update' ? { ...before, ...change.value } : change.value,
+        command, before, after: change.kind === 'update' ? { ...before, ...command.value } : change.value,
         ...(args.note ? { note:args.note } : {}),
       }
       const existing = store.listProposals(task.scope).find(item => item.id === proposalId)
@@ -390,6 +425,9 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       return { proposal: saved }
     }
     if (!actions.has(args.action) || !canMutate(task, caller, args.action)) throw refused()
+    if (args.action === 'block' && !canOwnBlock(task, args.value?.owner)) {
+      throw invalid('Set value.owner to a real Bot ID with access to this card, or user if the instance owner must act. Put the required action or external dependency in value.condition.')
+    }
     if (!id(args.operationId)) throw new Error(`${args.action} requires a stable operation_id for this exact update`)
     if (!Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 1) throw new Error(`${args.action} requires expected_revision from the current card`)
     const context = { exec, caller, roomId:args.roomId, taskId: task.id, revision: args.expectedRevision, action: args.action }

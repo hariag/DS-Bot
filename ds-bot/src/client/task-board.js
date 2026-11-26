@@ -1553,6 +1553,8 @@ function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand
     task.dispatchState === 'uncertain' ? h('p', { className: 'bt-card-warning', role: 'status' }, t('The Bot message may or may not have reached its Session. Check the delivery before scheduling again.')) : null,
     canMove ? h('label', { className: 'bt-field' }, h('span', null, t('Personal progress')), h('select', { value: task.personalProgress, disabled, 'aria-label': t('Move personal task'), onChange: event => void onCommand(task, { type: 'personal-progress' }, { progress: event.target.value }) }, PERSONAL_COLUMNS.map(([id, label]) => h('option', { key: id, value: id }, t(label))))) : null,
     canSchedule ? h('button', { type: 'button', className: 'bt-btn bt-btn-primary bt-btn-block', disabled, onClick: () => void onCommand(task, { type: 'schedule' }) }, t('Schedule Bot')) : null,
+    commandOf(commands, 'unblock') ? h('button', { type: 'button', className: 'bt-btn bt-btn-block', disabled,
+      onClick: () => void onCommand(task, { type:'unblock' }) }, t('Clear blocker')) : null,
     canSubmit || canRestore || canCancel ? h('div', { className: 'bt-card-status-actions' },
       canSubmit ? h('button', { type: 'button', className: 'bt-btn bt-btn-primary bt-btn-block', disabled, onClick: () => void onCommand(task, { type: 'submit' }) }, t('Submit card')) : null,
       canRestore ? h('button', { type: 'button', className: 'bt-btn bt-btn-primary bt-btn-block', disabled, onClick: () => void onCommand(task, { type: 'restore' }) }, t('Restore card')) : null,

@@ -13771,6 +13771,7 @@ var ZH = {
   "Rework requested": "需返工",
   "Blocker cleared": "阻塞已解除",
   "Unblock condition": "解除条件",
+  "Clear blocker": "解除阻塞",
   "Parent card": "所属功能或缺陷卡",
   "Major version": "大版本",
   "Minor releases": "小版本发布",
@@ -47688,6 +47689,12 @@ function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand
     task.dispatchState === "uncertain" ? (0, import_react63.createElement)("p", { className: "bt-card-warning", role: "status" }, t("The Bot message may or may not have reached its Session. Check the delivery before scheduling again.")) : null,
     canMove ? (0, import_react63.createElement)("label", { className: "bt-field" }, (0, import_react63.createElement)("span", null, t("Personal progress")), (0, import_react63.createElement)("select", { value: task.personalProgress, disabled, "aria-label": t("Move personal task"), onChange: (event) => void onCommand(task, { type: "personal-progress" }, { progress: event.target.value }) }, PERSONAL_COLUMNS.map(([id, label]) => (0, import_react63.createElement)("option", { key: id, value: id }, t(label))))) : null,
     canSchedule ? (0, import_react63.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary bt-btn-block", disabled, onClick: () => void onCommand(task, { type: "schedule" }) }, t("Schedule Bot")) : null,
+    commandOf(commands, "unblock") ? (0, import_react63.createElement)("button", {
+      type: "button",
+      className: "bt-btn bt-btn-block",
+      disabled,
+      onClick: () => void onCommand(task, { type: "unblock" })
+    }, t("Clear blocker")) : null,
     canSubmit || canRestore || canCancel ? (0, import_react63.createElement)(
       "div",
       { className: "bt-card-status-actions" },

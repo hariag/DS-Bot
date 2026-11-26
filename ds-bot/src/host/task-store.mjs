@@ -15,6 +15,24 @@ import { isFeatureCard, isManualBoardTask, isUnassignedItemDraft } from './board
 const validId = x => typeof x === 'string' && x.length > 0 && x.length <= 256 && !/[\x00-\x1f]/.test(x)
 const requireId = (x, field) => { if (!validId(x)) throw new Error(`invalid ${field}`); return x }
 const string = (x, field) => { if (typeof x !== 'string' || !x.trim() || Buffer.byteLength(x) > 8192) throw new Error(`invalid ${field}`); return x }
+export const taskDefinitionFields = ['title', 'acceptance']
+export function assertTaskDefinitionEdit(task, value) {
+  if (!taskDefinitionFields.some(field => Object.hasOwn(value, field))) return
+  const invalid = message => Object.assign(new Error(message), { code:'bot/invalid' })
+  if (!['draft','proposed'].includes(task.status) || task.authority || task.actionRevision != null
+    || task.evidence || task.change || task.archivedAt || task.stale || task.blocked) {
+    throw invalid('Title and acceptance can be revised on an unblocked draft or proposed card before scheduling work.')
+  }
+  if (Object.hasOwn(value, 'title') && (typeof value.title !== 'string' || !value.title.trim() || value.title.length > 200)) {
+    throw invalid('A title is required and must have no more than 200 characters.')
+  }
+  if (Object.hasOwn(value, 'acceptance') && (typeof value.acceptance !== 'string' || !value.acceptance.trim() || Buffer.byteLength(value.acceptance) > 8192)) {
+    throw invalid('Acceptance criteria are required and must have no more than 8192 UTF-8 bytes.')
+  }
+  if (Object.hasOwn(value, 'description') && (typeof value.description !== 'string' || Buffer.byteLength(value.description) > 8192)) {
+    throw invalid('The description must be text of no more than 8192 UTF-8 bytes.')
+  }
+}
 const stable = value => {
   const seen = new Set(); let count = 0
   const visit = (x, depth) => {
@@ -111,7 +129,8 @@ const dueDateIsValid = value => {
   return match[4] === undefined || (Number(match[4]) <= 23 && Number(match[5]) <= 59)
 }
 const applyCardDetails = (target, value) => {
-  keysOnly(value, ['description', 'stage', 'dueDate', 'dueComplete', 'labels', 'checklist', 'coverImageId', 'type'])
+  keysOnly(value, ['description', 'stage', 'dueDate', 'dueComplete', 'labels', 'checklist', 'coverImageId', 'type', ...taskDefinitionFields])
+  for (const field of taskDefinitionFields) if (Object.hasOwn(value, field)) target[field] = value[field].trim()
   if (Object.hasOwn(value, 'type')) {
     if (!validTaskType(value.type)) throw new Error('invalid card details')
     target.type = value.type
@@ -1331,8 +1350,8 @@ const releaseIsDone = release => {
           case 'card-details': {
             // Card presentation is distinct from acceptance and workflow.
             // An item ticked here never completes a task or a dependency.
-            keysOnly(value, ['description', 'stage', 'dueDate', 'dueComplete', 'labels', 'checklist', 'coverImageId', 'type'])
-            if (!Object.keys(value).length) throw new Error('invalid card details')
+            if (!value || typeof value !== 'object' || Array.isArray(value) || !Object.keys(value).length) throw new Error('invalid card details')
+            assertTaskDefinitionEdit(old, value)
             if (value.type !== undefined && !old.parentTaskId && (old.intake || old.goalItemIds?.length || hasItems.get(old.id)) && !isFeatureCard({ type:value.type })) throw new Error('top-level card must be a feature or bugfix')
             applyCardDetails(next, value)
             break
@@ -1582,6 +1601,9 @@ const releaseIsDone = release => {
             if (stable(old.blocked ?? null) === stable(next.blocked)) return old
             reply = { text:next.blocked.reason, condition:next.blocked.condition, blockOwner:next.blocked.owner }; break
           case 'unblock':
+            if (actor === 'user' && (old.blocked?.owner !== 'user' || old.status === 'reported' && unresolved(old.id))) {
+              throw Object.assign(new Error('This blocker cannot be cleared while the original review delivery is unresolved.'), { code:'bot/invalid' })
+            }
             if (!old.blocked || old.stale) throw new Error('not blocked or evidence stale'); next.blocked = null; if (!manual && old.status === 'reported') next.actionRevision = next.revision
             reply = {}; break
           case 'dependencies':

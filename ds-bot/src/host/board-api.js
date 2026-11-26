@@ -2,9 +2,12 @@ import { isUnassignedItemDraft } from './board-intake.mjs'
 import { boardList } from './board-query.js'
 import { legacyGoalCards, linkGoalCards } from './legacy-goal.js'
 import { canConfigureReleaseTeam, RELEASE_ROLES, roleForBot } from './release-team.mjs'
+import { assertTaskDefinitionEdit } from './task-store.mjs'
 
 const has = (obj, key) => obj != null && Object.hasOwn(obj, key)
 const nonempty = value => typeof value === 'string' && value.trim() !== '' && value.length <= 256
+const canClearUserBlock = task => task?.blocked?.owner === 'user' && !task.stale && !task.archivedAt
+  && !['done','cancelled'].includes(task.status)
 const string = (value, max) => typeof value === 'string' && value.trim() !== '' && value.length <= max
 const fail = message => Object.assign(new Error(message), { code: 'bot/invalid' })
 const liveAction = action => ['pending','claimed','accepted','uncertain'].includes(action.state)
@@ -84,6 +87,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
         ...(scope.kind === 'room' && source?.parentTaskId && !source.archivedAt && !source.authority && ['draft','proposed'].includes(source.status) ? [{type:'move-item',label:'Move to card'}] : []),
         ...(editableReleases.length && !source?.parentTaskId && !source?.change && !['done','cancelled'].includes(source?.status) ? [{type:'release-assign',label:'Assign release'}] : []),
         ...(canSchedule ? [{type:'schedule',label:'Schedule Bot'}] : []),
+        ...(canClearUserBlock(source) ? [{type:'unblock',label:'Clear blocker'}] : []),
         ...(canUnschedule ? [{type:'unschedule',label:'Unschedule'}] : []), {type:'card-comment',label:'Add comment'},{type:'participants',label:'Manage participants'},
         ...(Array.isArray(source?.comments) && source.comments.length ? [{type:'card-comment-edit',label:'Edit comment'},{type:'card-comment-delete',label:'Delete comment'}] : []),
         ...(images ? [{ type: 'upload', label: 'Add images' }, { type: 'remove-image', label: 'Remove image' }] : []),
@@ -256,8 +260,12 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
         value = { kind:'personal', reference:`board:${task.id}:${task.revision}` }
       } else if (input.type === 'unschedule') {
         if (task.blocked || task.stale || task.change || !(task.status === 'ready' || task.status === 'waiting' && task.authority)) throw fail('Task is not scheduled')
+      } else if (input.type === 'unblock') {
+        if (!canClearUserBlock(task)) throw fail('This blocker is not assigned to the user')
+        value = undefined
       } else if (input.type === 'card-details' || input.type === 'card-comment') {
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw fail('Invalid card details')
+        if (input.type === 'card-details') assertTaskDefinitionEdit(task, value)
         if (input.type === 'card-details' && (
           (Object.hasOwn(value,'description') && value.description !== (task.description??''))
           || (Object.hasOwn(value,'type') && value.type !== (task.type ?? 'other')))

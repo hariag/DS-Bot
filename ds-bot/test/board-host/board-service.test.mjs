@@ -245,6 +245,7 @@ test('scheduled owner and reviewer receive their exact evidence fields and can c
 
 test('a reviewer can finish a restart-held card only after its original input is proved consumed', async t => {
   const { rt, home, deliveries } = fixture(t)
+  rt.state.rooms.group.workDir = join(home, 'project-workspace')
   const card = await rt.boardCall('board-command', create)
   const ready = await rt.boardCall('board-command', { scope, taskId:card.id, type:'schedule', expectedRevision:card.revision, operationId:'recover-review-schedule' })
   await settle(async () => deliveries.length === 1)
@@ -255,6 +256,8 @@ test('a reviewer can finish a restart-held card only after its original input is
   const working = await call('chat-one', 'start', 'recover-review-start', ready.revision)
   const reported = await call('chat-one', 'report', 'recover-review-report', working.revision, { kind:'personal', evidence:'Implemented the work', environment:'test' })
   await settle(async () => deliveries.length === 2)
+  assert.ok(deliveries[1].message.content[0].text.includes(`Group project workspace: ${JSON.stringify(rt.state.rooms.group.workDir)}`))
+  assert.match(deliveries[1].message.content[0].text, /git show <ref>:<path>/)
   const db = openTaskStore(join(home, 'board-v1', 'tasks.sqlite'), { assertWriteLock() {} })
   try { assert.equal(db.holdInterruptedAdmissions(), 1) } finally { db.close() }
 
@@ -903,6 +906,105 @@ test('the board_task tool creates a user-confirmed proposal that the board appli
   const after = (await rt.boardCall('board-list', { scope })).tasks.find(item => item.id === 't1')
   assert.equal(after.description, 'Bot proposal')
   assert.equal(after.revision > before.revision, true)
+})
+
+test('an assigned Bot proposes title, description and acceptance together on an unscheduled card', async t => {
+  const { rt, deliveries } = fixture(t)
+  const original = await rt.boardCall('board-command', create)
+  const tool = rt.teamTools.find(definition => definition.name === 'board_task')
+  const call = (agent, operationId, expectedRevision, value) => tool.execute({
+    action:'propose', task_id:original.id, room_id:scope.id, expected_revision:expectedRevision,
+    operation_id:operationId, change:{ kind:'update', value },
+  }, { agent:{ id:agent }, callId:operationId })
+  const fields = { title:'Revised requirement', description:'Use one contract', acceptance:'Verify the failure and success cases' }
+  const { proposal } = JSON.parse(await call('chat-one', 'revise-definition', original.revision, fields))
+  const decide = (operationId, row) => rt.boardCall('board-proposal-decide', {
+    scope, operationId, proposalId:row.id, expectedRevision:row.revision, decision:'confirm',
+  })
+  const pending = await rt.boardCall('board-proposal-list', { scope })
+  assert.equal(pending.length, 1)
+  assert.equal(pending[0].before.title, original.title)
+  assert.equal(pending[0].before.acceptance, original.acceptance)
+  assert.deepEqual(Object.fromEntries(Object.keys(fields).map(key => [key, pending[0].after[key]])), fields)
+
+  let board = await rt.boardCall('board-list', { scope })
+  assert.equal(board.tasks[0].title, original.title)
+  assert.equal(board.tasks[0].acceptance, original.acceptance)
+  assert.equal(board.tasks[0].revision, original.revision)
+  const confirmed = await decide('apply-definition', proposal)
+  assert.equal(confirmed.proposal.status, 'confirmed')
+  board = await rt.boardCall('board-list', { scope })
+  assert.deepEqual(board.tasks.map(task => ({
+    id:task.id, status:task.status, revision:task.revision, owner:task.owner, reviewer:task.reviewer,
+    title:task.title, description:task.description, acceptance:task.acceptance,
+  })), [{ id:original.id, status:'proposed', revision:original.revision + 1, owner:original.owner, reviewer:original.reviewer, ...fields }])
+  assert.equal(deliveries.length, 0)
+
+  rt.state.bots.three = { name:'Third member' }
+  rt.state.rooms.group.members.push('three')
+  const selfOf = rt.selfOf
+  rt.selfOf = id => id === 'chat-three' ? 'three' : selfOf(id)
+  await assert.rejects(call('chat-three', 'third-party-definition', board.tasks[0].revision, fields), /not authorized/)
+  await assert.rejects(call('chat-one', 'changed-owner', board.tasks[0].revision, { ...fields, owner:'three' }), /supported fields/)
+  await assert.rejects(call('chat-two', 'missing-title', board.tasks[0].revision, { title:' ' }), /title.*required/i)
+
+  const { proposal: toBecomeStale } = JSON.parse(await call('chat-two', 'reviewer-definition', board.tasks[0].revision, { acceptance:'Updated independent check' }))
+  await rt.boardCall('board-command', { scope, operationId:'schedule-revised-card', taskId:original.id, expectedRevision:board.tasks[0].revision, type:'schedule' })
+  const current = (await rt.boardCall('board-list', { scope })).tasks[0]
+  await assert.rejects(decide('apply-stale-definition', toBecomeStale), /Task changed after this proposal/)
+  await assert.rejects(call('chat-one', 'scheduled-definition', current.revision, fields), /before scheduling/i)
+  await assert.rejects(rt.boardCall('board-command', { scope, operationId:'edit-scheduled-definition', taskId:original.id,
+    expectedRevision:current.revision, type:'card-details', value:fields }), /before scheduling/i)
+  const after = (await rt.boardCall('board-list', { scope })).tasks[0]
+  assert.equal(after.revision, current.revision)
+  assert.equal(after.acceptance, fields.acceptance)
+  assert.equal((await rt.boardCall('board-proposal-list', { scope })).find(row => row.id === toBecomeStale.id).status, 'pending')
+})
+
+test('board_task validates blocker IDs and recognizes an unambiguous legacy owner in scope', async t => {
+  const { rt, home } = fixture(t)
+  const tool = rt.teamTools.find(definition => definition.name === 'board_task')
+  const call = async (sid, args) => JSON.parse(await tool.execute({ room_id:scope.id, ...args }, { agent:{ id:sid } }))
+  const { task } = await call('chat-one', { action:'register', task_id:'blocked-card', operation_id:'register-blocked-card',
+    change:{ value:{ title:'Dependency check', type:'feature', owner:'one', reviewer:'two', acceptance:'Dependency is resolved' } } })
+  const command = (sid, action, operationId, revision, value) => call(sid, {
+    action, task_id:task.id, operation_id:operationId, expected_revision:revision, ...(value === undefined ? {} : { value }),
+  })
+  const block = { reason:'Upstream dependency', condition:'Confirm upstream contract' }
+  rt.state.bots.outside = { name:'Not in this room' }
+  for (const [key, owner] of [['display-name','Two'], ['external','outside'], ['description','Two or external team'], ['session','chat-two']]) {
+    await assert.rejects(command('chat-one', 'block', `invalid-block-${key}`, task.revision, { ...block, owner }), /Bot ID.*condition/i)
+  }
+  const { task: blocked } = await command('chat-one', 'block', 'block-by-id', task.revision, { ...block, owner:'two' })
+  assert.equal(blocked.blocked.owner, 'two')
+  const clearInBoard = (revision, operationId) => rt.boardCall('board-command', {
+    scope, taskId:task.id, type:'unblock', expectedRevision:revision, operationId,
+  })
+  await assert.rejects(clearInBoard(blocked.revision, 'clear-bot-block-as-user'), /not assigned to the user/)
+  const { task: reopened } = await command('chat-two', 'unblock', 'unblock-by-id', blocked.revision)
+  assert.equal(reopened.blocked, undefined)
+  const { task: userBlocked } = await command('chat-one', 'block', 'block-for-user', reopened.revision, { ...block, owner:'user' })
+  assert.equal(userBlocked.blocked.owner, 'user')
+  const board = await rt.boardCall('board-list', { scope })
+  assert.ok(board.capabilities.commands[task.id].some(item => item.type === 'unblock'))
+  const cleared = await clearInBoard(userBlocked.revision, 'clear-user-block')
+  assert.equal(cleared.blocked, null)
+
+  const store = openTaskStore(join(home, 'board-v1', 'tasks.sqlite'), { assertWriteLock() {}, authorize() { return true } })
+  let legacy
+  try {
+    legacy = store.command({ actor:'one', type:'block', operationId:'legacy-block', taskId:task.id,
+      expectedRevision:cleared.revision, value:{ ...block, owner:'Two' } })
+  } finally { store.close() }
+  rt.state.bots.other = { name:'Two' }
+  rt.state.rooms.group.members.push('other')
+  await assert.rejects(command('chat-two', 'unblock', 'ambiguous-owner', legacy.revision), /not authorized/)
+  const saved = (await rt.boardCall('board-list', { scope })).tasks.find(entry => entry.id === task.id)
+  assert.equal(saved.blocked.owner, 'Two')
+  assert.equal(saved.revision, legacy.revision)
+  rt.state.rooms.group.members = rt.state.rooms.group.members.filter(id => id !== 'other')
+  const { task: unblocked } = await command('chat-two', 'unblock', 'unblock-legacy-owner', legacy.revision)
+  assert.equal(unblocked.blocked, undefined)
 })
 
 test('the board_task tool proposes a new card and confirmation creates it', async t => {

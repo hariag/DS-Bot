@@ -282,6 +282,8 @@ export function install(rt) {
       : action.kind === 'review' && task.reviewer === action.actor && task.reviewer !== task.owner && task.status === 'reported' && task.actionRevision === action.revision
   }
   const taskPrompt = (task, action) => {
+    const roomId = taskRoomId(task)
+    const workDir = roomId ? rt.roomOf(roomId)?.workDir : undefined
     const detail = [
       `Task ID: ${task.id} (revision ${task.revision})`,
       `Title: ${task.title}`,
@@ -289,6 +291,9 @@ export function install(rt) {
       ...(task.description ? [`Description: ${task.description}`] : []),
       ...(task.dependencies?.length ? [`Dependencies: ${task.dependencies.join(', ')}`] : []),
     ]
+    if (workDir) detail.push(chineseRolePrompt(rt.botOf(action.actor)?.instructions)
+      ? `原群项目目录为 ${JSON.stringify(workDir)}。按项目登记的 ref 和路径，用 git show <ref>:<path> 读取现行规则、契约和验收文档。project/ 存项目资料，team/ 存通用资料。`
+      : `Group project workspace: ${JSON.stringify(workDir)}. Use git show <ref>:<path> in that repository to read current rules, contracts and acceptance records from its declared authoritative ref and paths.`)
     if (task.change) detail.push(`Requirement change from ${task.change.sourceTaskId} revision ${task.change.sourceRevision}. The original task remains unchanged.`,
       `Before: ${JSON.stringify(task.change.before)}`, `After: ${JSON.stringify(task.change.after)}`,
       action.kind === 'review'
@@ -400,7 +405,7 @@ export function install(rt) {
     const store = openTaskStore(join(root, 'tasks.sqlite'), {
       assertWriteLock: writable, conversationKind:actor=>botWorkflow.conversationKind(actor),
       onProjectEvent:projectChanged,
-      authorize: input => (input.actor === 'user' && ['create', 'link-goal-items', 'move-item', 'move-goal-item', 'edit', 'card-details', 'card-comment', 'card-comment-edit', 'card-comment-delete', 'participants', 'reorder', 'attach', 'remove-image', 'cancel', 'submit', 'restore', 'archive', 'unarchive', 'release-assign', 'release', 'proposal', 'share', 'unshare', 'personal-progress', 'schedule', 'unschedule'].includes(input.type))
+      authorize: input => (input.actor === 'user' && ['create', 'link-goal-items', 'move-item', 'move-goal-item', 'edit', 'card-details', 'card-comment', 'card-comment-edit', 'card-comment-delete', 'participants', 'reorder', 'attach', 'remove-image', 'cancel', 'submit', 'restore', 'archive', 'unarchive', 'release-assign', 'release', 'proposal', 'share', 'unshare', 'personal-progress', 'schedule', 'unschedule', 'unblock'].includes(input.type))
         || (input.actor === 'scheduler' && (input.type === 'claim' ? allowedAction(input.task, input.action) : input.type === 'receipt'))
         || (input.actor !== 'user' && input.type === 'proposal' && botWorkflow.authorize(input))
         || botWorkflow.authorize(input),

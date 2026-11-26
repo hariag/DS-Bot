@@ -37,6 +37,7 @@ const ZH = {
   'Rework requested': '需返工',
   'Blocker cleared': '阻塞已解除',
   'Unblock condition': '解除条件',
+  'Clear blocker': '解除阻塞',
   'Parent card': '所属功能或缺陷卡',
   'Major version': '大版本',
   'Minor releases': '小版本发布',

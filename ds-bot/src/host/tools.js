@@ -842,7 +842,7 @@ export function install(rt) {
     description: 'Post a message into a group chat as yourself. A Main Bot may post into any group, any other Bot into a group it is in. A Main Bot or group admin starts a round with a regular post. Another member calls only the members it names with "@Name". Use notice_only to record an evidence summary without waking any Bot.',
     parameters: {
       group: GROUP_REF,
-      message: { type: 'string', required: true, description: 'What to say; write "@Name" to choose who answers, and a name without "@" to only mention a member' },
+      message: { type: 'string', required: true, description: 'What to say; write @Name outside backticks or links to choose who answers. Use a plain name for information only.' },
       report_back: { type: 'boolean', description: 'Also send the members\' replies back to you as a new message when the round ends' },
       notice_only: { type: 'boolean', description: 'Record a notice without Bot replies. Requires plain names and no report_back.' },
     },

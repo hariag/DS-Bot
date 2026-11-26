@@ -1,7 +1,13 @@
 export const OWNER_REPORT_FIELDS = 'For board_task report, send value exactly as {"kind":"personal","environment":"where you checked","evidence":"what you checked and observed"}. When the host has an evidence repository configured, {"kind":"git","targetCommit":"<40 or 64 hex>","targetBlob":"<40 or 64 hex>","evidence":"..."} is also accepted and checked against that repository. Include relevant Git commit and blob IDs in the evidence text.'
-export const REVIEW_FIELDS = 'For board_task review, send value exactly as {"result":"pass","evidence":"your independent findings"}. Use "pass" only after independently verifying the acceptance criteria. Use "rework" and identify the gap if they are unmet.'
+export const REVIEW_FIELDS = 'For board_task review, send value exactly as {"result":"pass","evidence":"your independent findings"}. Match the original card, approved acceptance criteria and target version before verifying. Use "pass" when they are met and "rework" for a verified failed criterion. Name the criterion, expected and observed results and evidence. Request missing or mismatched evidence on the original card before submitting a verdict.'
 
 function evidenceFieldError(args, error) {
+  if (error?.message === 'revision conflict') {
+    return new Error('revision conflict. Read the original card with board_task show. Check the original operation if its result is unknown; submit a new update only if the current card still needs it.', {cause:error})
+  }
+  if (args.action === 'review' && error?.message === 'cannot review') {
+    return new Error('cannot review. Read the original card and verify that it is reported, current and unblocked. Follow up on the recorded blocker or missing evidence before submitting a verdict.', {cause:error})
+  }
   const report = args.action === 'report'
   if (!report && args.action !== 'review') return error
   const invalid = ['invalid fields','invalid evidence','invalid environment','invalid evidence kind','invalid evidence identity',
@@ -38,14 +44,14 @@ export function installTaskTool(rt, workflow, defineTool) {
       note: { type:'string', description:'Reply text on the original group-goal item or assigned draft card, or the comment text with action comment. A reply records a note without authorizing or scheduling work. Mention people with @Name to add them to the card and notify them. Also used to explain a proposal' },
       change: { type:'object', additionalProperties:false, properties: {
         kind: { type:'string', enum:['create','update','status','release'] },
-        value: { type:'object', additionalProperties:true, description:'create: card fields (title, owner, reviewer, acceptance, description, type, labels, dueDate, dueComplete, checklist, dependencies, draft). update: description, type, labels, dueDate, dueComplete, checklist. status: {type: submit|cancel|restore, reason?}. release: {releaseId}.' },
+        value: { type:'object', additionalProperties:true, description:'create: card fields (title, owner, reviewer, acceptance, description, type, labels, dueDate, dueComplete, checklist, dependencies, draft). update: description, type, stage, labels, dueDate, dueComplete and checklist. On an undispatched draft or proposed card, the owner or reviewer can include title, description and acceptance together. Use the original task_id, current expected_revision and a stable operation_id. status: {type: submit|cancel|restore, reason?}. release: {releaseId}.' },
       }, description:'For register, supply value with title, owner, independent reviewer, acceptance, type and optional description. For propose, a proposed content, status or release change; the user confirms or rejects it in the board Changes panel before it applies. Query it with action proposal.' },
       value: { type:'object', additionalProperties:false, properties: {
         summary:{ type:'string' }, next:{ type:'string' },
         kind: { type:'string', enum:['git','personal'], description:'The installed Bot report verifier accepts personal evidence for group and personal cards.' }, evidence: { type:'string' },
         targetCommit: { type:'string' }, targetBlob: { type:'string' }, acceptanceBlob: { type:'string' }, environment: { type:'string' },
         result: { type:'string', enum:['pass','rework'] }, reason: { type:'string' }, condition: { type:'string' }, owner: { type:'string' },
-      }, description:'progress requires exactly {summary, next}: record the result or pending dependency and who does what next. block requires {reason, condition, owner}. '+OWNER_REPORT_FIELDS+' '+REVIEW_FIELDS },
+      }, description:'progress requires {summary, next}: record the result or pending dependency and who acts next. block requires {reason, condition, owner}; owner is user for a human decision or one in-scope Bot ID from list_bots. Put the full dependency and its release condition in condition. '+OWNER_REPORT_FIELDS+' '+REVIEW_FIELDS },
     },
     output: { schema:{ type:'string' }, render:(_args, value) => [{ type:'text', text:String(value) }] },
     async execute(args, exec) {
