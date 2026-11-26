@@ -41,12 +41,12 @@ const teamHome = () => {
 }
 
 // A loader that hands out a fake MCP client and records each mount.
-function setup({ fail = false, github = { api: 'https://gh.test' } } = {}) {
+function setup({ fail = false, github = { api: 'https://gh.test' }, McpClientHost } = {}) {
   const home = teamHome()
   const mounts = []
   const plugin = { name: 'mcp-client', apply() {} }
   const loader = {
-    import: async name => { assert.equal(name, '@deepseek-ai/dsh-mcp-client'); return { default: plugin } },
+    import: async name => { assert.equal(name, '@deepseek-ai/dsh-mcp-client'); return { default: plugin, McpClientHost } },
     unwrapExports: exports => exports.default,
   }
   const ctx = fakeContext({ services: { loader } })
@@ -55,7 +55,7 @@ function setup({ fail = false, github = { api: 'https://gh.test' } } = {}) {
     const mount = { config, disposed: false }
     mounts.push(mount)
     return {
-      await: async () => { if (fail) throw new Error(`refused ${config.headers.Authorization}`) },
+      await: async () => { if (typeof fail === 'function' ? fail() : fail) throw new Error(`refused ${config.headers.Authorization}`) },
       dispose: () => { mount.disposed = true },
     }
   }
@@ -195,6 +195,72 @@ test('a failed MCP connection shows the error without the token, and Try again m
   assert.match(github.error, /refused/)
   await call(ctx, 'connector-retry', { id: 'github' })
   assert.equal(mounts.length, 2)
+})
+
+test('a legacy host remounts a transient startup failure automatically', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => answer(200, { login: 'octo' }))
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let fail = true
+  const { ctx, home, mounts, rt } = setup({ fail: () => fail })
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true }) })
+
+  const initial = await call(ctx, 'connector-connect', { id: 'github', token: fresh() })
+  assert.equal(initial.value.connectors.find(row => row.id === 'github').state, 'error')
+  fail = false
+  t.mock.timers.tick(1000)
+  const view = await rt.connectorEndpoint('connector-add', { name: 'Local MCP', command: 'local-mcp' })
+  assert.equal(view.connectors.find(row => row.id === 'github').state, 'ready')
+  const githubMounts = mounts.filter(mount => mount.config.serverName === 'github')
+  assert.equal(githubMounts.length, 2)
+  assert.equal(githubMounts[0].disposed, true)
+})
+
+test('a native host reports live status and recovers the failed mount without restarting peers', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => answer(200, { login: 'octo' }))
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const mounted = []
+  class McpClientHost {
+    validate(config) { return config }
+    mount(config) {
+      assert.equal(config.failOnStartupError, false)
+      let status = { state: 'connected', toolCount: 12 }
+      let observer
+      const record = {
+        id: config.serverName, disposed: false,
+        update(next) { status = next; observer?.(next) },
+      }
+      mounted.push(record)
+      return {
+        ready: Promise.resolve({ current: () => status, onChange(listener) { observer = listener; return () => { observer = undefined } } }),
+        dispose: async () => { record.disposed = true; return { closeConfirmed: true } },
+      }
+    }
+  }
+  const { ctx, home, rt } = setup({ McpClientHost })
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true }) })
+  await call(ctx, 'connector-connect', { id: 'github', token: fresh() })
+  await call(ctx, 'connector-connect', { id: 'notion', token: fresh() })
+  const [github, notion] = mounted
+  const row = id => rt.connectorsView().connectors.find(entry => entry.id === id)
+  assert.equal(row('github').tools, 12)
+  github.update({ state: 'reconnecting', lastError: 'temporary upstream error' })
+  assert.equal(row('github').state, 'connecting')
+  assert.equal(row('github').tools, 0)
+  assert.equal(row('notion').state, 'ready')
+  github.update({ state: 'connected', toolCount: 7 })
+  assert.equal(row('github').state, 'ready')
+  assert.equal(row('github').tools, 7)
+  github.update({ state: 'failed', reason: 'gave-up', lastError: 'retry budget exhausted' })
+  assert.equal(row('github').state, 'error')
+  t.mock.timers.tick(1000)
+  await rt.connectorEndpoint('connector-add', { name: 'Local MCP', command: 'local-mcp' })
+  assert.equal(row('github').state, 'ready')
+  assert.equal(github.disposed, true)
+  assert.equal(notion.disposed, false)
+  await call(ctx, 'connector-retry', { id: 'github' })
+  assert.equal(mounted.filter(mount => mount.id === 'github').length, 3)
+  assert.equal(mounted.filter(mount => mount.id === 'notion').length, 1)
+  assert.equal(notion.disposed, false)
 })
 
 test('deleting GITHUB_TOKEN on the Secrets page unmounts GitHub', async (t) => {

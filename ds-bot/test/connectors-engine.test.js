@@ -332,7 +332,9 @@ test('refresh is single-flight, rotates the refresh token, and invalid_grant mea
   const rt = createRuntime(ctx, { home, github: false })
   t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true }) })
   await rt.load(); await rt.loadSecrets()
+  await rt.secretEndpoint('secret-set', { name: 'CONNECTOR_NOTION_TOKEN', value: 'AT-0', scope: [] })
   await rt.secretEndpoint('secret-set', { name: 'CONNECTOR_NOTION_REFRESH', value: 'RT-1', scope: [] })
+  const rejected = rt.connectorsInternals.upstreamOf('notion')
   let grants = 0
   const request = async (url) => {
     url = String(url?.url ?? url)
@@ -343,17 +345,26 @@ test('refresh is single-flight, rotates the refresh token, and invalid_grant mea
   const real = globalThis.fetch
   globalThis.fetch = request
   t.after(() => { globalThis.fetch = real })
-  const [a, b] = await Promise.all([rt.connectorsInternals.refreshConnector('notion'), rt.connectorsInternals.refreshConnector('notion')])
+  const [a, b] = await Promise.all([rt.connectorsInternals.refreshConnector('notion', rejected), rt.connectorsInternals.refreshConnector('notion', rejected)])
   assert.equal(a, true, JSON.stringify(rt.connectorsInternals.statuses.get('notion')))
   assert.equal(b, true)
   assert.equal(grants, 1)
+  assert.equal(await rt.connectorsInternals.refreshConnector('notion', rejected), true)
+  assert.equal(grants, 1, 'a late 401 for the old access token only retries the request')
   assert.equal(rt.secretValue('CONNECTOR_NOTION_REFRESH'), 'RT-2')
   let logs = await rt.diagnostics.entries()
   assert.equal(logs.filter(row => /connector notion token refresh succeeded.*dcr/.test(row.text)).length, 1)
   // invalid_grant on the next refresh: needs-sign-in, old secrets kept.
-  globalThis.fetch = async (url, init) => String(url?.url ?? url) === 'https://as.test/token' ? json({ error: 'invalid_grant' }, 400) : request(url, init)
+  let rejectedRefreshes = 0
+  globalThis.fetch = async (url, init) => {
+    if (String(url?.url ?? url) !== 'https://as.test/token') return request(url, init)
+    rejectedRefreshes++
+    return json({ error: 'invalid_grant' }, 400)
+  }
   assert.equal(await rt.connectorsInternals.refreshConnector('notion'), false)
   assert.equal(rt.connectorsInternals.statuses.get('notion').state, 'needs-sign-in', JSON.stringify(rt.connectorsInternals.statuses.get('notion')))
+  assert.equal(await rt.connectorsInternals.refreshConnector('notion'), false)
+  assert.equal(rejectedRefreshes, 1, 'a rejected grant is not repeatedly presented')
   assert.equal(rt.secretValue('CONNECTOR_NOTION_REFRESH'), 'RT-2')
   logs = await rt.diagnostics.entries()
   assert.ok(logs.some(row => /connector notion token refresh failed.*dcr/.test(row.text)))

@@ -12,9 +12,11 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 let undici
 const loadUndici = () => undici ??= import('undici')
 
-const FORWARD_HEADERS = ['mcp-session-id', 'mcp-protocol-version', 'last-event-id', 'accept', 'content-type']
+const FORWARD_HEADERS = ['mcp-session-id', 'mcp-protocol-version', 'mcp-method', 'mcp-name', 'last-event-id', 'accept', 'content-type']
 const RETURN_HEADERS = ['content-type', 'mcp-session-id', 'mcp-protocol-version']
 const RETRYABLE = new Set(['GET', 'POST', 'DELETE'])
+const mirroredNameMatches = (header, name) => typeof name === 'string' &&
+  (header === name || header === `=?base64?${Buffer.from(name).toString('base64')}?=`)
 
 const nonceMatches = (header, nonce) => {
   const given = /^Bearer\s+(.+)$/i.exec(String(header ?? ''))?.[1] ?? ''
@@ -44,10 +46,12 @@ const readAll = stream => new Promise((resolve, reject) => {
   stream.on('error', reject)
 })
 
-export function createGateway({ credential, readOnly, onUnauthorized, log = () => {} }) {
+export function createGateway({ credential, readOnly, onUnauthorized, needsSignIn = () => true, log = () => {} }) {
   const nonce = randomBytes(24).toString('base64url')
   let server = null
   let port = 0
+  let listening = null
+  let closing = null
   // Tool annotations seen in tools/list answers, per connector, for read-only checks.
   const annotations = new Map()
 
@@ -73,11 +77,15 @@ export function createGateway({ credential, readOnly, onUnauthorized, log = () =
     error: { code: -32600, message: `The ${id} connector is read-only: this tool can change things, so it is off. Turn off the read-only switch in Settings → Connectors to use it.` },
   })
 
-  // A 401 that survives the refresh: answer the JSON-RPC request with a reason
-  // the Bot can act on, instead of an empty HTTP error.
-  const signInAgain = (id, body, upstream, res) => {
-    let rpc
-    try { rpc = JSON.parse(body?.toString('utf8') ?? '') } catch { return false }
+  // Mark a transient refresh outage as retryable. For a rejected credential,
+  // answer the JSON-RPC request with the action the Bot can ask the user to take.
+  const replyToUnauthorized = (id, rpc, upstream, res) => {
+    if (needsSignIn(id) === false) {
+      upstream.resume()
+      res.writeHead(503, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Connector authorization refresh is temporarily unavailable' }))
+      return true
+    }
     if (rpc === null || typeof rpc !== 'object' || Array.isArray(rpc) || rpc.id === undefined) return false
     upstream.resume()
     res.writeHead(200, { 'content-type': 'application/json' })
@@ -106,6 +114,11 @@ export function createGateway({ credential, readOnly, onUnauthorized, log = () =
     for (const [key, value] of suffix.searchParams) target.searchParams.append(key, value)
     const outgoing = { ...entry.headers }
     for (const name of FORWARD_HEADERS) if (headers[name] !== undefined) outgoing[name] = headers[name]
+    if (method === 'POST' && headers['mcp-method'] === 'tools/call') {
+      for (const [name, value] of Object.entries(headers)) {
+        if (name.startsWith('mcp-param-')) outgoing[name] = value
+      }
+    }
     // An address that carries credentials becomes Basic auth, unless an Authorization header is
     // already set, and is cleaned of them so a failure never repeats them in the log.
     if (target.username !== '' || target.password !== '') {
@@ -127,6 +140,22 @@ export function createGateway({ credential, readOnly, onUnauthorized, log = () =
     return upstream
   }
 
+  async function sendWithRefresh(id, entry, req, path, body, signal) {
+    const send = current => sendUpstream(id, current, req.method, path, req.headers, body, signal)
+    const upstream = await send(entry)
+    if (upstream.statusCode !== 401 || signal.aborted) return upstream
+    try {
+      if (await onUnauthorized(id, entry) !== true) return upstream
+    } catch (error) {
+      upstream.destroy()
+      throw error
+    }
+    const refreshed = credential(id)
+    if (refreshed === undefined) return upstream
+    upstream.resume()
+    return send(refreshed)
+  }
+
   async function handle(id, req, res) {
     const entry = credential(id)
     if (entry === undefined) {
@@ -146,10 +175,21 @@ export function createGateway({ credential, readOnly, onUnauthorized, log = () =
     const path = suffix === '' ? '/' : suffix
     const limited = readOnly(id) === true
     const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : await readAll(req)
+    let rpc
+    if (req.method === 'POST' && body !== undefined) {
+      try { rpc = JSON.parse(body.toString('utf8')) } catch { /* upstream validates JSON-RPC */ }
+    }
+    // Keep read-only decisions tied to the same method and tool name the server receives.
+    const wireMethod = req.headers['mcp-method']
+    const wireName = req.headers['mcp-name']
+    if (limited && ((wireMethod !== undefined && wireMethod !== rpc?.method) ||
+      (rpc?.method === 'tools/call' && wireName !== undefined && !mirroredNameMatches(wireName, rpc.params?.name)))) {
+      res.writeHead(400, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: 'MCP headers do not match the read-only request' }))
+      return
+    }
     // Read-only: a write tools/call never reaches the server.
-    if (limited && req.method === 'POST' && body !== undefined) {
-      let rpc
-      try { rpc = JSON.parse(body.toString('utf8')) } catch { rpc = null }
+    if (limited && req.method === 'POST') {
       if (Array.isArray(rpc)) {
         // A batch could hide a write call, so read-only refuses them outright.
         res.writeHead(200, { 'content-type': 'application/json' })
@@ -162,15 +202,8 @@ export function createGateway({ credential, readOnly, onUnauthorized, log = () =
         return
       }
       if (rpc?.method === 'tools/list') {
-        let upstream = await sendUpstream(id, entry, req.method, path, req.headers, body, abort.signal)
-        if (upstream.statusCode === 401) {
-          const retried = await onUnauthorized(id)
-          if (retried === true) {
-            upstream.resume()
-            upstream = await sendUpstream(id, credential(id) ?? entry, req.method, path, req.headers, body, abort.signal)
-          }
-        }
-        if (upstream.statusCode === 401 && signInAgain(id, body, upstream, res)) return
+        const upstream = await sendWithRefresh(id, entry, req, path, body, abort.signal)
+        if (upstream.statusCode === 401 && replyToUnauthorized(id, rpc, upstream, res)) return
         const raw = await readAll(upstream)
         const isSse = String(upstream.headers['content-type'] ?? '').includes('text/event-stream')
         const payload = isSse ? sseMessage(raw.toString('utf8')) : raw.toString('utf8')
@@ -198,15 +231,7 @@ export function createGateway({ credential, readOnly, onUnauthorized, log = () =
     }
     let upstream
     try {
-      upstream = await sendUpstream(id, entry, req.method, path, req.headers, body, abort.signal)
-      // One refresh + retry when the answer is still unsent.
-      if (upstream.statusCode === 401) {
-        const retried = await onUnauthorized(id)
-        if (retried === true) {
-          upstream.resume()
-          upstream = await sendUpstream(id, credential(id) ?? entry, req.method, path, req.headers, body, abort.signal)
-        }
-      }
+      upstream = await sendWithRefresh(id, entry, req, path, body, abort.signal)
       if (upstream.errored) throw upstream.errored
     } catch (error) {
       if (!abort.signal.aborted) log('ds-bot: connector gateway %s: %s', id, error?.message ?? error)
@@ -214,9 +239,9 @@ export function createGateway({ credential, readOnly, onUnauthorized, log = () =
       res.end(JSON.stringify({ error: 'connector upstream failed' }))
       return
     }
-    if (upstream.statusCode === 401 && req.method === 'POST' && signInAgain(id, body, upstream, res)) return
+    if (upstream.statusCode === 401 && replyToUnauthorized(id, rpc, upstream, res)) return
     // tools/list without the read-only filter still feeds the annotation cache.
-    const isList = req.method === 'POST' && body !== undefined && (() => { try { return JSON.parse(body.toString('utf8'))?.method === 'tools/list' } catch { return false } })()
+    const isList = rpc?.method === 'tools/list'
     const heads = {}
     for (const name of RETURN_HEADERS) if (upstream.headers[name] !== undefined) heads[name] = upstream.headers[name]
     if (!isList || limited) {
@@ -248,9 +273,10 @@ export function createGateway({ credential, readOnly, onUnauthorized, log = () =
     urlFor(id) { return `http://127.0.0.1:${port}/c/${id}` },
     headers() { return { Authorization: `Bearer ${nonce}` } },
     forget(id) { annotations.delete(id) },
-    async listen() {
-      if (server !== null) return
-      server = createServer((req, res) => {
+    listen() {
+      if (closing !== null) return Promise.reject(new Error('Connector gateway is closed'))
+      if (listening !== null) return listening
+      const current = createServer((req, res) => {
         req.on('error', () => res.destroy())
         res.on('error', () => req.destroy())
         const found = /^\/c\/([A-Za-z0-9_-]{1,32})/.exec(req.url ?? '')
@@ -265,18 +291,36 @@ export function createGateway({ credential, readOnly, onUnauthorized, log = () =
           else { res.writeHead(502); res.end() }
         })
       })
-      server.on('error', error => log('ds-bot: connector gateway server failed: %s', error?.code ?? 'error'))
-      await new Promise((resolve, reject) => {
-        server.once('error', reject)
-        server.listen(0, '127.0.0.1', resolve)
+      server = current
+      current.on('error', error => log('ds-bot: connector gateway server failed: %s', error?.code ?? 'error'))
+      listening = new Promise((resolve, reject) => {
+        current.once('error', reject)
+        current.listen(0, '127.0.0.1', () => {
+          current.off('error', reject)
+          resolve()
+        })
+      }).then(() => {
+        port = current.address().port
+      }, (error) => {
+        server = null
+        listening = null
+        throw error
       })
-      port = server.address().port
+      return listening
     },
-    async close() {
-      const closing = server
-      server = null
-      if (closing !== null) await new Promise(resolve => closing.close(resolve))
-      annotations.clear()
+    close() {
+      closing ??= (async () => {
+        await listening?.catch(() => {})
+        const current = server
+        server = null
+        port = 0
+        if (current !== null) await new Promise((resolve) => {
+          current.close(resolve)
+          current.closeAllConnections()
+        })
+        annotations.clear()
+      })()
+      return closing
     },
   }
 }

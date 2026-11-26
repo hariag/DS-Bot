@@ -19,6 +19,9 @@ import { output } from '../tools.js'
 export const GITHUB_SECRET = 'GITHUB_TOKEN'
 const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client'
 const CHECK_TIMEOUT_MS = 15_000
+const MCP_STARTUP_TIMEOUT_MS = 20_000
+const REMOUNT_DELAY_MS = 1_000
+const MAX_REMOUNT_DELAY_MS = 60_000
 const SIGN_IN_TIMEOUT_MS = 10 * 60_000
 const SECRET_REF = /\$DSH_SECRET_([A-Z][A-Z0-9_]*)/g
 const MAX_REQUESTS = 20
@@ -54,7 +57,7 @@ export function install(rt) {
   const pendings = new Map()
   const refreshes = new Map()
   const gateways = { gw: null }
-  const pluginP = { p: null }
+  let mcpClient
 
   // An added remote server that signs in with OAuth takes the same shape as a
   // catalog OAuth entry, so credentials, mounts, refresh, and rows need no
@@ -150,24 +153,38 @@ export function install(rt) {
   }
 
   const gateway = async () => {
-    gateways.gw ??= createGateway({
+    if (stopped) throw new Error('Connector gateway is closed')
+    const gw = gateways.gw ??= createGateway({
       credential: upstreamOf,
       readOnly: id => state.connectors?.[id]?.readOnly === true,
-      onUnauthorized: id => refreshConnector(id),
+      onUnauthorized: (id, rejected) => refreshConnector(id, rejected),
+      needsSignIn: id => statuses.get(id)?.state !== 'error',
       log: (...args) => rt.warn(...args),
     })
-    await gateways.gw.listen()
-    return gateways.gw
+    await gw.listen()
+    if (stopped || gateways.gw !== gw) throw new Error('Connector gateway is closed')
+    return gw
   }
 
-  const loadMcpPlugin = async () => {
-    pluginP.p ??= (async () => {
+  const loadMcpClient = () => {
+    mcpClient ??= (async () => {
       const loader = ctx.get?.('loader')
       if (typeof loader?.import !== 'function') throw new Error('This DSH cannot load connectors')
       const mod = await loader.import(MCP_CLIENT)
-      return loader.unwrapExports?.(mod) ?? mod?.default ?? mod
-    })()
-    return pluginP.p
+      const plugin = loader.unwrapExports?.(mod) ?? mod?.default ?? mod
+      const Host = mod?.McpClientHost ?? plugin?.McpClientHost
+      if (stopped) return undefined
+      if (typeof Host === 'function') {
+        const host = new Host(ctx.isolate?.('mcpClientHost') ?? ctx)
+        return config => host.mount(host.validate(config, ['ds-bot', 'connectors', config.serverName]))
+      }
+      // Older DSH versions report only startup readiness through the plugin fiber.
+      return config => {
+        const fiber = ctx.plugin(plugin, { ...config, failOnStartupError: true })
+        return { ready: fiber.await(), dispose: () => fiber.dispose() }
+      }
+    })().catch(error => { mcpClient = undefined; throw error })
+    return mcpClient
   }
 
   const resolveRefs = (value) => String(value).replace(SECRET_REF, (_m, name) => rt.secretValue(name) ?? '')
@@ -185,55 +202,91 @@ export function install(rt) {
 
   // A mount fingerprint covers the config a change must re-mount for; access and
   // refresh tokens live in the gateway, so changing one never re-mounts.
-  async function fingerprint(id) {
-    const config = await configFor(id)
-    return JSON.stringify(config)
-  }
-
-  const unmount = async (id) => {
+  async function unmount(id) {
     const mount = mounts.get(id)
     mounts.delete(id)
-    if (mount?.fiber !== undefined) await Promise.resolve().then(() => mount.fiber.dispose()).catch(() => {})
-  }
-
-  async function mountOne(id) {
-    const fp = await fingerprint(id)
-    if (mounts.get(id)?.fp === fp) return
-    await unmount(id)
-    statuses.set(id, { state: 'connecting' })
+    if (mount === undefined) return undefined
+    clearTimeout(mount.retry)
+    mount.unsubscribe?.()
     try {
-      const plugin = await loadMcpPlugin()
-      if (stopped) return
-      const config = { ...(await configFor(id)), failOnStartupError: true }
-      const fiber = ctx.plugin(plugin, config)
-      const mount = { fp, fiber }
-      mounts.set(id, mount)
-      await fiber.await()
-      if (stopped || mounts.get(id) !== mount) return
-      statuses.delete(id)
-      settleRequests(id)
+      return await mount.instance?.dispose()
     } catch (error) {
-      await unmount(id)
-      mounts.set(id, { fp })
-      statuses.set(id, { state: 'error', error: reason(error) })
-      rt.warn('ds-bot: connector %s failed: %s', id, statuses.get(id).error)
+      return { closeConfirmed: false, cleanupError: reason(error) }
     }
   }
 
-  async function reconcile() {
-    for (const id of mounts.keys()) {
-      if (!hasCredential(id)) await unmount(id)
+  function retryMount(id, mount) {
+    if (stopped || mount.retry !== undefined || statuses.get(id)?.state === 'needs-sign-in') return
+    const delay = Math.min(MAX_REMOUNT_DELAY_MS, REMOUNT_DELAY_MS * 2 ** mount.failures)
+    mount.failures++
+    mount.retry = setTimeout(() => {
+      if (mounts.get(id) === mount && statuses.get(id)?.state !== 'needs-sign-in') void sync(id)
+    }, delay)
+    mount.retry.unref?.()
+  }
+
+  function observeMount(id, mount, status) {
+    if (stopped || mounts.get(id) !== mount) return
+    if (status.state === 'connected') {
+      mount.state = { state: 'ready', tools: status.toolCount }
+      mount.failures = 0
+      if (statuses.get(id)?.transientRefreshFailure) statuses.delete(id)
+      if (!statuses.has(id)) void settleRequests(id).catch(error => rt.warn('ds-bot: connector %s request settlement: %s', id, reason(error)))
+      return
     }
-    for (const entry of entries()) {
-      if (entry.id === 'mail' || !hasCredential(entry.id)) continue
-      await mountOne(entry.id)
+    const error = status.lastError === undefined ? undefined : reason(status.lastError)
+    if (status.state === 'waiting-authorization') mount.state = { state: 'needs-sign-in', error }
+    else if (status.state === 'connecting' || status.state === 'reconnecting') mount.state = { state: 'connecting', error }
+    else mount.state = { state: 'error', error }
+    if (status.state === 'failed' && status.reason === 'gave-up') retryMount(id, mount)
+  }
+
+  async function mountOne(id, force) {
+    const previous = mounts.get(id)
+    if (previous?.incompleteCleanup) return
+    const mount = { state: { state: 'connecting' }, failures: previous?.failures ?? 0 }
+    try {
+      const config = await configFor(id)
+      mount.fp = JSON.stringify(config)
+      if (stopped || (!force && previous?.fp === mount.fp)) return
+      const closure = await unmount(id)
+      if (stopped) return
+      mounts.set(id, mount)
+      if (closure !== undefined && (!closure.closeConfirmed || closure.cleanupError !== undefined)) {
+        mount.incompleteCleanup = true
+        mount.state = { state: 'error', error: closure.cleanupError ?? 'MCP connection cleanup is incomplete' }
+        return
+      }
+      const mountClient = await loadMcpClient()
+      if (stopped || mounts.get(id) !== mount) return
+      mount.instance = mountClient({ ...config, startupTimeoutMs: MCP_STARTUP_TIMEOUT_MS, failOnStartupError: false })
+      const status = await mount.instance.ready
+      if (stopped || mounts.get(id) !== mount) return
+      if (status !== undefined) mount.unsubscribe = status.onChange(next => observeMount(id, mount, next))
+      observeMount(id, mount, status?.current() ?? { state: 'connected' })
+    } catch (error) {
+      if (stopped) return
+      if (mounts.get(id) === previous) {
+        if (previous !== undefined) return
+        mounts.set(id, mount)
+      }
+      if (mounts.get(id) !== mount) return
+      mount.state = { state: 'error', error: reason(error) }
+      rt.warn('ds-bot: connector %s failed: %s', id, mount.state.error)
+      retryMount(id, mount)
     }
   }
-  const sync = (force = false) => {
-    queue = queue.then(async () => {
-      if (force) { for (const id of mounts.keys()) await unmount(id) }
-      await reconcile()
-    }).catch(error => rt.warn('ds-bot: connectors: %s', reason(error)))
+
+  async function reconcile(remount) {
+    const enabled = entries().filter(entry => entry.id !== 'mail' && hasCredential(entry.id))
+    const wanted = new Set(enabled.map(entry => entry.id))
+    await Promise.all([
+      ...[...mounts.keys()].filter(id => !wanted.has(id)).map(id => unmount(id)),
+      ...enabled.map(entry => mountOne(entry.id, remount === entry.id)),
+    ])
+  }
+  const sync = (remount) => {
+    queue = queue.then(() => stopped ? undefined : reconcile(remount)).catch(error => rt.warn('ds-bot: connectors: %s', reason(error)))
     return queue
   }
 
@@ -260,10 +313,10 @@ export function install(rt) {
   // --- OAuth sign-in ----------------------------------------------------
 
   const finishTokens = async (id, entry, tokens) => {
-    await writeSecret(tokenSecretOf(id), tokens.access_token, `${entry.name} connector`)
     if (typeof tokens.refresh_token === 'string' && tokens.refresh_token !== '') {
-      await writeSecret(refreshSecretOf(id), tokens.refresh_token, `${entry.name} connector`).catch(() => {})
+      await writeSecret(refreshSecretOf(id), tokens.refresh_token, `${entry.name} connector`)
     }
+    await writeSecret(tokenSecretOf(id), tokens.access_token, `${entry.name} connector`)
     const account = await readAccount(id, entry, tokens.access_token).catch(() => undefined)
     await saveState(id, { account, connectedAt: Date.now(), tokenExpiresAt: Number.isFinite(tokens.expires_in) ? Date.now() + tokens.expires_in * 1000 : undefined })
   }
@@ -386,7 +439,7 @@ export function install(rt) {
       const tokens = await oauth.exchange(pending.discovery, pending.clientInformation, { code: result.code, codeVerifier: pending.codeVerifier, redirectUri: pending.redirectUri, iss: result.iss ?? undefined })
       await endPending(id)
       await finishTokens(id, entry, tokens)
-      await sync(true)
+      await sync(id)
     } catch (error) {
       await endPending(id, { state: 'error', error: reason(error) })
     }
@@ -406,7 +459,7 @@ export function install(rt) {
           await writeSecret(GITHUB_SECRET, step.token, 'GitHub connector')
           const account = await readAccount(id, entry, step.token).catch(() => undefined)
           await saveState(id, { account, connectedAt: Date.now() })
-          await sync(true)
+          await sync(id)
           return
         }
         if (step.state === 'error') { await endPending(id, { state: 'error', error: reason(step.error) }); return }
@@ -452,7 +505,14 @@ export function install(rt) {
   }
 
   // One refresh per connector at a time; read-only windows never write.
-  function refreshConnector(id) {
+  function refreshConnector(id, rejected) {
+    const authorization = upstreamOf(id)?.headers.Authorization
+    if (stopped || entryFor(id)?.auth.kind !== 'oauth') return false
+    if (rejected !== undefined) {
+      if (authorization === undefined) return false
+      if (rejected.headers.Authorization !== authorization) return true
+    }
+    if (statuses.get(id)?.state === 'needs-sign-in') return false
     if (refreshes.has(id)) return refreshes.get(id)
     const job = (async () => {
       const saved = state.connectors?.[id]
@@ -488,12 +548,16 @@ export function install(rt) {
         const secret = rt.secretValue(clientSecretOf(id))
         const client = { client_id: clientId, ...(secret !== undefined ? { client_secret: secret } : {}) }
         const tokens = await oauth.refreshTokens(discovery, client, refresh, { scope: saved.oauth.scope })
+        if (stopped || upstreamOf(id)?.headers.Authorization !== authorization) return false
         const purpose = `${entryFor(id)?.name ?? id} connector`
-        await writeSecret(tokenSecretOf(id), tokens.access_token, purpose)
         if (typeof tokens.refresh_token === 'string' && tokens.refresh_token !== '' && tokens.refresh_token !== refresh) {
-          // Rotation: the old refresh token stays if this write fails.
-          await writeSecret(refreshSecretOf(id), tokens.refresh_token, purpose).catch(() => {})
+          try {
+            await writeSecret(refreshSecretOf(id), tokens.refresh_token, purpose)
+          } catch {
+            throw Object.assign(new Error('Could not save the rotated refresh token'), { code: 'REFRESH_TOKEN_PERSISTENCE' })
+          }
         }
+        await writeSecret(tokenSecretOf(id), tokens.access_token, purpose)
         await saveState(id, {
           client: { ...saved.client, via: clientVia, clientId },
           tokenExpiresAt: Number.isFinite(tokens.expires_in) ? Date.now() + tokens.expires_in * 1000 : undefined,
@@ -502,9 +566,11 @@ export function install(rt) {
         rt.warn('ds-bot: connector %s token refresh succeeded (client: %s)', id, path)
         return true
       } catch (error) {
-        if (oauth.invalidGrant(error)) statuses.set(id, { state: 'needs-sign-in', error: 'Sign in again' })
-        else statuses.set(id, { state: 'error', error: reason(error) })
-        rt.warn('ds-bot: connector %s token refresh failed (client: %s; %s)', id, path, oauth.invalidGrant(error) ? 'invalid_grant' : 'refresh error')
+        if (stopped || upstreamOf(id)?.headers.Authorization !== authorization) return false
+        const invalid = oauth.invalidGrant(error)
+        if (invalid) statuses.set(id, { state: 'needs-sign-in', error: 'Sign in again' })
+        else statuses.set(id, { state: 'error', error: reason(error), transientRefreshFailure: true })
+        rt.warn('ds-bot: connector %s token refresh failed (client: %s; %s)', id, path, invalid ? 'invalid_grant' : error?.code === 'REFRESH_TOKEN_PERSISTENCE' ? error.message : 'refresh error')
         return false
       }
     })().finally(() => refreshes.delete(id))
@@ -550,9 +616,10 @@ export function install(rt) {
       const rows = entries().filter(entry => entry.id !== 'mail' || mailHasAccounts())
       if (rows.length === 0) return 'No connectors are set up.'
       const lines = rows.map((entry) => {
-        const connected = entry.id === 'mail' ? mailHasAccounts() : (statuses.get(entry.id)?.state === undefined && mounts.has(entry.id)) || hasCredential(entry.id)
+        const status = entry.id === 'mail' ? 'ready' : rowFor(entry).state
+        const connection = status === 'ready' ? 'connected' : status === 'off' ? 'not connected' : status
         const usable = !offFor(entry.id).includes(bot.id)
-        return `- ${entry.name} (${entry.id}) — ${entry.about} — ${connected ? 'connected' : 'not connected'}${usable ? '' : '; turned off for you'}`
+        return `- ${entry.name} (${entry.id}) — ${entry.about} — ${connection}${usable ? '' : '; turned off for you'}`
       })
       return ['Connectors:', ...lines].join('\n')
     },
@@ -574,10 +641,11 @@ export function install(rt) {
       const agentId = exec.agent?.id
       const bot = rt.botOf(rt.selfOf(agentId))
       if (bot === undefined) return 'Only Bots on the team can use request_connector.'
-      const connected = id === 'mail' ? mailHasAccounts() : hasCredential(id)
-      const signIn = statuses.get(id)?.state === 'needs-sign-in'
-      if (connected && !signIn && !offFor(id).includes(bot.id)) return `${entry.name} is already connected; use its tools (mcp__${id}__*).`
       if (offFor(id).includes(bot.id)) return `${entry.name} is turned off for you. The user can turn it on in your details.`
+      const connected = id === 'mail' ? mailHasAccounts() : hasCredential(id)
+      const status = id === 'mail' ? (connected ? 'ready' : 'off') : rowFor(entry).state
+      if (status === 'ready') return `${entry.name} is already connected; use its tools (mcp__${id}__*).`
+      if (connected && status !== 'needs-sign-in') return `${entry.name} is ${status === 'connecting' ? 'connecting' : 'temporarily unavailable'}. Check its status in Settings → Connectors.`
       if (rt.taskOwners?.has(agentId)) return 'Background tasks cannot show connector cards. Finish or report back to your own chat so it can ask the user.'
       if (rt.groupOwners.has(agentId)) return 'Connector cards only work in your own chat. Tell the group you will ask the user in your own chat, and call request_connector there.'
       if (!rt.chatOwners.has(agentId)) return 'Connector cards only work in your current own chat.'
@@ -683,10 +751,11 @@ export function install(rt) {
 
   const rowFor = (entry) => {
     const saved = state.connectors?.[entry.id]
-    const status = statuses.get(entry.id)
+    const mount = mounts.get(entry.id)
+    const status = statuses.get(entry.id) ?? mount?.state
     const connected = hasCredential(entry.id)
     const remote = entry.custom === undefined || entry.custom.url !== undefined
-    const state_ = status?.state ?? (connected && mounts.has(entry.id) ? 'ready' : connected ? 'connecting' : 'off')
+    const state_ = status?.state ?? (connected ? 'connecting' : 'off')
     return {
       id: entry.id,
       name: entry.name,
@@ -701,7 +770,7 @@ export function install(rt) {
       // entry with no sign-in keeps the switch off.
       ...(remote && connected && (entry.auth.kind === 'oauth' || entry.auth.kind === 'key' || (entry.custom !== undefined && entry.auth.kind === 'custom')) ? { readOnly: saved?.readOnly === true } : {}),
       offFor: saved?.offFor ?? [],
-      tools: gateways.gw?.toolCount?.(entry.id) ?? 0,
+      tools: state_ === 'ready' ? mount?.state.tools ?? gateways.gw?.toolCount?.(entry.id) ?? 0 : 0,
       ...(entry.custom !== undefined ? { custom: true } : {}),
       ...(pendings.has(entry.id) ? { pending: pendings.get(entry.id).row } : {}),
       // The client form shows this address: the service's app must answer on it.
@@ -735,6 +804,7 @@ export function install(rt) {
       }
       const token = typeof body.token === 'string' ? body.token.trim() : ''
       if (token !== '') {
+        const retry = statuses.get(entry.id)?.state === 'needs-sign-in' || mounts.get(entry.id)?.state?.state === 'error'
         const remote = entry.remote?.url
         if (remote !== undefined && insecure(remote)) throw new Error('Connector addresses must start with https://')
         if (entry.id === 'github' && options?.api !== undefined && insecure(options.api)) throw new Error('GitHub addresses must start with https://')
@@ -744,7 +814,8 @@ export function install(rt) {
         else if (entry.whoami !== undefined) account = await readAccount(entry.id, entry, token)
         await writeSecret(tokenSecretOf(entry.id), token, `${entry.name} connector`)
         await saveState(entry.id, { account, ...(entry.id === 'github' ? { login: account } : {}), connectedAt: Date.now() })
-        await sync()
+        statuses.delete(entry.id)
+        await sync(retry ? entry.id : undefined)
         return connectorsView()
       }
       if (entry.id === 'github' && (entry.auth.client?.id ?? '') === '') throw new Error('Paste a token first')
@@ -767,7 +838,7 @@ export function install(rt) {
       const entry = known(body.id)
       statuses.delete(entry.id)
       await rt.loadSecrets()
-      await sync(true)
+      await sync(entry.id)
       return connectorsView()
     },
     async 'connector-cancel'(body) {
@@ -832,7 +903,7 @@ export function install(rt) {
         ? { name, url, headers: body.headers && typeof body.headers === 'object' ? body.headers : {}, ...(oauth ? { oauth: true } : {}) }
         : { name, command, args: Array.isArray(body.args) ? body.args.map(String) : [], env: body.env && typeof body.env === 'object' ? body.env : {} }
       await saveState(id, { custom, connectedAt: Date.now() })
-      await sync(true)
+      await sync()
       return connectorsView()
     },
     async 'connector-remove'(body) {
@@ -872,7 +943,7 @@ export function install(rt) {
         await saveState(id, { custom, connectedAt: Date.now() })
         created.push(id)
       }
-      await sync(true)
+      await sync()
       return { view: connectorsView(), created }
     },
     async 'connector-request-cancel'(body) {
@@ -905,19 +976,19 @@ export function install(rt) {
 
   ctx.effect(() => {
     stopped = false
-    void rt.load().then(() => rt.loadSecrets()).then(() => sync())
-    return () => {
+    void rt.load().then(() => rt.loadSecrets()).then(() => sync()).catch(error => rt.warn('ds-bot: connector startup: %s', reason(error)))
+    return async () => {
       stopped = true
       const released = [...pendings.values()].map(pending => {
         if (pending.timer !== undefined) clearTimeout(pending.timer)
         return closeListener(pending.listener)
       })
       pendings.clear()
-      const closing = [...mounts.values()].map(mount => Promise.resolve().then(() => mount.fiber?.dispose()).catch(() => {}))
-      mounts.clear()
+      const closing = [...mounts.keys()].map(id => unmount(id))
       const gw = gateways.gw
       gateways.gw = null
-      return Promise.all([...released, ...closing, gw?.close(), mailApi.dispose()])
+      await Promise.all([...released, ...closing, mailApi.dispose()])
+      await gw?.close()
     }
   }, 'ds-bot: connectors')
 

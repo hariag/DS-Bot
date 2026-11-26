@@ -1,8 +1,99 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
+import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { test } from 'node:test'
 import { createGateway } from '../src/host/connectors/gateway.js'
+
+test('all gateway callers wait for the same bound port', async (t) => {
+  const gateway = createGateway({ credential: () => undefined })
+  t.after(() => gateway.close())
+  const ports = await Promise.all(Array.from({ length: 12 }, async () => {
+    await gateway.listen()
+    return new URL(gateway.urlFor('linear')).port
+  }))
+  assert.match(ports[0], /^[1-9]\d+$/)
+  assert.deepEqual(new Set(ports), new Set([ports[0]]))
+  const response = await fetch(gateway.urlFor('linear'), { headers: gateway.headers(), signal: AbortSignal.timeout(1000) })
+  assert.equal(response.status, 404)
+  assert.deepEqual(await response.json(), { error: 'connector not connected' })
+})
+
+test('disposing a gateway aborts held streams and cannot publish a stale listener', async (t) => {
+  let upstreamClosed
+  const upstream = createServer((_req, res) => {
+    upstreamClosed = once(res, 'close')
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write('data: {}\n\n')
+  })
+  await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve))
+  t.after(() => upstream.closeAllConnections())
+  t.after(() => upstream.close())
+  const gateway = createGateway({
+    credential: () => ({ url: `http://127.0.0.1:${upstream.address().port}`, headers: {} }),
+    readOnly: () => false,
+    onUnauthorized: async () => false,
+  })
+  await gateway.listen()
+  const url = gateway.urlFor('linear')
+  const response = await fetch(url, { headers: gateway.headers(), signal: AbortSignal.timeout(1500) })
+  assert.equal(response.status, 200)
+  const reader = response.body.getReader()
+  await reader.read()
+  await gateway.close()
+  await upstreamClosed
+  await assert.rejects(reader.read())
+  assert.equal(gateway.port, 0)
+  await assert.rejects(gateway.listen(), /gateway is closed/)
+
+  const starting = createGateway({ credential: () => undefined })
+  await Promise.all([starting.listen(), starting.close()])
+  assert.equal(starting.port, 0)
+  await assert.rejects(starting.listen(), /gateway is closed/)
+})
+
+test('gateway forwards routing headers for modern MCP without bypassing read-only tool checks', async (t) => {
+  const requests = []
+  const upstream = createServer((req, res) => {
+    requests.push(req.headers)
+    req.resume()
+    const discover = req.headers['mcp-method'] === 'server/discover'
+    res.writeHead(discover ? 200 : 400, { 'content-type': 'application/json' })
+    res.end('{}')
+  })
+  await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve))
+  t.after(() => upstream.close())
+  let limited = false
+  const gateway = createGateway({
+    credential: () => ({ url: `http://127.0.0.1:${upstream.address().port}`, headers: { Authorization: 'Bearer remote' } }),
+    readOnly: () => limited,
+    onUnauthorized: async () => false,
+  })
+  await gateway.listen()
+  t.after(() => gateway.close())
+  const call = (method, wireMethod = method) => fetch(gateway.urlFor('service'), {
+    method: 'POST',
+    headers: {
+      ...gateway.headers(), 'content-type': 'application/json', 'mcp-protocol-version': '2026-07-28',
+      'mcp-method': wireMethod, 'mcp-name': 'search', 'mcp-param-project': 'roadmap', 'x-local-key': 'local-only',
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: { name: 'search', arguments: { project: 'roadmap' } } }),
+  })
+  assert.deepEqual(await (await call('server/discover')).json(), {})
+  assert.equal(requests[0]['mcp-method'], 'server/discover')
+  assert.equal(requests[0]['mcp-protocol-version'], '2026-07-28')
+  assert.equal(requests[0]['mcp-param-project'], undefined)
+  assert.equal(requests[0].authorization, 'Bearer remote')
+  assert.equal(requests[0]['x-local-key'], undefined)
+  assert.deepEqual(await (await call('tools/call')).json(), {})
+  assert.equal(requests[1]['mcp-name'], 'search')
+  assert.equal(requests[1]['mcp-param-project'], 'roadmap')
+  limited = true
+  const mismatch = await call('tools/list', 'tools/call')
+  assert.equal(mismatch.status, 400)
+  assert.match((await mismatch.json()).error, /do not match/)
+  assert.equal(requests.length, 2)
+})
 
 for (const refreshing of [false, true]) {
   test(`an upstream stream error cannot crash the engine${refreshing ? ' during refresh' : ''}`, () => {
@@ -41,8 +132,8 @@ for (const refreshing of [false, true]) {
   })
 }
 
-for (const limited of [false, true]) {
-  test(`a 401 that refresh cannot fix answers the call with a sign-in reason${limited ? ' (read-only list)' : ''}`, async (t) => {
+for (const [limited, needsSignIn] of [[false, false], [false, true], [true, false], [true, true]]) {
+  test(`a 401 with ${needsSignIn ? 'rejected authorization' : 'a transient refresh error'} returns actionable status${limited ? ' (read-only list)' : ''}`, async (t) => {
     let hits = 0
     const upstream = createServer((req, res) => {
       hits += 1
@@ -56,6 +147,7 @@ for (const limited of [false, true]) {
       credential: () => ({ url: `http://127.0.0.1:${upstream.address().port}/mcp`, headers: {} }),
       readOnly: () => limited,
       onUnauthorized: async () => { refreshes += 1; return false },
+      needsSignIn: () => needsSignIn,
     })
     await gw.listen()
     t.after(() => gw.close())
@@ -65,10 +157,15 @@ for (const limited of [false, true]) {
       headers: { ...gw.headers(), accept: 'application/json, text/event-stream', 'content-type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 7, method, params: { name: 'notion-search' } }),
     })
-    assert.equal(response.status, 200)
     const answer = await response.json()
-    assert.equal(answer.id, 7)
-    assert.match(answer.error.message, /notion connector needs sign-in again.*request_connector/)
+    if (needsSignIn) {
+      assert.equal(response.status, 200)
+      assert.equal(answer.id, 7)
+      assert.match(answer.error.message, /notion connector needs sign-in again.*request_connector/)
+    } else {
+      assert.equal(response.status, 503)
+      assert.match(answer.error, /temporarily unavailable/)
+    }
     assert.equal(refreshes, 1)
     assert.equal(hits, 1)
   })
