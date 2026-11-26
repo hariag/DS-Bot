@@ -322,6 +322,54 @@ test('a personal Bot task can be created and delivered to its private Session', 
   assert.equal((await rt.boardCall('board-list',{scope})).tasks.find(task=>task.id===created.id).dispatchState,'accepted')
 })
 
+test('the board owner can confirm a consumed review input without entering a verdict', async t => {
+  const { rt, home, deliveries } = fixture(t)
+  const card = await rt.boardCall('board-command', create)
+  const ready = await rt.boardCall('board-command', { scope, taskId:card.id, type:'schedule', expectedRevision:card.revision, operationId:'confirm-delivery-schedule' })
+  await settle(async () => deliveries.length === 1)
+  const tool = rt.teamTools.find(item => item.name === 'board_task')
+  const update = async (action, revision, value) => JSON.parse(await tool.execute({
+    action, task_id:card.id, room_id:scope.id, operation_id:`confirm-delivery-${action}`, expected_revision:revision, ...(value ? { value } : {}),
+  }, { agent:{ id:'chat-one' } })).task
+  const working = await update('start', ready.revision)
+  const reported = await update('report', working.revision, { kind:'personal', evidence:'Implemented the work', environment:'test' })
+  await settle(async () => deliveries.length === 2)
+
+  const db = openTaskStore(join(home, 'board-v1', 'tasks.sqlite'), { assertWriteLock() {} })
+  try { assert.equal(db.holdInterruptedAdmissions(), 1) } finally { db.close() }
+  let revision = 0, changed = true
+  const read = async () => (await rt.boardCall('board-list', { scope })).tasks.find(item => item.id === card.id)
+  const confirm = payload => rt.boardCall('board-command', { scope, taskId:card.id, type:'confirm-delivery', expectedRevision:reported.revision, ...payload })
+  rt.ctx.sessions.get = () => undefined
+  rt.ctx.sessionPersistence = {
+    stat:async sid => ({ header:{ id:sid }, revision:String(revision), sizeBytes:512 }),
+    open:async (sid, access) => {
+      assert.equal(sid, 'chat-two'); assert.equal(access, 'read')
+      return { id:sid, header:{ id:sid }, inheritedEventCount:0, close:async () => {}, read:async (offset, limit) => {
+        assert.equal(offset, 0); assert.ok(limit < 5000)
+        if (changed) revision++
+        return { events:[{ type:'user/message', seq:0, data:deliveries[1].message }] }
+      } }
+    },
+  }
+
+  await assert.rejects(confirm({ scope:{ kind:'personal', id:'user' } }), /task is unavailable/)
+  await assert.rejects(confirm({}), /original Bot input could not be confirmed/)
+  assert.equal((await read()).dispatchState, 'uncertain')
+  changed = false
+  rt.chatOf = id => id === 'two' ? 'chat-two-current' : `chat-${id}`
+  rt.state.bots.two.segments = [{ sessionId:'chat-two' }]
+  rt.pastOwners = new Map([['chat-two', { botId:'one' }]])
+  await assert.rejects(confirm({}), /original Bot input could not be confirmed/)
+  rt.pastOwners.set('chat-two', { botId:'two' })
+  assert.deepEqual(await confirm({}), { taskId:card.id, revision:reported.revision, dispatchState:'accepted' })
+  const confirmed = await read()
+  assert.equal(confirmed.status, 'reported')
+  assert.equal(confirmed.revision, reported.revision)
+  assert.equal(confirmed.dispatchState, 'accepted')
+  assert.equal(deliveries.length, 2)
+})
+
 test('owner moves a personal card with a durable receipt without changing shared workflow', async t => {
   const { rt } = fixture(t), personal={kind:'personal',id:'user'}
   await rt.boardCall('board-command',{scope:personal,operationId:'personal-create',taskId:'mine',type:'create',value:{title:'Mine',owner:'user',reviewer:'one',acceptance:'Check',dependencies:[]}})

@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { lstatSync, openSync, closeSync, readSync, fsyncSync, constants } from 'node:fs'
 import { dirname, isAbsolute } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import { isPrivateDirectory, isPrivateFile } from './private-storage.mjs'
 import { syncDirectorySync } from './directory-sync.mjs'
 import { canConfigureReleaseTeam, invalidReleaseTeam, lifecyclePlan, resolveReleaseTeam } from './release-team.mjs'
@@ -596,45 +597,103 @@ const releaseIsDone = release => {
     return start.operation_id
   }
   const restartReason = 'process restarted; delivery outcome unknown'
-  const interruptedReview = db.prepare(`SELECT a.id AS action_id, i.admission_id, i.message_id, i.payload, i.payload_hash,
+  const recoverySource = `SELECT a.id AS action_id, a.kind, i.admission_id, i.message_id, i.payload, i.payload_hash,
+      i.task_revision AS intent_revision, received.sequence AS receipt_sequence,
       r.operation_id AS hold_operation, r.task_revision AS hold_revision, held.sequence AS hold_sequence,
       json_extract(received.after,'$.receipt') AS receipt
     FROM actions a JOIN admission_intents i ON i.action_id=a.id
     JOIN admission_decisions r ON r.action_id=a.id AND r.admission_id=i.admission_id
+    JOIN admission_decisions latest ON latest.rowid=(SELECT MAX(rowid) FROM admission_decisions WHERE action_id=a.id)
     JOIN history received ON received.operation_id='action:'||a.id||':accepted'
       AND received.task_id=a.task_id AND received.actor='scheduler'
     JOIN history held ON held.operation_id=r.operation_id AND held.task_id=a.task_id AND held.actor='scheduler'
-    WHERE a.task_id=? AND a.revision=? AND i.action_revision=a.revision AND a.kind='review' AND a.actor=?
-      AND i.target_bot_id=a.actor AND i.target_session_id=? AND a.state='uncertain' AND a.receipt=?
-      AND r.task_revision<=? AND r.actor='scheduler' AND r.previous_state='accepted' AND r.outcome='uncertain' AND r.reason=a.receipt
-      AND r.operation_id IN ('recovery-hold:'||a.id||':'||r.task_revision, 'recovery:'||a.id)
+    WHERE a.task_id=? AND a.revision=? AND a.kind=? AND a.actor=? AND i.target_session_id=?
+      AND i.action_revision=a.revision AND i.target_bot_id=a.actor
+      AND r.reason=? AND a.revision<=i.task_revision AND i.task_revision<=r.task_revision AND r.task_revision<=?
+      AND r.actor='scheduler' AND r.previous_state='accepted' AND r.outcome='uncertain'
+      AND r.operation_id IN ('recovery:'||a.id, 'recovery-hold:'||a.id||':'||r.task_revision,
+        'recovery-hold:'||a.id||':'||r.task_revision||':'||
+          (SELECT MAX(older.rowid) FROM admission_decisions older WHERE older.action_id=a.id AND older.rowid<r.rowid))
       AND received.sequence<held.sequence AND json_extract(received.after,'$.id')=a.id
       AND json_extract(received.after,'$.state')='accepted' AND json_extract(received.after,'$.receipt')='dsh-message:'||i.message_id
-      AND json_extract(held.before,'$.receipt')=json_extract(received.after,'$.receipt') AND json_extract(held.before,'$.state')='accepted'
+      AND json_extract(held.before,'$.id')=a.id AND json_extract(held.before,'$.receipt')=json_extract(received.after,'$.receipt')
+      AND json_extract(held.before,'$.state')='accepted'
       AND json_extract(held.after,'$.id')=a.id AND json_extract(held.after,'$.state')='uncertain'
-      AND NOT EXISTS (SELECT 1 FROM admission_decisions newer WHERE newer.action_id=a.id AND newer.rowid>r.rowid)`)
-  const reviewedVersion = db.prepare(`SELECT after FROM history WHERE task_id=? AND sequence<?
+      AND json_extract(held.after,'$.receipt')=r.reason`
+  const interruptedAdmission = db.prepare(`${recoverySource}
+    AND a.state='uncertain' AND a.receipt=r.reason AND latest.rowid=r.rowid`)
+  const confirmedAdmission = db.prepare(`${recoverySource}
+    AND a.state='accepted' AND a.receipt=json_extract(received.after,'$.receipt')
+    AND latest.actor='scheduler' AND latest.admission_id=i.admission_id
+    AND latest.previous_state='uncertain' AND latest.outcome='accepted'
+    AND latest.reason='verified original '||a.kind||' input was consumed'
+    AND latest.operation_id=a.kind||'-consumed:'||r.operation_id AND latest.rowid>r.rowid
+    AND latest.task_revision BETWEEN r.task_revision AND ?
+    AND EXISTS (SELECT 1 FROM history proof WHERE proof.operation_id=latest.operation_id
+      AND proof.task_id=a.task_id AND proof.actor='scheduler' AND proof.sequence>held.sequence
+      AND json_extract(proof.before,'$.id')=a.id AND json_extract(proof.before,'$.state')='uncertain'
+      AND json_extract(proof.before,'$.receipt')=r.reason
+      AND json_extract(proof.after,'$.id')=a.id AND json_extract(proof.after,'$.state')='accepted'
+      AND json_extract(proof.after,'$.receipt')=a.receipt)`)
+  const latestAdmissionDecision = db.prepare('SELECT MAX(rowid) AS sequence FROM admission_decisions WHERE action_id=?')
+  const historicalTask = db.prepare(`SELECT after FROM history WHERE task_id=? AND sequence<?
     AND json_extract(after,'$.revision')=? AND json_extract(after,'$.scope') IS NOT NULL ORDER BY sequence DESC LIMIT 1`)
-  const reviewBinding = task => {
+  const admissionBinding = task => {
     const binding = { ...task }
     for (const field of ['revision','comments','boardActivity']) delete binding[field]
-    return digest(binding)
+    return binding
   }
-  const restartHeldReview = (task, actor, sessionId) => {
-    if (!task || task.status !== 'reported' || task.archivedAt || task.stale || task.blocked || !task.authority
-      || task.reviewer !== actor || task.owner === actor || !validId(sessionId) || !Number.isSafeInteger(task.actionRevision)) return undefined
-    const row = interruptedReview.get(task.id, task.actionRevision, actor, sessionId, restartReason, task.revision)
+  const admissionKind = (task, actor, sessionId) => {
+    if (!task?.authority || task.archivedAt || task.stale || task.blocked || actor === 'user' || actor === 'scheduler'
+      || !validId(actor) || !validId(sessionId) || !Number.isSafeInteger(task.actionRevision)
+      || !itemContextOpen(task) || !dependenciesDone(task)) return undefined
+    if (task.status === 'reported' && task.reviewer === actor && task.owner !== actor) return 'review'
+    if (task.status === 'ready' && task.owner === actor) return 'execute'
+  }
+  const matchRecovery = (task, row) => {
     if (!row) return undefined
-    if (row.hold_revision !== task.revision) {
-      // Board comments can advance the card revision while an existing report
-      // awaits review. Any change to the reviewed card itself requires fresh proof.
-      const version = reviewedVersion.get(task.id, row.hold_sequence, row.hold_revision)
-      if (!version || reviewBinding(JSON.parse(version.after)) !== reviewBinding(task)) return undefined
+    // A comment can advance the card revision without changing the authorized work.
+    for (const [revision, sequence] of [[row.intent_revision, row.receipt_sequence], [row.hold_revision, row.hold_sequence]]) {
+      if (revision === task.revision) continue
+      const version = historicalTask.get(task.id, sequence, revision)
+      if (!version || !isDeepStrictEqual(admissionBinding(JSON.parse(version.after)), admissionBinding(task))) return undefined
     }
     const payload = JSON.parse(row.payload)
-    if (payload.id !== row.message_id || digest(payload) !== row.payload_hash) return undefined
+    if (payload?.id !== row.message_id || payload.role !== 'user' || !Array.isArray(payload.content)
+      || typeof payload.source?.kind !== 'string' || !payload.source.kind || digest(payload) !== row.payload_hash) return undefined
+    return payload
+  }
+  const restartHeldAdmission = (task, actor, sessionId) => {
+    const kind = admissionKind(task, actor, sessionId)
+    if (!kind) return undefined
+    const row = interruptedAdmission.get(task.id, task.actionRevision, kind, actor, sessionId, restartReason, task.revision)
+    const payload = matchRecovery(task, row)
+    if (!payload || authorize({ type:'claim', actor:'scheduler', task,
+      action:{id:row.action_id, task_id:task.id, revision:task.actionRevision, kind, actor, state:'uncertain', receipt:restartReason} }) !== true) return undefined
     return { actionId:row.action_id, admissionId:row.admission_id, messageId:row.message_id, holdOperation:row.hold_operation,
-      taskId:task.id, taskRevision:task.revision, actionRevision:task.actionRevision, actor, sessionId, receipt:row.receipt, payload }
+      taskId:task.id, taskRevision:task.revision, actionRevision:task.actionRevision, actor, sessionId, kind,
+      receipt:row.receipt, payload, payloadHash:row.payload_hash, intentTaskRevision:row.intent_revision }
+  }
+  const expectedHeldAdmission = (taskId, expectedRevision, actor, sessionId) => {
+    const task = getTask(taskId)
+    return task?.revision === expectedRevision ? restartHeldAdmission(task, actor, sessionId) : undefined
+  }
+  const confirmConsumedAdmission = (held, proof) => {
+    if (!held || !proof || !validId(held.taskId)) return undefined
+    const task = getTask(held.taskId)
+    if (task?.revision !== held.taskRevision) return undefined
+    const current = restartHeldAdmission(task, held.actor, held.sessionId)
+    if (!current || !isDeepStrictEqual(current, held) || verifyReviewRecovery(current, proof) !== true) return undefined
+    const restored = db.prepare("UPDATE actions SET state='accepted',receipt=? WHERE id=? AND task_id=? AND revision=? AND kind=? AND actor=? AND state='uncertain' AND receipt=?")
+      .run(current.receipt, current.actionId, task.id, current.actionRevision, current.kind, current.actor, restartReason)
+    if (restored.changes !== 1) throw new Error('admission recovery conflict')
+    const operationId = `${current.kind}-consumed:${current.holdOperation}`
+    const before = { id:current.actionId, state:'uncertain', receipt:restartReason }
+    addHistory.run(operationId, 'scheduler', task.id, JSON.stringify(before), JSON.stringify({ ...before, state:'accepted', receipt:current.receipt }))
+    db.prepare('INSERT INTO admission_decisions(operation_id,action_id,admission_id,actor,task_revision,previous_state,outcome,reason,created_at) VALUES(?,?,?,?,?,?,?,?,?)')
+      .run(operationId, current.actionId, current.admissionId, 'scheduler', task.revision, 'uncertain', 'accepted',
+        `verified original ${current.kind} input was consumed`, new Date().toISOString())
+    return { id:current.actionId, state:'accepted', receipt:current.receipt }
   }
   return {
     projectCoordination:coordination,
@@ -645,10 +704,15 @@ const releaseIsDone = release => {
         const rows = db.prepare("SELECT * FROM actions WHERE state IN ('claimed','accepted') OR (state='uncertain' AND receipt=?) ORDER BY rowid").all(reason)
         let held = 0
         for (const row of rows) {
-          const intent = db.prepare('SELECT admission_id,target_bot_id,action_revision FROM admission_intents WHERE action_id=?').get(row.id)
+          const intent = db.prepare('SELECT admission_id,target_bot_id,target_session_id,action_revision FROM admission_intents WHERE action_id=?').get(row.id)
           const task = getTask(row.task_id)
           const start = row.state !== 'claimed' && acknowledgedStart(row, intent, task)
           if (row.state === 'accepted' && start) continue
+          if (row.state === 'accepted' && intent && task?.actionRevision === row.revision
+            && admissionKind(task, row.actor, intent.target_session_id) === row.kind) {
+            const confirmed = confirmedAdmission.get(task.id, row.revision, row.kind, row.actor, intent.target_session_id, reason, task.revision, task.revision)
+            if (matchRecovery(task, confirmed)) continue
+          }
           let operationId, outcome, receipt, decision
           if (row.state === 'uncertain') {
             if (!start || task.blocked || task.stale || task.archivedAt) continue
@@ -670,7 +734,8 @@ const releaseIsDone = release => {
             outcome = 'accepted'
             decision = `Delivery confirmed by owner start ${start}`
           } else {
-            operationId = `recovery-hold:${row.id}:${task.revision}`
+            const previous = latestAdmissionDecision.get(row.id).sequence
+            operationId = `recovery-hold:${row.id}:${task.revision}${previous ? `:${previous}` : ''}`
             outcome = 'uncertain'
             receipt = decision = reason
             held++
@@ -1027,9 +1092,13 @@ const releaseIsDone = release => {
       const row = db.prepare('SELECT i.*,a.state FROM admission_intents i JOIN actions a ON a.id=i.action_id WHERE i.action_id=?').get(id)
       return row ? { actionId:row.action_id, admissionId:row.admission_id, messageId:row.message_id, targetBotId:row.target_bot_id, targetSessionId:row.target_session_id, taskRevision:row.task_revision, actionRevision:row.action_revision, payloadHash:row.payload_hash, payload:JSON.parse(row.payload), state:row.state } : undefined
     },
+    restartHeldAdmission:expectedHeldAdmission,
     restartHeldReview(taskId, expectedRevision, actor, sessionId) {
-      const task = getTask(taskId)
-      return task?.revision === expectedRevision ? restartHeldReview(task, actor, sessionId) : undefined
+      const held = expectedHeldAdmission(taskId, expectedRevision, actor, sessionId)
+      return held?.kind === 'review' ? held : undefined
+    },
+    confirmConsumedAdmission(held, proof) {
+      return tx(() => confirmConsumedAdmission(held, proof))
     },
     inspectAdmission({ admissionId, messageId, targetSessionId, payloadHash } = {}) {
       if (![admissionId, messageId, targetSessionId].every(validId) || typeof payloadHash !== 'string' || !/^[0-9a-f]{64}$/.test(payloadHash)) return { decision:'unknown' }
@@ -1109,9 +1178,15 @@ const releaseIsDone = release => {
     },
     listActions(id) { return db.prepare('SELECT id,task_id AS taskId,revision,kind,actor,state,receipt FROM actions WHERE task_id=? ORDER BY rowid').all(requireId(id, 'task id')) },
     history(id) {
-      const rows = db.prepare(`SELECT h.before,h.after,d.created_at AS confirmed_at FROM history h LEFT JOIN admission_decisions d
-        ON d.operation_id=h.operation_id AND d.actor=h.actor AND d.operation_id='owner-start-confirmed:'||d.action_id
+      const rows = db.prepare(`SELECT h.before,h.after,
+          CASE WHEN d.operation_id='owner-start-confirmed:'||d.action_id THEN d.created_at END AS confirmed_at,
+          CASE WHEN d.operation_id!='owner-start-confirmed:'||d.action_id THEN d.created_at END AS consumed_at
+        FROM history h LEFT JOIN admission_decisions d
+        ON d.operation_id=h.operation_id AND d.actor=h.actor
           AND d.previous_state='uncertain' AND d.outcome='accepted' AND d.actor='scheduler'
+          AND (d.operation_id='owner-start-confirmed:'||d.action_id
+            OR (d.operation_id LIKE 'review-consumed:%' AND d.reason='verified original review input was consumed')
+            OR (d.operation_id LIKE 'execute-consumed:%' AND d.reason='verified original execute input was consumed'))
         WHERE h.task_id=? ORDER BY h.sequence DESC LIMIT 51`).all(requireId(id, 'task id'))
       const fields = ['title', 'owner', 'reviewer', 'acceptance', 'dependencies', 'description', 'stage', 'dueDate', 'dueComplete', 'labels', 'checklist', 'coverImageId', 'progress']
       const project = value => {
@@ -1121,7 +1196,8 @@ const releaseIsDone = release => {
         return result
       }
       return { truncated:rows.length > 50, entries:rows.slice(0, 50).map(row => ({ before:project(row.before), after:project(row.after),
-        ...(row.confirmed_at ? { deliveryConfirmedAt:Date.parse(row.confirmed_at) } : {}) })) }
+        ...(row.confirmed_at ? { deliveryConfirmedAt:Date.parse(row.confirmed_at) } : {}),
+        ...(row.consumed_at ? { deliveryConsumedAt:Date.parse(row.consumed_at) } : {}) })) }
     },
     create({ operationId, actor, task, intake }) {
       if (!task || typeof task !== 'object') throw new Error('invalid task')
@@ -1472,17 +1548,8 @@ const releaseIsDone = release => {
             if (verifyEvidence(old, value, actor, 'review') !== true) throw new Error('review evidence unverified')
             if (!manual) {
               if (reviewRecovery) {
-                const held = restartHeldReview(old, actor, reviewRecovery.sessionId)
-                if (held && verifyReviewRecovery(held, reviewRecovery) === true) {
-                  const restored = db.prepare("UPDATE actions SET state='accepted',receipt=? WHERE id=? AND state='uncertain' AND receipt=?")
-                    .run(held.receipt, held.actionId, restartReason)
-                  if (restored.changes !== 1) throw new Error('review recovery conflict')
-                  const recoveryId = `review-consumed:${held.holdOperation}`
-                  const before = { id:held.actionId, state:'uncertain', receipt:restartReason }
-                  addHistory.run(recoveryId, 'scheduler', old.id, JSON.stringify(before), JSON.stringify({ ...before, state:'accepted', receipt:held.receipt }))
-                  db.prepare('INSERT INTO admission_decisions(operation_id,action_id,admission_id,actor,task_revision,previous_state,outcome,reason,created_at) VALUES(?,?,?,?,?,?,?,?,?)')
-                    .run(recoveryId, held.actionId, held.admissionId, 'scheduler', old.revision, 'uncertain', 'accepted', 'verified original review input was consumed', new Date().toISOString())
-                }
+                const held = restartHeldAdmission(old, actor, reviewRecovery.sessionId)
+                confirmConsumedAdmission(held, reviewRecovery)
               }
               finishAction(old.id, 'review')
             }

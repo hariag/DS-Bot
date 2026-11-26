@@ -307,37 +307,58 @@ export function install(rt) {
   const reviewRecoveryProofs = new WeakMap()
   const providerOf = value => value?.[symbols.original] ?? value
   const persistenceOf = () => ctx.get?.('sessionPersistence') ?? ctx.sessionPersistence
-  const reviewRecovery = async (task, { actor, sid }, signal) => {
+  const isRecipientSession = (actor, sid, includePast) => rt.chatOf(actor) === sid
+    || (includePast && rt.botOf(actor)?.segments?.some(part => part.sessionId === sid)
+      && rt.pastOwners?.get(sid)?.botId === actor)
+  const proveConsumedAdmission = async (held, signal, includePast = false) => {
     const store = instance?.store
-    if (!store || rt.chatOf(actor) !== sid) return undefined
-    const held = store.restartHeldReview(task.id, task.revision, actor, sid)
-    if (!held) return undefined
+    const { actor, sessionId:sid } = held
+    if (!store || !isRecipientSession(actor, sid, includePast)) return undefined
     const persistence = persistenceOf(), session = ctx.sessions?.get?.(sid)
-    if (typeof persistence?.open !== 'function' || typeof session?.eventAt !== 'function' || session.id !== sid
-      || !Number.isSafeInteger(session.seq) || session.seq < 1 || session.inheritedEventCount !== 0) return undefined
+    if (typeof persistence?.open !== 'function') return undefined
+    if (session && (typeof session.eventAt !== 'function' || session.id !== sid
+      || !Number.isSafeInteger(session.seq) || session.seq < 1 || session.inheritedEventCount !== 0)) return undefined
     const deadline = AbortSignal.timeout(5000)
     const readSignal = signal ? AbortSignal.any([signal, deadline]) : deadline
     const provider = providerOf(persistence)
-    const current = () => !readSignal.aborted && instance?.store === store && rt.chatOf(actor) === sid
+    const current = () => !readSignal.aborted && instance?.store === store && isRecipientSession(actor, sid, includePast)
       && ctx.sessions?.get?.(sid) === session && providerOf(persistenceOf()) === provider
-    const through = session.seq, offset = Math.max(0, through - 1024)
     let reader
     try {
+      const before = session ? undefined : await persistence.stat?.(sid, { signal:readSignal })
+      // A detached read of a cold log must be bounded and cover its entire
+      // durable history when persistence does not supply an event count.
+      if (!session && (before?.header?.id !== sid || typeof before.revision !== 'string'
+        || before.formatStatus === 'migration-required' || !Number.isSafeInteger(before.sizeBytes) || before.sizeBytes > 12 * 1024 * 1024)) return undefined
+      const through = session?.seq ?? before?.eventCount
+      const offset = through === undefined ? 0 : Math.max(0, through - 1024)
+      const limit = through === undefined ? 4097 : through - offset
+      if (!current() || !Number.isSafeInteger(limit) || limit < 1) return undefined
       reader = await persistence.open(sid, 'read', { signal:readSignal })
       if (!current() || reader?.id !== sid || reader.inheritedEventCount !== 0 || reader.header?.id !== sid) return undefined
-      const { events } = await reader.read(offset, through - offset, { signal:readSignal })
-      if (!current() || !Array.isArray(events) || events.some((event, index) => event?.seq !== offset + index)) return undefined
+      const { events } = await reader.read(offset, limit, { signal:readSignal })
+      if (!current() || !Array.isArray(events) || (through === undefined && events.length >= limit)
+        || (!session && through !== undefined && events.length !== limit)
+        || events.some((event, index) => event?.seq !== offset + index)) return undefined
       const consumed = events.filter(event => event?.type === 'user/message' && event.data?.id === held.messageId)
       if (consumed.length !== 1 || !isDeepStrictEqual(consumed[0].data, held.payload)
         || events.some(event => event?.type === 'agent/admission/cancel' && event.data?.messageId === held.messageId)) return undefined
       const event = consumed[0]
-      const stillVerified = () => current() && isDeepStrictEqual(event, session.eventAt(event.seq))
+      if (!session) {
+        const after = await persistence.stat(sid, { signal:readSignal })
+        if (after?.header?.id !== sid || after.revision !== before.revision) return undefined
+      }
+      const stillVerified = () => current() && (!session || isDeepStrictEqual(event, session.eventAt(event.seq)))
       if (!stillVerified()) return undefined
       const proof = Object.freeze({ sessionId:sid })
       reviewRecoveryProofs.set(proof, { held, stillVerified })
       return proof
     } catch { return undefined }
     finally { await reader?.close().catch(() => {}) }
+  }
+  const reviewRecovery = (task, { actor, sid }, signal) => {
+    const held = instance?.store.restartHeldReview(task.id, task.revision, actor, sid)
+    return held ? proveConsumedAdmission(held, signal) : undefined
   }
   const botWorkflow = installHostWorkflow(rt, {
     defineTool, run, getStore: () => service().store, pendingGoalCard:id => instance?.goalEditor.pendingCard(id), reviewRecovery,
@@ -917,6 +938,23 @@ export function install(rt) {
         return result
       }
       case 'board-command': {
+        if (payload.type === 'confirm-delivery') {
+          writable()
+          const card = api.list(scope, principal).tasks.find(item => item.id === payload.taskId && !item.shared && !item.legacy)
+          const task = card && store.get(card.id)
+          if (!task || task.revision !== payload.expectedRevision) throw Object.assign(new Error('Task revision changed or task is unavailable'), { code:'bot/invalid' })
+          const kind = task.status === 'reported' ? 'review' : 'execute'
+          const actor = kind === 'review' ? task.reviewer : task.owner
+          const action = store.listActions(task.id).find(row => row.revision === task.actionRevision && row.kind === kind && row.actor === actor)
+          const target = action && store.admission(action.id)?.targetSessionId
+          const held = target && store.restartHeldAdmission(task.id, task.revision, actor, target)
+          const proof = held && await proveConsumedAdmission(held, undefined, true)
+          if (!proof || !allowedAction(store.get(task.id), { actor, kind:held.kind, revision:held.actionRevision })
+            || !store.confirmConsumedAdmission(held, proof)) {
+            throw Object.assign(new Error('The original Bot input could not be confirmed. Check the existing delivery before retrying.'), { code:'bot/refused' })
+          }
+          return { taskId:task.id, revision:task.revision, dispatchState:'accepted' }
+        }
         if(['goal-task-edit','goal-history-title','goal-card-details','goal-card-comment','goal-image-remove'].includes(payload.type)) {
           const card = api.list(scope,principal).tasks.find(item => item.id === payload.taskId)
           const kind=payload.type==='goal-task-edit'?'edit':payload.type==='goal-history-title'?'title':payload.type==='goal-card-details'?'details':payload.type==='goal-card-comment'?'comment':'remove-image'

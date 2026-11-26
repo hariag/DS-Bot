@@ -13762,6 +13762,7 @@ var ZH = {
   "Awaiting acknowledgement from {group}": "等待 {group} 确认",
   "No receipt found. Review the current revision before retrying.": "没有查到操作回执。重试前请核对当前修订。",
   "Delivery confirmed by the owner’s start reply": "已按负责人的开工回复核实派发",
+  "The Bot processed the original message": "已核实 Bot 处理了原派工消息",
   "Task reply": "任务回复",
   "Group goal update": "群目标更新",
   "Work claimed": "已认领并开始执行",
@@ -48134,6 +48135,14 @@ function TaskHistory({ scope, task, request, actors }) {
     ) : null,
     history?.truncated ? (0, import_react63.createElement)("p", { className: "bt-card-note" }, t("Showing the latest 50 revisions.")) : null,
     (history?.entries ?? []).map((entry) => {
+      if (Number.isFinite(entry.deliveryConsumedAt)) {
+        return (0, import_react63.createElement)(
+          "article",
+          { key: `consumed-${entry.after.revision}-${entry.deliveryConsumedAt}` },
+          (0, import_react63.createElement)("strong", null, t("The Bot processed the original message")),
+          (0, import_react63.createElement)("p", null, formatMoment(entry.deliveryConsumedAt))
+        );
+      }
       if (Number.isFinite(entry.deliveryConfirmedAt)) {
         return (0, import_react63.createElement)(
           "article",

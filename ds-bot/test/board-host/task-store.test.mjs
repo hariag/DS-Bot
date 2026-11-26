@@ -122,6 +122,14 @@ function accept(s, id, kind) {
   assert.ok(a); claim(s, a); s.markAction({ actionId: a.id, actor: 'host', expectedState: 'claimed', state: 'accepted', receipt: 'verified' })
   return a
 }
+function acceptCanonicalAdmission(store, id, kind) {
+  const action = store.listActions(id).find(row => row.kind === kind && row.state === 'pending')
+  const intent = intentFor(action)
+  claim(store, action, intent)
+  const receipt = `dsh-message:${intent.messageId}`
+  store.markAction({ actionId:action.id, actor:'scheduler', expectedState:'claimed', state:'accepted', receipt })
+  return { action, intent, receipt }
+}
 function finish(s, id) {
   accept(s, id, 'execute'); command(s, id, 'start', 'owner'); command(s, id, 'report', 'owner', evidence)
   accept(s, id, 'review'); command(s, id, 'review', 'reviewer', { evidence: 'independent review', result: 'pass' })
@@ -373,6 +381,97 @@ test('startup converts interrupted admissions to durable uncertainty exactly onc
   assert.match(held.receipt??reopened.listActions('restart')[0].receipt,/delivery outcome unknown/)
   assert.equal(reopened.holdInterruptedAdmissions(),0)
   assert.equal(reopened.listActions('restart')[0].state,'uncertain')
+})
+
+test('verified original execution and review inputs are confirmed on their original cards and retained at restart', t => {
+  const proofs = new WeakMap()
+  const options = { ...opts, verifyReviewRecovery: (held, proof) => {
+    assert.deepEqual(held, proofs.get(proof))
+    return true
+  } }
+  const {store,path,trackStore} = fixture(t, options)
+  const confirmations = []
+  for (const kind of ['execute','review']) {
+    create(store, kind); register(store, kind)
+    if (kind === 'review') {
+      accept(store, kind, 'execute'); command(store, kind, 'start', 'owner'); command(store, kind, 'report', 'owner', evidence)
+    }
+    const {action,intent,receipt} = acceptCanonicalAdmission(store, kind, kind)
+    assert.equal(store.restartHeldAdmission(kind, store.get(kind).revision, action.actor, intent.targetSessionId), undefined)
+    assert.equal(store.holdInterruptedAdmissions(), 1)
+    const task = command(store, kind, 'card-comment', 'user', { text:'Original delivery is under investigation' })
+    const held = store.restartHeldAdmission(kind, task.revision, action.actor, intent.targetSessionId)
+    assert.equal(held.kind, kind)
+    assert.equal(held.admissionId, intent.admissionId)
+    assert.equal(held.messageId, intent.messageId)
+    assert.deepEqual(held.payload, intent.payload)
+    assert.equal(held.payloadHash, store.admission(action.id).payloadHash)
+    assert.deepEqual(store.restartHeldReview(kind, task.revision, action.actor, intent.targetSessionId), kind === 'review' ? held : undefined)
+    const proof = Object.freeze({ sessionId:intent.targetSessionId })
+    proofs.set(proof, held)
+    const version = store.version()
+    const count = store.listActions(kind).length
+    assert.deepEqual(store.confirmConsumedAdmission(held, proof), {id:action.id,state:'accepted',receipt})
+    assert.deepEqual(store.get(kind), task)
+    assert.equal(store.listActions(kind).length, count)
+    assert.equal(store.confirmConsumedAdmission(held, proof), undefined)
+    assert.equal(store.version(), version + 1)
+    const confirmation = store.history(kind).entries[0]
+    assert.ok(Number.isFinite(confirmation.deliveryConsumedAt))
+    assert.equal(confirmation.deliveryConfirmedAt, undefined)
+    confirmations.push({action,task,receipt})
+  }
+  store.close()
+  const reopened = trackStore(openTaskStore(path, opts))
+  const before = reopened.version()
+  assert.equal(reopened.holdInterruptedAdmissions(), 0)
+  assert.equal(reopened.holdInterruptedAdmissions(), 0)
+  assert.equal(reopened.version(), before)
+  for (const {action,task,receipt} of confirmations) {
+    assert.deepEqual(reopened.get(task.id), task)
+    const persistedAction = reopened.listActions(task.id).find(row => row.id === action.id)
+    assert.deepEqual({...persistedAction}, {...action,state:'accepted',receipt})
+  }
+  assert.equal(command(reopened, 'execute', 'start', 'owner').status, 'working')
+  assert.equal(command(reopened, 'review', 'review', 'reviewer', { result:'pass', evidence:'Independently confirmed' }).status, 'done')
+})
+
+test('admission confirmation rejects stale card revisions, revoked permissions, different proof, and unaccepted delivery', t => {
+  let authorized = true
+  const proof = Object.freeze({ sessionId:'session-owner' })
+  const options = { ...opts, authorize: input => input.type !== 'claim' || authorized,
+    verifyReviewRecovery: (_held, supplied) => supplied === proof }
+  const {store} = fixture(t, options)
+  for (const id of ['exact','changed','only-claimed']) { create(store, id); register(store, id) }
+  const exact = acceptCanonicalAdmission(store, 'exact', 'execute')
+  const changed = acceptCanonicalAdmission(store, 'changed', 'execute')
+  command(store, 'changed', 'card-details', 'user', { description:'Changed before restart' })
+  const claimed = store.listActions('only-claimed')[0]
+  claim(store, claimed)
+  assert.equal(store.holdInterruptedAdmissions(), 3)
+  const revision = store.get('exact').revision
+  assert.equal(store.restartHeldAdmission('only-claimed', store.get('only-claimed').revision, 'owner', intentFor(claimed).targetSessionId), undefined)
+  assert.equal(store.restartHeldAdmission('changed', store.get('changed').revision, 'owner', changed.intent.targetSessionId), undefined)
+  assert.equal(store.restartHeldAdmission('exact', revision, 'reviewer', exact.intent.targetSessionId), undefined)
+  assert.equal(store.restartHeldAdmission('exact', revision, 'owner', 'wrong-session'), undefined)
+  const held = store.restartHeldAdmission('exact', revision, 'owner', exact.intent.targetSessionId)
+  const version = store.version()
+  assert.equal(store.confirmConsumedAdmission(held, {...proof}), undefined)
+  assert.equal(store.confirmConsumedAdmission({...held,messageId:'another-message'}, proof), undefined)
+  authorized = false
+  assert.equal(store.confirmConsumedAdmission(held, proof), undefined)
+  assert.equal(store.restartHeldAdmission('exact', revision, 'owner', exact.intent.targetSessionId), undefined)
+  assert.equal(store.version(), version)
+  authorized = true
+  const comment = command(store, 'exact', 'card-comment', 'user', { text:'CAS conflict with old snapshot' })
+  assert.equal(store.confirmConsumedAdmission(held, proof), undefined)
+  const current = store.restartHeldAdmission('exact', comment.revision, 'owner', exact.intent.targetSessionId)
+  assert.ok(store.confirmConsumedAdmission(current, proof))
+  const edit = command(store, 'exact', 'card-details', 'user', { description:'Changed after confirmation' })
+  assert.equal(store.holdInterruptedAdmissions(), 1)
+  assert.equal(store.admission(exact.action.id).state, 'uncertain')
+  assert.equal(store.restartHeldAdmission('exact', edit.revision, 'owner', exact.intent.targetSessionId), undefined)
+  assert.deepEqual(store.get('exact'), edit)
 })
 
 test('an owner start in a rotated Session keeps its verified receipt through restarts and human edits', t => {

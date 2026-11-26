@@ -28,6 +28,7 @@ const ZH = {
   "Awaiting acknowledgement from {group}": "等待 {group} 确认",
   "No receipt found. Review the current revision before retrying.": "没有查到操作回执。重试前请核对当前修订。",
   'Delivery confirmed by the owner’s start reply': '已按负责人的开工回复核实派发',
+  'The Bot processed the original message': '已核实 Bot 处理了原派工消息',
   'Task reply': '任务回复',
   'Group goal update': '群目标更新',
   'Work claimed': '已认领并开始执行',

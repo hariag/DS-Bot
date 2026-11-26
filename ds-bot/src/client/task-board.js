@@ -1813,6 +1813,11 @@ function TaskHistory({ scope, task, request, actors }) {
         actorName:id => actorName(id,actors)}))) : null,
     history?.truncated ? h('p', { className: 'bt-card-note' }, t('Showing the latest 50 revisions.')) : null,
     (history?.entries ?? []).map(entry => {
+      if (Number.isFinite(entry.deliveryConsumedAt)) {
+        return h('article', { key:`consumed-${entry.after.revision}-${entry.deliveryConsumedAt}` },
+          h('strong', null, t('The Bot processed the original message')),
+          h('p', null, formatMoment(entry.deliveryConsumedAt)))
+      }
       if (Number.isFinite(entry.deliveryConfirmedAt)) {
         return h('article', { key:`delivery-${entry.after.revision}` },
           h('strong', null, t('Delivery confirmed by the owner’s start reply')),
