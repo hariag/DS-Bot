@@ -839,11 +839,12 @@ export function install(rt) {
 
   rt.teamTools.push(defineTool({
     name: 'post_to_group',
-    description: 'Post a message into a group chat as yourself. A Main Bot may post into any group, any other Bot into a group it is in. A Main Bot\'s or the group admin\'s post starts a round: members reply in the group, where the user reads them. Another member\'s post calls only the members it names with "@Name"; without one it is only written into the group.',
+    description: 'Post a message into a group chat as yourself. A Main Bot may post into any group, any other Bot into a group it is in. A Main Bot or group admin starts a round with a regular post. Another member calls only the members it names with "@Name". Use notice_only to record an evidence summary without waking any Bot.',
     parameters: {
       group: GROUP_REF,
       message: { type: 'string', required: true, description: 'What to say; write "@Name" to choose who answers, and a name without "@" to only mention a member' },
       report_back: { type: 'boolean', description: 'Also send the members\' replies back to you as a new message when the round ends' },
+      notice_only: { type: 'boolean', description: 'Record a notice without Bot replies. Requires plain names and no report_back.' },
     },
     output,
     async execute(args, exec) {
@@ -853,10 +854,11 @@ export function install(rt) {
       if (sender === undefined) return 'Only Bots on the team can use post_to_group.'
       const { room, error } = pickRoom(args.group, self)
       if (error) return error
+      const noticeOnly = args.notice_only === true
       // An ordinary member's post calls only the members it names (openingSpeakers).
       const member = !rt.isMain(self) && !rt.isAdminOf(room, self)
       const info = rt.live.get(exec.agent?.id)?.info
-      if (info?.role === 'room' && info.roomId === room.id) return `You are speaking in "${room.name}" right now. Write your message as your reply instead.`
+      if (!noticeOnly && info?.role === 'room' && info.roomId === room.id) return `You are speaking in "${room.name}" right now. Write your message as your reply instead.`
       const folder = rt.sessionFolder?.(exec.agent?.session ?? exec.agent)
       const text = absoluteLinks(String(args.message ?? '').trim(), folder)
       if (text === '') return 'Write a message to post.'
@@ -869,6 +871,9 @@ export function install(rt) {
       }
       const mentions = { ids: named, all: spans.some(span => span.all === true) }
       const reportBack = args.report_back === true
+      if (noticeOnly && (spans.length > 0 || reportBack)) {
+        return 'notice_only cannot use live mentions or report_back. Use an ordinary directed post when someone should answer.'
+      }
       if (member && reportBack && named.length === 0) {
         return 'Nobody would answer: your post only calls the members you name. Write "@Name" for each member who should answer, or post without report_back.'
       }
@@ -885,11 +890,12 @@ export function install(rt) {
       try {
         // A post that wants the replies names the conversation it was written
         // from, so the report comes back there instead of the own chat.
-        await rt.postToRoom(room, sender, long.text, { mentions, ...(claims ? { claims } : {}), ...(reportBack ? { reportBack: true, ...callerRoom(exec), ...callerPart(exec) } : {}), ...(member ? { member: true } : {}), ...(sub ? { sub } : {}), ...(long.length ? { length: long.length } : {}) }, long.files)
+        await rt.postToRoom(room, sender, long.text, { mentions, ...(noticeOnly ? { quiet: true } : {}), ...(claims ? { claims } : {}), ...(reportBack ? { reportBack: true, ...callerRoom(exec), ...callerPart(exec) } : {}), ...(member ? { member: true } : {}), ...(sub ? { sub } : {}), ...(long.length ? { length: long.length } : {}) }, long.files)
       } catch (failure) {
         if (sub !== undefined) rt.dropWork(sub)
         return `Could not post in "${room.name}": ${failure.message}`
       }
+      if (noticeOnly) return `Posted in "${room.name}" as a notice. No Bot was called.`
       if (member && named.length === 0) return `Posted in "${room.name}", where the user and its members read it. Nobody answers it: your post only calls the members you name with @Name.`
       if (named.length > 0) {
         const turn = turnOf(exec)

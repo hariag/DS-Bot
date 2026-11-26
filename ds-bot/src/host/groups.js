@@ -211,8 +211,8 @@ const roomReply = zh => zh
   ? '直接回复群聊，无需署名。需要用工具时，同一步简述动作并调用首个工具。发现阻塞时写明缺项和处理人。普通讨论无待处理事项且无新增信息时用 [PASS] 静默。'
   : 'Reply without a name prefix. For work, call the first tool alongside your opening note, report meaningful progress, and end with the result. In ordinary discussion, [PASS] stays silent when you have nothing to add.'
 const roomCalls = zh => zh
-  ? '纯文本 @姓名 会立即唤醒成员；只引用名字时省略 @。同一条消息中的成员并行开始，有依赖时按顺序交接。收到自己派出的结果后接续。'
-  : 'A plain-text @Name immediately calls the member. Use the name alone for a reference. Members called together start in parallel; hand off dependencies in order. Continue when the work you requested comes back.'
+  ? '纯文本 @姓名 会立即唤醒成员。新证据、下一动作或待决事项确需对方处理时再点名。只需群内留痕时用 post_to_group 的 notice_only=true，姓名不用 @。同次点名并行开始，有依赖按顺序交接。收到自己派出的结果后接续。'
+  : 'A plain-text @Name immediately calls the member. Call only the people who need to act on new evidence, a next step or a decision. To leave a record without inviting replies, use post_to_group with notice_only=true and plain names. Members called together start in parallel. Hand off dependencies in order and continue when results arrive.'
 
 const slotLabel = (slot, self, zh) => {
   if (zh) {
@@ -1960,7 +1960,7 @@ export function install(rt) {
     // An event post, and a member post that calls nobody, never pick the speakers
     // over a message queued with them. A post whose members an earlier round already
     // called (`called`) picks none.
-    const callsNobody = post => post.member === true && openingSpeakers(room, post).length === 0
+    const callsNobody = post => post.quiet === true || (post.member === true && openingSpeakers(room, post).length === 0)
     const open = posts.filter(post => post.called !== true)
     const opener = open.findLast(post => !event(post) && !callsNobody(post)) ?? open.findLast(post => !event(post)) ?? open.at(-1) ?? { text: '', quiet: true }
     const references = posts.flatMap(post => post.references ?? [])
@@ -2270,6 +2270,7 @@ export function install(rt) {
   // wants the replies (`reportBack`) gets those of the members it called when the
   // round ends.
   function callPost(room, round, sender, text, extra) {
+    if (extra.quiet) return false
     if (extra.failed !== undefined && !extra.askedBy) return false
     if (extra.resumed || (extra.stopped && !extra.askedBy)) return false
     const post = { ...extra, botId: sender.id, name: sender.name, text }

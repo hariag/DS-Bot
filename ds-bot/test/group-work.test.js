@@ -961,6 +961,61 @@ test('an ordinary member posts into its group from its own chat; nobody answers'
   assert.deepEqual(host.agentOf('gc').calls, [])
 })
 
+test('an administrator can post one evidence notice without waking any group member', async (t) => {
+  const host = await start(t)
+  const message = '核证摘要已附在原任务卡，`@Writer` 仅为证据原文。'
+  const posted = await host.tool('post_to_group', { group: 'Ops', message, notice_only: true }, 'a')
+  assert.match(posted, /Posted in "Ops" as a notice\. No Bot was called\./)
+  const item = host.takePost()
+  assert.equal(item.source.quiet, true)
+  assert.equal(item.source.reportBack, undefined)
+  const round = host.round('c1', item)
+  await settle(() => round() !== undefined)
+  assert.equal(logLines(host).filter(line => line.botId === 'a' && line.text === message).length, 1)
+  for (const id of ['ga', 'gb', 'gc']) assert.deepEqual(host.agentOf(id).calls, [])
+})
+
+test('a notice cannot request a reply or contain a live group mention', async (t) => {
+  const host = await start(t)
+  for (const input of [{ message: '@Writer 请答' }, { message: '@all 请答' }, { message: '核证完成', report_back: true }]) {
+    const result = await host.tool('post_to_group', { group: 'Ops', notice_only: true, ...input }, 'a')
+    assert.match(result, /notice_only.*ordinary directed post/)
+  }
+  assert.deepEqual(host.agentOf('r1').calls, [])
+  assert.deepEqual(logLines(host), [])
+  assert.deepEqual(rt.state.works ?? {}, {})
+})
+
+test('an evidence notice from an active group turn leaves the work in flight and calls nobody', async (t) => {
+  const host = await start(t, { idleRelays: 2 })
+  const round = host.round('c1', host.say('检查文档'))
+  await settle(() => host.agentOf('ga').calls.length === 1)
+  host.begin('ga')
+  const room = rt.state.rooms.r1
+  room.idleRelays = 2
+  const message = '旁证已记录，请按原记录查阅。'
+  assert.match(await host.tool('post_to_group', { group: 'Ops', message, notice_only: true }, 'ga'), /No Bot was called/)
+  assert.equal(room.idleRelays, 2)
+  assert.equal(round(), undefined)
+  host.finish('ga', '[PASS]')
+  await settle(() => round() !== undefined)
+  assert.equal(logLines(host).filter(line => line.text === message).length, 1)
+  assert.deepEqual(host.agentOf('gb').calls, [])
+  assert.deepEqual(host.agentOf('gc').calls, [])
+})
+
+test('a pending administrator notice does not displace a user message in the same relay', async (t) => {
+  const host = await start(t)
+  await host.tool('post_to_group', { group: 'Ops', message: '旁证已记录。', notice_only: true }, 'a')
+  host.emit('r1', 'user/message', host.say('这项请核对'))
+  const round = host.round('c1', host.takePost())
+  await settle(() => host.agentOf('ga').calls.length === 1)
+  assert.match(text(host.begin('ga')), /这项请核对/)
+  host.finish('ga', '已核。')
+  await settle(() => round() !== undefined)
+  assert.equal(logLines(host).filter(line => line.text === '旁证已记录。').length, 1)
+})
+
 test('a member post calls only the members it names', async (t) => {
   const host = await start(t)
   await host.tool('post_to_group', { group: 'Ops', message: '@Tester 看一下文档' }, 'b')
