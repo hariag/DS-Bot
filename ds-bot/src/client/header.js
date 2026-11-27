@@ -94,14 +94,6 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
     pending: botPendingOf(roster, bot),
   }) : 'idle'
   const room = roster.roomsById[sessionId]
-  const inboxBoard = useUi(state => state.inboxTarget === sessionId && state.inboxBoardTarget === sessionId)
-  useEffect(() => {
-    if (!inboxBoard || !(room || bot)) return
-    if (away) { selectView('chat'); return }
-    setBoardReview(false)
-    setBoardOpen(true)
-    actions.consumeInboxTaskBoard(sessionId)
-  }, [inboxBoard, room?.id, bot?.id, away, sessionId])
   const goal = room?.goal
   // Goal panels are keyed by the group, never by its current Session: `composeGoal` and
   // `toggleGoal` store `room.id`, and a group's Session moves to a fresh part when its

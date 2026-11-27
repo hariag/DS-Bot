@@ -1075,7 +1075,7 @@ export function apply(ctx) {
     }
   }
   actions.seatAccount = on => ui.set(state => (state.accountSeated === on ? state : { ...state, accountSeated: on }))
-  actions.openPersonalBoard = () => ui.set(state => state.personalBoard ? state : { ...state, personalBoard:true })
+  actions.openPersonalBoard = () => ui.set(state => state.personalBoard === true ? state : { ...state, personalBoard:true })
   actions.closePersonalBoard = () => ui.set(state => state.personalBoard ? { ...state, personalBoard:false } : state)
   // The install runs on the host; the check loop follows it every two seconds.
   actions.installUpdate = async () => {

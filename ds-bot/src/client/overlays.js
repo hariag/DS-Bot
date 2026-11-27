@@ -55,7 +55,7 @@ export function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useA
   const boardSession = useRef(current)
   useEffect(() => {
     if (!current || boardSession.current === current) return
-    if (boardSession.current) actions.closePersonalBoard?.()
+    if (boardSession.current && ui.personalBoard === true) actions.closePersonalBoard?.()
     boardSession.current = current
   }, [current])
   const open = ui.details ? { id: ui.details, view: ui.view ?? 'details', renaming: ui.renaming, tab: ui.tab, side: ui.side, task: ui.task } : null
@@ -218,15 +218,20 @@ export function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useA
   }, [canAutoRelease, rnCurrent, actions])
   const paletteToken = ui.palette?.token
   const groupSearchToken = ui.groupSearch?.token
+  const boardScope = ui.personalBoard === true ? { kind:'personal', id:'user' } : ui.personalBoard
+  const boardRoom = boardScope?.kind === 'room' ? roster.roomsById?.[boardScope.id] : undefined
+  const boardTitle = boardRoom?.name ?? roster.byId?.[boardScope?.id]?.name ?? t('My task board')
   return h(Fragment, null,
     h(OverlayBoundary, { key: 'ds-bot:notifications', name: 'notifications', notify: false },
       h(NotificationWatcher, { useSessions, useSessionStatus, useRoster, actions })),
     opening ? h(OverlayBoundary, { name: 'opening', reset: opening.id, notify: false },
       createPortal(h(OpeningCover, { model: opening, column: layout.column, onNewSession: actions?.recoverOpening, onRetry: actions?.retryOpening }), document.body)) : null,
-    ui.personalBoard ? h(OverlayBoundary, {
-      name: 'personal-board', reset: 'personal',
+    boardScope ? h(OverlayBoundary, {
+      name: 'task-board', reset: `${boardScope.kind}:${boardScope.id}`,
       onDismiss: () => actions.closePersonalBoard?.(), actions,
-    }, h(TaskBoard, { scope: { kind: 'personal', id: 'user' }, title: t('My task board'), close: actions.closePersonalBoard })) : null,
+    }, h(TaskBoard, { scope:boardScope, title:boardTitle, goal:boardRoom?.goal, refreshGoal:actions.refreshTeam,
+      currentRoomGoal:actions.currentRoomGoal, resolveReview:boardRoom ? (goalId, reviewId, evidence) => actions.goalReviewResolve(boardRoom.id, goalId, reviewId, evidence) : undefined,
+      close:actions.closePersonalBoard })) : null,
     pane ? h(OverlayBoundary, {
       name: 'panel', active: shown !== null, notify: shown !== null,
       reset: `${roster.byId[pane.id]?.id ?? roster.roomsById[pane.id]?.id ?? pane.id}:${pane.view}:${pane.tab ?? ''}:${pane.side ?? ''}:${pane.task?.botId ?? ''}:${pane.task?.taskId ?? ''}:${workspace?.active ?? ''}`,

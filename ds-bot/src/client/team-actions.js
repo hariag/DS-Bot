@@ -95,15 +95,15 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     // The pane starts at the rail's edge, so a floating drawer would stick out from under it.
     openNewChat: (mode, sectionId = null) => { ui.set(state => ({ ...state, newChat: mode, newChatSection: sectionId ?? null, inbox: false, inboxTarget: null, menu: null, palette: null, leftDrawer: false })) },
     // The inbox page sits over the conversation column like New chat (inbox.js).
-    openInbox: () => { ui.set(state => ({ ...state, inbox: true, inboxTarget: null, inboxBoardTarget: null, newChat: null, newChatSection: null, exchange: null, menu: null, palette: null, groupSearch: null, leftDrawer: false })) },
+    openInbox: () => { ui.set(state => ({ ...state, inbox: true, inboxTarget: null, newChat: null, newChatSection: null, exchange: null, menu: null, palette: null, groupSearch: null, leftDrawer: false })) },
     closeInbox: () => { ui.set(state => (state.inbox ? { ...state, inbox: false, inboxTarget: null } : state)) },
-    // A board request belongs to the same Session navigation that closes the inbox.
+    // A board belongs to a stable team identity even while its DSH Session opens or changes.
     openInboxTaskBoard: (chatId) => {
-      const sessionId = partFor(chatId)
-      ui.set(state => (state.inboxTarget === sessionId ? { ...state, inboxBoardTarget: sessionId } : state))
-    },
-    consumeInboxTaskBoard: (sessionId) => {
-      ui.set(state => (state.inboxBoardTarget === sessionId ? { ...state, inboxBoardTarget: null } : state))
+      const snapshot = roster.getSnapshot()
+      const room = snapshot.roomsById?.[chatId]
+      const bot = snapshot.byId?.[chatId]
+      const scope = room ? { kind:'room', id:room.id } : bot ? { kind:'personal', id:bot.id } : undefined
+      if (scope) ui.set(state => ({ ...state, inbox:false, inboxTarget:null, personalBoard:scope }))
     },
     openPalette: (query = '') => { ui.set(state => ({ ...state, palette: { query, token: Date.now() }, newChat: null, menu: null })) },
     // The token keeps a late exit timer from closing a palette opened again since.

@@ -23982,18 +23982,18 @@ function teamActions({ call: call2, after, partFor, roster, ui, live, cards, hel
     },
     // The inbox page sits over the conversation column like New chat (inbox.js).
     openInbox: () => {
-      ui.set((state) => ({ ...state, inbox: true, inboxTarget: null, inboxBoardTarget: null, newChat: null, newChatSection: null, exchange: null, menu: null, palette: null, groupSearch: null, leftDrawer: false }));
+      ui.set((state) => ({ ...state, inbox: true, inboxTarget: null, newChat: null, newChatSection: null, exchange: null, menu: null, palette: null, groupSearch: null, leftDrawer: false }));
     },
     closeInbox: () => {
       ui.set((state) => state.inbox ? { ...state, inbox: false, inboxTarget: null } : state);
     },
-    // A board request belongs to the same Session navigation that closes the inbox.
+    // A board belongs to a stable team identity even while its DSH Session opens or changes.
     openInboxTaskBoard: (chatId) => {
-      const sessionId = partFor(chatId);
-      ui.set((state) => state.inboxTarget === sessionId ? { ...state, inboxBoardTarget: sessionId } : state);
-    },
-    consumeInboxTaskBoard: (sessionId) => {
-      ui.set((state) => state.inboxBoardTarget === sessionId ? { ...state, inboxBoardTarget: null } : state);
+      const snapshot = roster.getSnapshot();
+      const room2 = snapshot.roomsById?.[chatId];
+      const bot = snapshot.byId?.[chatId];
+      const scope = room2 ? { kind: "room", id: room2.id } : bot ? { kind: "personal", id: bot.id } : void 0;
+      if (scope) ui.set((state) => ({ ...state, inbox: false, inboxTarget: null, personalBoard: scope }));
     },
     openPalette: (query = "") => {
       ui.set((state) => ({ ...state, palette: { query, token: Date.now() }, newChat: null, menu: null }));
@@ -49826,16 +49826,9 @@ function ItemBody({ item, bot, summary, roster, actions, hooks }) {
         actions.openConnectors();
       });
     case "board-delivery":
-      return compact2("Task board", () => {
-        const id = item.roomId ?? item.botId;
-        actions.openSession(id);
-        actions.openInboxTaskBoard(id);
-      });
+      return compact2("Task board", () => actions.openInboxTaskBoard(item.roomId ?? item.botId));
     case "linear-sync":
-      return item.roomId ? compact2("Task board", () => {
-        actions.openSession(item.roomId);
-        actions.openInboxTaskBoard(item.roomId);
-      }) : compact2("My task board", () => {
+      return item.roomId ? compact2("Task board", () => actions.openInboxTaskBoard(item.roomId)) : compact2("My task board", () => {
         actions.closeInbox();
         actions.openPersonalBoard();
       });
@@ -73611,17 +73604,6 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
     pending: botPendingOf(roster, bot)
   }) : "idle";
   const room2 = roster.roomsById[sessionId];
-  const inboxBoard = useUi((state) => state.inboxTarget === sessionId && state.inboxBoardTarget === sessionId);
-  (0, import_react83.useEffect)(() => {
-    if (!inboxBoard || !(room2 || bot)) return;
-    if (away) {
-      selectView("chat");
-      return;
-    }
-    setBoardReview(false);
-    setBoardOpen(true);
-    actions.consumeInboxTaskBoard(sessionId);
-  }, [inboxBoard, room2?.id, bot?.id, away, sessionId]);
   const goal = room2?.goal;
   const goalCompose = useUi((state) => room2 !== void 0 && state.goalCompose === room2.id);
   const goalOpen = useUi((state) => room2 !== void 0 && state.goalOpen === room2.id);
@@ -79923,7 +79905,7 @@ function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useActivity
   const boardSession = (0, import_react99.useRef)(current2);
   (0, import_react99.useEffect)(() => {
     if (!current2 || boardSession.current === current2) return;
-    if (boardSession.current) actions.closePersonalBoard?.();
+    if (boardSession.current && ui.personalBoard === true) actions.closePersonalBoard?.();
     boardSession.current = current2;
   }, [current2]);
   const open = ui.details ? { id: ui.details, view: ui.view ?? "details", renaming: ui.renaming, tab: ui.tab, side: ui.side, task: ui.task } : null;
@@ -80057,6 +80039,9 @@ function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useActivity
   }, [canAutoRelease, rnCurrent, actions]);
   const paletteToken = ui.palette?.token;
   const groupSearchToken = ui.groupSearch?.token;
+  const boardScope = ui.personalBoard === true ? { kind: "personal", id: "user" } : ui.personalBoard;
+  const boardRoom = boardScope?.kind === "room" ? roster.roomsById?.[boardScope.id] : void 0;
+  const boardTitle = boardRoom?.name ?? roster.byId?.[boardScope?.id]?.name ?? t("My task board");
   return (0, import_react99.createElement)(
     import_react99.Fragment,
     null,
@@ -80070,12 +80055,20 @@ function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useActivity
       { name: "opening", reset: opening.id, notify: false },
       (0, import_react_dom17.createPortal)((0, import_react99.createElement)(OpeningCover, { model: opening, column: layout.column, onNewSession: actions?.recoverOpening, onRetry: actions?.retryOpening }), document.body)
     ) : null,
-    ui.personalBoard ? (0, import_react99.createElement)(OverlayBoundary, {
-      name: "personal-board",
-      reset: "personal",
+    boardScope ? (0, import_react99.createElement)(OverlayBoundary, {
+      name: "task-board",
+      reset: `${boardScope.kind}:${boardScope.id}`,
       onDismiss: () => actions.closePersonalBoard?.(),
       actions
-    }, (0, import_react99.createElement)(TaskBoard, { scope: { kind: "personal", id: "user" }, title: t("My task board"), close: actions.closePersonalBoard })) : null,
+    }, (0, import_react99.createElement)(TaskBoard, {
+      scope: boardScope,
+      title: boardTitle,
+      goal: boardRoom?.goal,
+      refreshGoal: actions.refreshTeam,
+      currentRoomGoal: actions.currentRoomGoal,
+      resolveReview: boardRoom ? (goalId, reviewId, evidence) => actions.goalReviewResolve(boardRoom.id, goalId, reviewId, evidence) : void 0,
+      close: actions.closePersonalBoard
+    })) : null,
     pane ? (0, import_react99.createElement)(OverlayBoundary, {
       name: "panel",
       active: shown !== null,
@@ -83907,7 +83900,7 @@ function apply(ctx) {
     }
   };
   actions.seatAccount = (on) => ui.set((state) => state.accountSeated === on ? state : { ...state, accountSeated: on });
-  actions.openPersonalBoard = () => ui.set((state) => state.personalBoard ? state : { ...state, personalBoard: true });
+  actions.openPersonalBoard = () => ui.set((state) => state.personalBoard === true ? state : { ...state, personalBoard: true });
   actions.closePersonalBoard = () => ui.set((state) => state.personalBoard ? { ...state, personalBoard: false } : state);
   actions.installUpdate = async () => {
     const value = await call("update-install");
