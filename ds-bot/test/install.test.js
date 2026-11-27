@@ -149,6 +149,7 @@ test('apply registers core listeners and effects in dependency order', (t) => {
     'on workspace/session-activity',
     'on agent/status',
     'on llm/stream',
+    'effect ds-bot: chat previews',
     'on session/event',
     'on agent/disposed',
     'effect ds-bot: bot-tasks approval bridge',
