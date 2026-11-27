@@ -436,6 +436,116 @@ test('the board owner can confirm a consumed review input without entering a ver
   assert.equal(deliveries.length, 2)
 })
 
+for (const dispatchState of ['uncertain','accepted']) test(`the board owner can cancel a card with ${dispatchState} delivery only after the archived Session proves it stopped`, async t => {
+  const { rt, home, deliveries } = fixture(t)
+  const card = await rt.boardCall('board-command', create)
+  const call = (type, operationId, revision) => rt.boardCall('board-command', {
+    scope, type, operationId, taskId:card.id, expectedRevision:revision,
+  })
+  const ready = await call('schedule', 'held-cancel-schedule', card.revision)
+  await settle(async () => deliveries.length === 1)
+
+  const path = join(home, 'board-v1', 'tasks.sqlite')
+  let task = ready
+  if (dispatchState === 'uncertain') {
+    const db = openTaskStore(path, { assertWriteLock() {} })
+    try { assert.equal(db.holdInterruptedAdmissions(), 1) } finally { db.close() }
+  } else {
+    const tool = rt.teamTools.find(item => item.name === 'board_task')
+    task = JSON.parse(await tool.execute({ action:'start', task_id:card.id, room_id:scope.id, expected_revision:ready.revision,
+      operation_id:'held-cancel-start' }, { agent:{ id:'chat-one' } })).task
+    assert.equal(task.status, 'working')
+    delete rt.state.rooms[scope.id]
+    assert.equal((await rt.boardCall('board-list', { scope })).retired, true)
+  }
+  const { sessionId, message } = deliveries[0]
+  const readCard = async () => (await rt.boardCall('board-list', { scope })).tasks.find(item => item.id === card.id)
+  assert.equal((await readCard()).dispatchState, dispatchState)
+  await assert.rejects(call('cancel', 'held-cancel-generic', task.revision), /original delivery|task action unresolved/i)
+
+  rt.chatOf = id => id === 'one' ? 'chat-one-current' : `chat-${id}`
+  rt.live = new Map()
+  rt.ctx.sessions.get = () => undefined
+  rt.ctx.workspaceRegistry = { archivedSessionIds:[] }
+  let activity = []
+  rt.ctx.waterfall = async (name, { sessionId:target }) => {
+    assert.equal(name, 'workspace/session-activity')
+    assert.equal(target, sessionId)
+    return activity
+  }
+  const events = [
+    { seq:0, type:'agent/inbox/spliced', data:{ target:'next-turn', start:0, removedCount:0, inserted:[message] } },
+    { seq:1, type:'turn/start', data:{ turn:1 } },
+    { seq:2, type:'agent/inbox/spliced', data:{ target:'next-turn', start:0, removedCount:1, inserted:[] } },
+    { seq:3, type:'user/message', data:structuredClone(message) },
+    { seq:4, type:'turn/end', data:{ turn:1, reason:{ kind:'completed' } } },
+  ]
+  let persisted = events
+  let handles = 0
+  let readGate = Promise.resolve()
+  rt.ctx.sessionPersistence = {
+    stat:async sid => ({ header:{ id:sid }, revision:'stable', sizeBytes:512, formatStatus:'current', eventCount:persisted.length }),
+    open:async (sid, access) => {
+      assert.equal(sid, sessionId)
+      assert.equal(access, 'write')
+      handles++
+      return { id:sid, header:{ id:sid }, access, inheritedEventCount:0,
+        read:async (offset, limit) => {
+          await readGate
+          return { events:persisted.slice(offset, offset + limit) }
+        },
+        close:async () => { handles-- },
+      }
+    },
+  }
+
+  const proofError = /original delivery could not be shown to have stopped/i
+  await assert.rejects(call('close-held-delivery', 'held-close-live', task.revision), proofError)
+  assert.equal(handles, 0)
+  rt.ctx.workspaceRegistry.archivedSessionIds.push(sessionId)
+  activity = [{ kind:'job' }]
+  await assert.rejects(call('close-held-delivery', 'held-close-busy', task.revision), proofError)
+  activity = []
+  persisted = events.slice(0, -1)
+  await assert.rejects(call('close-held-delivery', 'held-close-no-end', task.revision), proofError)
+  persisted = events.with(3, { ...events[3], data:{ ...message, role:'assistant' } })
+  await assert.rejects(call('close-held-delivery', 'held-close-wrong-input', task.revision), proofError)
+  assert.equal((await readCard()).dispatchState, dispatchState)
+  assert.equal(handles, 0)
+
+  persisted = events
+  const payload = () => call('close-held-delivery', 'held-close-proven', task.revision)
+  const gate = Promise.withResolvers()
+  readGate = gate.promise
+  const first = payload()
+  let duplicate
+  try {
+    await settle(async () => handles === 1)
+    duplicate = payload().catch(error => error)
+    await new Promise(resolve => setImmediate(resolve))
+  } finally { gate.resolve() }
+  const closed = await first
+  const second = await duplicate
+  if (second instanceof Error) assert.match(second.message, /in progress/i)
+  else assert.deepEqual(second, closed)
+  assert.equal(closed.status, 'cancelled')
+  assert.equal(closed.revision, task.revision + 1)
+  assert.equal((await readCard()).status, 'cancelled')
+  rt.ctx.workspaceRegistry.archivedSessionIds.length = 0
+  assert.deepEqual(await payload(), closed)
+  assert.equal(deliveries.length, 1, 'closing an old delivery does not dispatch new work')
+  assert.equal(handles, 0)
+
+  const journal = new DatabaseSync(path, { readOnly:true })
+  try {
+    const action = journal.prepare('SELECT state, receipt FROM actions WHERE task_id=?').get(card.id)
+    assert.equal(action.state, 'cancelled')
+    assert.equal(action.receipt, `dsh-message:${message.id}`)
+    const decision = journal.prepare('SELECT actor, previous_state, outcome FROM admission_decisions WHERE operation_id=?').get('held-close-proven')
+    assert.deepEqual([decision.actor, decision.previous_state, decision.outcome], ['user',dispatchState,'cancelled'])
+  } finally { journal.close() }
+})
+
 test('owner moves a personal card with a durable receipt without changing shared workflow', async t => {
   const { rt } = fixture(t), personal={kind:'personal',id:'user'}
   await rt.boardCall('board-command',{scope:personal,operationId:'personal-create',taskId:'mine',type:'create',value:{title:'Mine',owner:'user',reviewer:'one',acceptance:'Check',dependencies:[]}})

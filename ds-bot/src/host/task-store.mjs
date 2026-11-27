@@ -192,7 +192,7 @@ const applyCardDetails = (target, value) => {
 }
 
 /** Open a private task journal. The containing directory must be private. */
-export function openTaskStore(path, { conversationKind = () => 'group', onProjectEvent, onTaskCommit, authorize = () => false, verifyRegistration = () => false, verifyEvidence = () => false, verifyGoalItems = () => false, verifyReceipt = () => false, verifyReviewRecovery = () => false, verifyInvalidation = () => false, verifyAttachment = () => false, verifyShare = () => false, verifyDependency = () => false, verifyAdmission = () => false, recoveryRoster = () => undefined, assertWriteLock = () => { throw new Error('write lock required') } } = {}) {
+export function openTaskStore(path, { conversationKind = () => 'group', onProjectEvent, onTaskCommit, authorize = () => false, verifyRegistration = () => false, verifyEvidence = () => false, verifyGoalItems = () => false, verifyReceipt = () => false, verifyReviewRecovery = () => false, verifyClosedDelivery = () => undefined, verifyInvalidation = () => false, verifyAttachment = () => false, verifyShare = () => false, verifyDependency = () => false, verifyAdmission = () => false, recoveryRoster = () => undefined, assertWriteLock = () => { throw new Error('write lock required') } } = {}) {
   if (!isAbsolute(path)) throw new Error('database path must be absolute')
   const dir = lstatSync(dirname(path))
   if (!isPrivateDirectory(dirname(path), dir)) throw new Error('database directory must be private')
@@ -694,6 +694,37 @@ const releaseIsDone = release => {
     return start.operation_id
   }
   const restartReason = 'process restarted; delivery outcome unknown'
+  const getAdmission = db.prepare('SELECT i.*,a.state FROM admission_intents i JOIN actions a ON a.id=i.action_id WHERE i.action_id=?')
+  const admission = id => {
+    const row = getAdmission.get(id)
+    return row ? { actionId:row.action_id, admissionId:row.admission_id, messageId:row.message_id, targetBotId:row.target_bot_id, targetSessionId:row.target_session_id, taskRevision:row.task_revision, actionRevision:row.action_revision, payloadHash:row.payload_hash, payload:JSON.parse(row.payload), state:row.state } : undefined
+  }
+  const getOpenActions = db.prepare("SELECT * FROM actions WHERE task_id=? AND state IN ('claimed','accepted','uncertain')")
+  const latestDecision = db.prepare('SELECT * FROM admission_decisions WHERE action_id=? ORDER BY rowid DESC LIMIT 1')
+  const acceptedReceipt = db.prepare(`SELECT 1 FROM history
+    WHERE operation_id=? AND task_id=? AND actor='scheduler' AND json_extract(after,'$.id')=?
+      AND json_extract(after,'$.state')='accepted' AND json_extract(after,'$.receipt')=?`)
+  const heldDelivery = task => {
+    if (!task || task.archivedAt || !['ready','working','reported'].includes(task.status)) return
+    const [action, other] = getOpenActions.all(task.id)
+    const kind = task.status === 'reported' ? 'review' : 'execute'
+    const actor = kind === 'review' ? task.reviewer : task.owner
+    if (!action || other || action.kind !== kind || action.actor !== actor || action.revision !== task.actionRevision
+      || !['accepted','uncertain'].includes(action.state)) return
+    const intent = admission(action.id)
+    if (!intent || intent.targetBotId !== actor || intent.actionRevision !== action.revision
+      || intent.payload?.id !== intent.messageId || intent.payload.source?.taskAction?.id !== action.id
+      || digest(intent.payload) !== intent.payloadHash) return
+    const receipt = `dsh-message:${intent.messageId}`
+    if (action.state === 'accepted' && action.receipt !== receipt) return
+    if (action.state === 'uncertain') {
+      const decision = latestDecision.get(action.id)
+      if (action.receipt !== restartReason || !decision || decision.actor !== 'scheduler' || decision.admission_id !== intent.admissionId
+        || decision.previous_state !== 'accepted' || decision.outcome !== 'uncertain' || decision.reason !== restartReason) return
+    }
+    if (!acceptedReceipt.get(`action:${action.id}:accepted`, task.id, action.id, receipt)) return
+    return { action, intent, receipt }
+  }
   const uncertainDeliveries = db.prepare(`SELECT a.id, a.actor, a.task_id AS taskId,
       json_extract(t.body,'$.scope') AS scope, (SELECT d.created_at FROM admission_decisions d
         WHERE d.action_id=a.id ORDER BY d.rowid DESC LIMIT 1) AS heldAt
@@ -1202,11 +1233,8 @@ const releaseIsDone = release => {
         return { proposal: next, ...(applied === undefined ? {} : { applied }) }
       })
     },
-    admission(id) {
-      requireId(id, 'action id')
-      const row = db.prepare('SELECT i.*,a.state FROM admission_intents i JOIN actions a ON a.id=i.action_id WHERE i.action_id=?').get(id)
-      return row ? { actionId:row.action_id, admissionId:row.admission_id, messageId:row.message_id, targetBotId:row.target_bot_id, targetSessionId:row.target_session_id, taskRevision:row.task_revision, actionRevision:row.action_revision, payloadHash:row.payload_hash, payload:JSON.parse(row.payload), state:row.state } : undefined
-    },
+    admission(id) { return admission(requireId(id, 'action id')) },
+    heldDelivery,
     restartHeldAdmission:expectedHeldAdmission,
     restartHeldReview(taskId, expectedRevision, actor, sessionId) {
       const held = expectedHeldAdmission(taskId, expectedRevision, actor, sessionId)
@@ -1305,7 +1333,7 @@ const releaseIsDone = release => {
       }
     },
     history(id) {
-      const rows = db.prepare(`SELECT h.before,h.after,
+      const rows = db.prepare(`SELECT h.operation_id,h.before,h.after,
           CASE WHEN d.operation_id='owner-start-confirmed:'||d.action_id THEN d.created_at END AS confirmed_at,
           CASE WHEN d.operation_id!='owner-start-confirmed:'||d.action_id THEN d.created_at END AS consumed_at
         FROM history h LEFT JOIN admission_decisions d
@@ -1329,6 +1357,7 @@ const releaseIsDone = release => {
         const moved = typeof origin === 'string' && before?.scope === `room:${origin}` && before.scope !== after.scope
         return { before:project(before,moved), after:project(after,moved),
           ...(moved ? { recoveredFromRoomId:origin } : {}),
+          ...(after.deliveryEvidence ? { operationId:row.operation_id, deliveryClosed:after.deliveryEvidence } : {}),
           ...(row.confirmed_at ? { deliveryConfirmedAt:Date.parse(row.confirmed_at) } : {}),
           ...(row.consumed_at ? { deliveryConsumedAt:Date.parse(row.consumed_at) } : {}) }
       }) }
@@ -1430,7 +1459,7 @@ const releaseIsDone = release => {
         addHistory.run(operationId, actor, id, null, JSON.stringify(record)); recordCommit(null, record, { operationId, actor }); coordination.taskChanged(null,record,{operationId,actor}); return ready(record)
       })
     },
-    command({ operationId, taskId, expectedRevision, actor, type, value, sessionId, reviewRecovery }) {
+    command({ operationId, taskId, expectedRevision, actor, type, value, sessionId, reviewRecovery, closedDelivery }) {
       requireId(taskId, 'task id'); requireId(actor, 'actor')
       if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw new Error('invalid revision')
       const payload = { type, taskId, expectedRevision, actor, ...(value !== undefined ? { value } : {}) }; stable(payload)
@@ -1557,11 +1586,23 @@ const releaseIsDone = release => {
           case 'submit':
             if (actor !== 'user' || old.status !== 'draft' || isUnassignedItemDraft(old)) throw new Error('invalid state')
             next.status = 'proposed'; break
-          case 'cancel': {
+          case 'cancel':
+          case 'close-held-delivery': {
             if (actor !== 'user' || old.status === 'done' || old.status === 'cancelled') throw new Error('invalid state')
-            if (unresolved(old.id)) throw new Error('task action unresolved')
-            const reason = value === undefined ? 'Cancelled by the user' : (typeof value?.reason === 'string' && value.reason.trim() ? value.reason.trim().slice(0, 500) : '')
+            let reason = value === undefined ? 'Cancelled by the user' : (typeof value?.reason === 'string' && value.reason.trim() ? value.reason.trim().slice(0, 500) : '')
             if (!reason) throw new Error('invalid cancellation reason')
+            if (type === 'close-held-delivery') {
+              const held = heldDelivery(old)
+              const evidence = held && verifyClosedDelivery(held, closedDelivery)
+              if (!evidence) throw Object.assign(new Error('The original delivery could not be shown to have stopped. The card was not changed.'), { code:'bot/invalid' })
+              reason = 'Cancelled by the user after verifying the original Bot turn had ended'
+              const { action, intent, receipt } = held
+              const changed = db.prepare("UPDATE actions SET state='cancelled',receipt=? WHERE id=? AND state=?").run(receipt, action.id, action.state).changes
+              if (changed !== 1) throw new Error('revision conflict')
+              db.prepare('INSERT INTO admission_decisions(operation_id,action_id,admission_id,actor,task_revision,previous_state,outcome,reason,created_at) VALUES(?,?,?,?,?,?,?,?,?)')
+                .run(operationId, action.id, intent.admissionId, actor, old.revision, action.state, 'cancelled', reason, new Date().toISOString())
+              addHistory.run(operationId, actor, old.id, JSON.stringify(action), JSON.stringify({ ...action, state:'cancelled', receipt, deliveryEvidence:evidence }))
+            } else if (unresolved(old.id)) throw new Error('task action unresolved')
             db.prepare("UPDATE actions SET state='cancelled' WHERE task_id=? AND state='pending'").run(old.id)
             next.status = 'cancelled'; next.actionRevision = null
             next.blocked = { reason, condition: 'user restores the task', owner: 'user' }
@@ -1853,7 +1894,7 @@ const releaseIsDone = release => {
           comments.push({ id:operationId, author:actor, at, workflowAction:type, ...reply })
           next.comments = comments
         }
-        if(['edit','card-details','card-comment','card-comment-edit','card-comment-delete','move-item','move-goal-item','reorder','personal-progress','attach','remove-image','share','unshare','submit','cancel','restore','release-assign'].includes(type)) {
+        if(['edit','card-details','card-comment','card-comment-edit','card-comment-delete','move-item','move-goal-item','reorder','personal-progress','attach','remove-image','share','unshare','submit','cancel','close-held-delivery','restore','release-assign'].includes(type)) {
           const activity=Array.isArray(old.boardActivity)?old.boardActivity:[]
           next.boardActivity=[...activity,{id:operationId,actor,type,at:Date.now()}].slice(-50)
         }

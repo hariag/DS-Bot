@@ -86,7 +86,10 @@ const releaseItemsDone = release => Number.isSafeInteger(release?.itemCount) && 
 const formatMoment = value => {
   try { return new Date(value).toLocaleString(dateLocale()) } catch { return '' }
 }
-const confirmCommands = new Set(['edit', 'card-details', 'goal-task-edit', 'goal-history-title', 'goal-card-details'])
+const confirmCommands = new Set(['edit', 'card-details', 'goal-task-edit', 'goal-history-title', 'goal-card-details', 'close-held-delivery'])
+const boardActionError = message => message === 'task action unresolved'
+  ? t('The task still has an open delivery. Refresh the board and check the original delivery before cancelling.')
+  : hostText(message)
 const CONFIRM_FIELD_LABELS = {
   title:'Title', owner:'Owner', reviewer:'Reviewer', acceptance:'Acceptance criteria', dependencies:'Dependencies',
   description:'Description', stage:'Work stage', dueDate:'Due date', dueComplete:'Due date complete', labels:'Labels', checklist:'Checklist',
@@ -706,6 +709,7 @@ const imagesOf = task => Array.isArray(task.images) ? task.images : []
 const labelsOf = task => Array.isArray(task.labels) ? task.labels : []
 const dependenciesOf = task => Array.isArray(task.dependencies) ? task.dependencies.map(asText).filter(Boolean) : []
 const commandOf = (commands, type) => Array.isArray(commands) && commands.some(command => command?.type === type)
+const canCancelTask = (task, commands) => !['done', 'cancelled'].includes(task.status) && commandOf(commands, 'cancel')
 const stageLabelOf = task => task?.legacy ? ({current:'Current goal task',previous:'Earlier goal stage',future:'Upcoming goal stage',archived:'Archived goal task',closed:'Closed goal task'})[task.legacy.position] ?? t('Goal task') : t(STATUS_LABELS[task?.status] ?? 'Status unknown')
 const actorName = (value, actors) => actorLabel(value, actors) || t('Unknown')
 // A closed <details> hides its body but keeps the direct <summary> visible.
@@ -1511,7 +1515,8 @@ function CommentsEditor({ task, actors, canPost, canEdit, canDelete, disabled, p
 
 const ACTIVITY_LABELS = { edit:'Task edited', details:'Card details updated', 'card-details':'Card details updated', comment:'Comment added', 'card-comment':'Comment added',
   'card-comment-edit':'Comment edited', 'card-comment-delete':'Comment deleted', attach:'Images added', 'remove-image':'Image removed',
-  'personal-progress':'Personal progress updated', share:'Task shared', unshare:'Share revoked', reorder:'Card reordered', create:'Card created' }
+  'personal-progress':'Personal progress updated', share:'Task shared', unshare:'Share revoked', reorder:'Card reordered', create:'Card created',
+  'close-held-delivery':'Original delivery closed and card cancelled' }
 function ActivitySection({ task }) {
   const activity = Array.isArray(task.boardActivity) ? task.boardActivity : []
   if (!activity.length) return null
@@ -1533,8 +1538,10 @@ function SideSection({ title, action, children, className = '' }) {
 function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand, notice }) {
   const progress = PERSONAL_COLUMNS.find(([id]) => id === task.personalProgress)
   const canSubmit = commandOf(commands, 'submit') && task.status === 'draft'
-  const canCancel = commandOf(commands, 'cancel') && !['done','cancelled'].includes(task.status)
+  const canCancel = canCancelTask(task, commands)
+  const canCloseDelivery = commandOf(commands, 'close-held-delivery')
   const canRestore = commandOf(commands, 'restore') && task.status === 'cancelled'
+  const heldDelivery = !canCancel && ['claimed', 'accepted', 'uncertain'].includes(task.dispatchState)
   const moves = [
       canSubmit ? { key:'submit', label:t('Preparing'), run:() => onCommand(task, { type:'submit' }) } : null,
       canSchedule ? { key:'schedule', label:t('Ready'), run:() => onCommand(task, { type:'schedule' }) } : null,
@@ -1553,6 +1560,11 @@ function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand
     task.dispatchState === 'uncertain' ? h('p', { className: 'bt-card-warning', role: 'status' }, t('The Bot message may or may not have reached its Session. Check the delivery before scheduling again.')) : null,
     commandOf(commands, 'confirm-delivery') ? h('button', { type:'button', className:'bt-btn bt-btn-block', disabled,
       onClick: () => void onCommand(task, { type:'confirm-delivery' }) }, t('Verify original delivery')) : null,
+    heldDelivery ? h('p', { className:'bt-card-note' }, t(canCloseDelivery
+      ? 'Check the original delivery before deciding whether to close it and cancel this card.'
+      : 'Cancellation is unavailable while delivery is unresolved. Check the Bot session for progress.')) : null,
+    canCloseDelivery ? h('button', { type:'button', className:'bt-btn bt-btn-ghost bt-btn-block bt-card-cancel', disabled,
+      onClick:() => void onCommand(task, { type:'close-held-delivery' }) }, t('Close delivery and cancel card')) : null,
     canMove ? h('label', { className: 'bt-field' }, h('span', null, t('Personal progress')), h('select', { value: task.personalProgress, disabled, 'aria-label': t('Move personal task'), onChange: event => void onCommand(task, { type: 'personal-progress' }, { progress: event.target.value }) }, PERSONAL_COLUMNS.map(([id, label]) => h('option', { key: id, value: id }, t(label))))) : null,
     canSchedule ? h('button', { type: 'button', className: 'bt-btn bt-btn-primary bt-btn-block', disabled, onClick: () => void onCommand(task, { type: 'schedule' }) }, t('Schedule Bot')) : null,
     commandOf(commands, 'unblock') ? h('button', { type: 'button', className: 'bt-btn bt-btn-block', disabled,
@@ -1705,7 +1717,7 @@ function FactsBlock({ task }) {
     h('div', { className: 'bt-card-facts' },
       h(Fact, { label: t('Acceptance criteria'), value: textValue(task.acceptance) }),
       h(Fact, { label: t('Next action'), value: asText(task.nextAction) }),
-      h(Fact, { label: t('Blocked'), value: [asText(task.blocked), blockedReason(task.blocked)].filter(Boolean).join(' · ') }),
+      h(Fact, { label: t('Blocked'), value: [hostText(asText(task.blocked)), blockedReason(task.blocked)].filter(Boolean).join(' · ') }),
       h(Fact, { label: t('Evidence'), value: evidence }),
       h(Fact, { label: t('Target version'), value: asText(task.authority) }),
       task.legacy ? h(Fact, { label: t('Goal task note'), value: textValue(task.goalNote) }) : null,
@@ -1909,6 +1921,8 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, retired
   const [titleError, setTitleError] = useState('')
   lightboxRef.current = lightbox
   confirmationRef.current = confirmation
+  const confirmingCloseDelivery = confirmation?.command.type === 'close-held-delivery'
+  const confirmationTitle = t(confirmingCloseDelivery ? 'Close delivery and cancel card' : 'Confirm change')
   const legacy = !!task.legacy
   const detailsType = legacy ? 'goal-card-details' : 'card-details'
   const commentType = legacy ? 'goal-card-comment' : 'card-comment'
@@ -2023,18 +2037,20 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, retired
         h('div', { className: 'bt-card-modal-actions' },
           canRename && !editingTitle ? h('button', { type: 'button', className: 'bt-icon-btn', 'aria-label': t('Rename card'), title: t('Rename card'), onClick: () => { setTitleDraft(textValue(task.title)); setEditingTitle(true) } }, h(PencilIcon)) : null,
           h('button', { type: 'button', className: 'bt-icon-btn', 'aria-label': t('Close card'), 'data-close-card': 'true', onClick: onClose }, h(CloseIcon)))),
-      confirmation ? h('section', { ref: confirmBox, className: 'bt-card-confirm', role: 'alertdialog', 'aria-label': t('Confirm change'), tabIndex: -1 },
+      confirmation ? h('section', { ref: confirmBox, className: 'bt-card-confirm', role: 'alertdialog', 'aria-label': confirmationTitle, tabIndex: -1 },
         h('div', { className: 'bt-card-confirm-head' },
-          h('h3', null, t('Confirm change')),
-          h('p', null, t('Review the before and after values before applying this change.'))),
-        h('div', { className: 'bt-card-diff' }, confirmation.rows.length ? confirmation.rows.map(row => h('div', { key: row.field, className: 'bt-card-diff-row' },
+          h('h3', null, confirmationTitle),
+          h('p', null, t(confirmingCloseDelivery
+            ? 'Cancel this card, stop further delivery attempts, and preserve the original delivery record. Review any work already done in the Bot session or external services separately.'
+            : 'Review the before and after values before applying this change.'))),
+        confirmingCloseDelivery ? null : h('div', { className: 'bt-card-diff' }, confirmation.rows.length ? confirmation.rows.map(row => h('div', { key: row.field, className: 'bt-card-diff-row' },
           h('strong', null, t(row.label)),
           h('div', { className: 'bt-card-diff-values' },
             h('span', null, h('b', null, t('Before') + ': '), row.before),
             h('span', null, h('b', null, t('After') + ': '), row.after)))) : h('p', { className: 'bt-card-note' }, t('No visible field changes.'))),
         h('div', { className: 'bt-card-editor-actions' },
-          h('button', { type: 'button', className: 'bt-btn bt-btn-ghost', onClick: cancelConfirmation }, t('Cancel')),
-          h('button', { type: 'button', className: 'bt-btn bt-btn-primary', onClick: () => void applyConfirmation() }, t('Confirm')))) : null,
+          h('button', { type: 'button', className: 'bt-btn bt-btn-ghost', onClick: cancelConfirmation }, t(confirmingCloseDelivery ? 'Go back' : 'Cancel')),
+          h('button', { type: 'button', className: 'bt-btn bt-btn-primary', onClick: () => void applyConfirmation() }, t(confirmingCloseDelivery ? 'Confirm cancellation' : 'Confirm')))) : null,
       pending ? h('div', { className: 'bt-card-banner', role: 'status' }, t(busy ? 'Saving…' : 'An action needs confirmation.'), ' ',
         h('button', { type: 'button', className: 'bt-card-mini', onClick: () => onCheck(pending) }, t('Check action')), ' ',
         h('button', { type: 'button', className: 'bt-card-mini', disabled: cancelBusy, onClick: () => onCancel(pending) }, t('Safely cancel pending request')))
@@ -2062,7 +2078,7 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, retired
           h(CommentsEditor, { task, actors, canPost: canComment, canEdit: canEditComment, canDelete: canDeleteComment, disabled: uncertain || busy, postType: commentType, onCommand }),
           h(ActivitySection, { task })),
         h('aside', { className: 'bt-card-side' },
-          h(StatusBlock, { task, commands, canMove, canSchedule, disabled: uncertain || busy, onCommand }),
+          h(StatusBlock, { task, commands, canMove, canSchedule, disabled: uncertain || busy, onCommand:confirmCommand }),
           retired && task.releaseId && commandOf(commands, 'release-assign') ? h(SideSection, { title:t('Release') },
             h('button', { type:'button', className:'bt-btn bt-btn-block', disabled:uncertain || busy || !!pending,
               onClick:() => void onCommand(task, { type:'release-assign' }, { releaseId:null }) }, t('Remove from release'))) : null,
@@ -2582,7 +2598,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
   const settle = async (id, result, epoch) => {
     if (!current(epoch) || pendingRef.current !== id) return
     if (!finalOperation(result?.state)) { setError(t('Action outcome is unknown; check it before making another change.')); return }
-    if (result.state === 'rejected') setError(result.message ? hostText(result.message) : t('Action rejected'))
+    if (result.state === 'rejected') setError(result.message ? boardActionError(result.message) : t('Action rejected'))
     const refreshed = await load(epoch, true) || (await new Promise(resolve => setTimeout(resolve, 180)), await load(epoch, true))
     if (!refreshed || !current(epoch) || pendingRef.current !== id) return
     store.current?.clear(); pendingRef.current = ''; setPending('')
@@ -2700,7 +2716,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
       return state
     } catch (caught) {
       if (current(epoch) && pendingRef.current === operationId) return await check(operationId, epoch)
-      if (current(epoch) && !pendingRef.current && fetching.current === operationId) setError(caught?.message || t('Unable to save action'))
+      if (current(epoch) && !pendingRef.current && fetching.current === operationId) setError(boardActionError(caught?.message) || t('Unable to save action'))
     } finally { if (fetching.current === operationId) { fetching.current = null; if (current(epoch)) setBusy(false) } }
   }
   const undoReorder = afterId => async taskId => {
@@ -2783,8 +2799,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
     } catch (caught) { setError(hostText(caught?.message) || t('Unable to archive cards')) }
     finally { setBulkBusy(false) }
   }
-  const bulkCancel = async () => {
-    const ids = [...selectedIds]
+  const bulkCancel = async ids => {
     if (!ids.length || bulkBusy || !window.crypto?.randomUUID) return
     const approved = await askBoardConfirm({ title:t('Cancel {count} cards', { count:ids.length }), rows:[{ label:t('Status'), before:t('Selected'), after:t('Cancelled') }] })
     if (!approved) return
@@ -2793,7 +2808,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
       let changed = 0
       for (const id of ids) {
         const task = allTasks.find(item => item.id === id)
-        if (!task || ['done','cancelled'].includes(task.status) || !commandsFor(task).some(command => command.type === 'cancel')) continue
+        if (!task || !canCancelTask(task, commandsFor(task))) continue
         await request('board-command', { scope, operationId:window.crypto.randomUUID(), taskId:id, expectedRevision:task.revision, type:'cancel', value:{ reason:'Cancelled from bulk selection' } })
         changed += 1
       }
@@ -2806,7 +2821,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
         await load()
         notify(t('Cancelled cards restored'))
       })
-    } catch (caught) { setError(hostText(caught?.message) || t('Unable to cancel cards')) }
+    } catch (caught) { setError(boardActionError(caught?.message) || t('Unable to cancel cards')) }
     finally { setBulkBusy(false) }
   }
   const bulkApplyStatus = async action => {
@@ -3258,6 +3273,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
     setLanePrefs(current => ({ ...current, order:keys }))
   }
   const commandsFor = task => !task.shared && Array.isArray(commandMap[task.id]) ? commandMap[task.id].filter(command => command && typeof command.type === 'string') : []
+  const cancellableIds = selectedIds.size ? allTasks.filter(task => selectedIds.has(task.id) && canCancelTask(task, commandsFor(task))).map(task => task.id) : []
   const memberOptions = [...new Set((Array.isArray(actors) ? actors : []).map(actor => actor.id).filter(Boolean))]
   const labelOptions = [...new Set(allTasks.flatMap(labelsOf))].sort((a, b) => a.localeCompare(b))
   const hasFilters = !!(search || memberFilter || labelFilter || dueFilter || typeFilter)
@@ -3278,7 +3294,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
       return !!release && ['draft', 'queued'].includes(release.status) && commandOf(commands, 'release-assign')
     }
     if (laneOf(task) === stage && commandOf(commands, 'reorder')) return true
-    if (stage === 'cancelled') return task.status !== 'cancelled' && commandOf(commands, 'cancel')
+    if (stage === 'cancelled') return canCancelTask(task, commands)
     if (task.status === 'draft' && stage === 'proposed') return commandOf(commands, 'submit')
     if (task.status === 'cancelled' && stage === 'proposed') return commandOf(commands, 'restore')
     return ['waiting', 'ready', 'working'].includes(stage) && commandOf(commands, 'schedule')
@@ -3541,7 +3557,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
         h('span', null, t('{count} selected', { count:selectedIds.size })),
         h('button', { type:'button', className:'bt-card-mini', disabled:bulkBusy || !selectedIds.size, onClick:() => void bulkArchive() }, t('Archive selected')),
         h('button', { type:'button', className:'bt-card-mini', disabled:bulkBusy || !selectedIds.size || !createEnabled, onClick:() => void bulkDuplicate() }, t('Duplicate selected')),
-        h('button', { type:'button', className:'bt-card-mini bt-card-mini-danger', disabled:bulkBusy || !selectedIds.size, onClick:() => void bulkCancel() }, t('Cancel selected')),
+        h('button', { type:'button', className:'bt-card-mini bt-card-mini-danger', disabled:bulkBusy || !cancellableIds.length, onClick:() => void bulkCancel(cancellableIds) }, t('Cancel selected')),
         personal && selectionMode ? h('label', { className:'bt-board-bulk-select' }, h('span', null, t('Personal progress')), h('select', { defaultValue:'', disabled:bulkBusy || !selectedIds.size, 'aria-label':t('Move selected cards'), onChange:event => { const next=event.target.value; event.target.value=''; if(next) void bulkMovePersonal(next) } },
           h('option', { value:'' }, t('Move to')), PERSONAL_COLUMNS.map(([id,label]) => h('option', { key:id, value:id }, t(label))))) : null,
         h('label', { className:'bt-board-bulk-select' }, h('span', null, t('Status')), h('select', { defaultValue:'', disabled:bulkBusy || !selectedIds.size, 'aria-label':t('Apply status to selected cards'), onChange:event => { const next=event.target.value; event.target.value=''; if(next) void bulkApplyStatus(next) } },

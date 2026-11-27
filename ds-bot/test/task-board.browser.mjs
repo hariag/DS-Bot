@@ -89,6 +89,17 @@ async function request(endpoint,payload){
    }
    throw Error('unexpected retired board scope');
   }
+  if(state.mode==='held-task'){
+   const task={id:'T-HELD',title:'Task with held delivery',owner:'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:4,status:'ready',dispatchState:'uncertain'};
+   const commands=[{type:'confirm-delivery'}];
+   if(state.heldCanCancel)commands.push({type:'cancel'});
+   if(state.heldCanClose)commands.push({type:'close-held-delivery'});
+   if(state.heldClosed){
+    task.revision++;task.status='cancelled';delete task.dispatchState;
+    task.boardActivity=[{id:state.heldCommandReceipt.operationId,actor:'user',type:'close-held-delivery',at:Date.now()}];
+   }
+   return {tasks:[task],capabilities:{actors,commands:{[task.id]:state.heldClosed?[]:commands}}};
+  }
   if(state.mode==='phase2'){
    const tasks=state.phase2Tasks.map(task=>({...task}));
    const releases=state.releases.map(release=>({...release,itemCount:tasks.filter(task=>task.releaseId===release.id).length,doneCount:tasks.filter(task=>task.releaseId===release.id&&task.status==='done').length}));
@@ -163,6 +174,21 @@ async function request(endpoint,payload){
    state.retiredReceipt={operationId:payload.operationId,state:state.retiredReject?'rejected':'committed',message:'Destination group membership changed'};
    if(!state.retiredReject)state.retiredMoved=true;
    return {};
+  }
+  if(state.mode==='held-task'&&endpoint==='board-command'){
+   if(payload.type==='confirm-delivery')return {};
+   if(payload.type==='cancel'){
+    state.heldCanCancel=false;
+    state.heldCanClose=true;
+    state.heldCommandReceipt={operationId:payload.operationId,state:'rejected',message:'task action unresolved'};
+    throw Error('task action unresolved');
+   }
+   if(payload.type==='close-held-delivery'){
+    state.heldCommandReceipt={operationId:payload.operationId,state:state.heldProof?'committed':'rejected',message:'The original delivery could not be shown to have stopped. The card was not changed.'};
+    state.heldClosed=state.heldProof;
+    return {};
+   }
+   throw Error('unexpected held delivery command');
   }
   if(state.mode==='lost')throw Error('network lost');
   if(endpoint==='board-upload'&&state.mode==='invalid-image')throw Error('rejected by host');
@@ -255,6 +281,7 @@ async function request(endpoint,payload){
  }
  if(endpoint==='board-operation'){
   if(state.mode==='retired'&&state.retiredReceipt?.operationId===payload.operationId)return state.retiredReceipt;
+  if(state.mode==='held-task'&&state.heldCommandReceipt?.operationId===payload.operationId)return state.heldCommandReceipt;
   if(state.teamMode==='lost' && state.teamRequest?.operationId===payload.operationId)return {state:'unknown'};
   const plan=state.receiptPlans[payload.operationId];
   if(plan){delete state.receiptPlans[payload.operationId];state.receiptStarted.push(plan.id);await new Promise(resolve=>{state.resolvers['receipt:'+plan.id]=resolve})}
@@ -360,6 +387,62 @@ async function runBrowserCases() {
   assert.deepEqual(errors,[])
   }
   if(process.env.BOARD_RETIRED_ONLY==='1')return
+
+  {
+    await page.evaluate(() => {
+      globalThis.fixture.calls=[]
+      globalThis.renderFixture({kind:'room',id:'g1'},'held-task',true)
+    })
+    const card = page.getByText('Task with held delivery',{exact:true})
+    await card.waitFor()
+    await page.getByRole('button',{name:'Select',exact:true}).click()
+    await page.getByRole('checkbox',{name:'Select card'}).check()
+    assert.equal(await page.getByRole('button',{name:'Cancel selected'}).isDisabled(),true)
+    await page.getByRole('button',{name:'Clear selection'}).click()
+    await card.click()
+    const modal = page.locator('.bt-card-modal')
+    const ordinaryCancel = modal.getByRole('button',{name:'Cancel card',exact:true})
+    const closeDelivery = modal.getByRole('button',{name:'Close delivery and cancel card',exact:true})
+    await modal.getByText('Cancellation is unavailable while delivery is unresolved. Check the Bot session for progress.').waitFor()
+    assert.equal(await ordinaryCancel.count(),0)
+    assert.equal(await closeDelivery.count(),0)
+    await modal.getByRole('button',{name:'Verify original delivery'}).click()
+    await modal.getByRole('button',{name:'Close card'}).click()
+    await page.evaluate(() => {
+      globalThis.fixture.heldCanCancel=true
+      globalThis.renderFixture({kind:'room',id:'g1'},'held-task',true)
+    })
+    await card.click()
+    await ordinaryCancel.click()
+    await modal.getByText('The task still has an open delivery. Refresh the board and check the original delivery before cancelling.').waitFor()
+    assert.equal(await ordinaryCancel.count(),0,'an outdated Cancel disappears after the rejected operation is refreshed')
+    await closeDelivery.click()
+    const confirm = modal.getByRole('alertdialog',{name:'Close delivery and cancel card'})
+    assert.match(await confirm.innerText(),/preserve the original delivery record/)
+    assert.match(await confirm.innerText(),/Review any work already done/)
+    await confirm.getByRole('button',{name:'Go back'}).click()
+    const closeRequests = () => page.evaluate(() => globalThis.fixture.calls.filter(x=>x.endpoint==='board-command'&&x.payload.type==='close-held-delivery').map(x=>x.payload))
+    assert.equal((await closeRequests()).length,0)
+    await closeDelivery.click()
+    await confirm.getByRole('button',{name:'Confirm cancellation'}).click()
+    await modal.getByText('The original delivery could not be shown to have stopped. The card was not changed.').waitFor()
+    await page.evaluate(() => { globalThis.fixture.heldProof=true })
+    await closeDelivery.click()
+    await confirm.getByRole('button',{name:'Confirm cancellation'}).click()
+    await modal.getByText('Cancelled cards are not scheduled and can be restored.').waitFor()
+    assert.equal(await closeDelivery.count(),0)
+    await modal.locator('.bt-card-activity summary').click()
+    await modal.getByText('Original delivery closed and card cancelled',{exact:true}).waitFor()
+    const commands = await closeRequests()
+    assert.equal(commands.length,2)
+    assert.ok(commands[0].operationId !== commands[1].operationId)
+    for(const {operationId,...command} of commands) {
+      assert.match(operationId,/^[\da-f-]{36}$/u)
+      assert.deepEqual(command,{scope:{kind:'room',id:'g1'},type:'close-held-delivery',taskId:'T-HELD',expectedRevision:4})
+    }
+    assert.deepEqual(errors,[])
+  }
+  if(process.env.BOARD_HELD_DELIVERY_ONLY==='1')return
   await page.evaluate(() => { globalThis.fixture.calls=[] })
 
   await page.evaluate(() => globalThis.renderFixture({kind:'room',id:'g1'}, 'normal', true))

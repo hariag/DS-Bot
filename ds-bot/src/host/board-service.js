@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
 import { boardRegistrationReference, openTaskStore } from './task-store.mjs'
 import { createBoardApi } from './board-api.js'
+import { createHeldDeliveryProof, heldDeliveryNotStopped } from './board-delivery-proof.mjs'
 import { readBoardImage } from './board-images.js'
 import { buildReleaseReport, lifecyclePlan, resolveReleaseTeam } from './release-team.mjs'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -312,6 +313,8 @@ export function install(rt) {
       : (phase === 'review' || phase === 'revalidate') && actor === task.reviewer && actor !== task.owner
         && (actor === 'user' || taskParticipant(task, actor)) && value?.kind !== 'git')
   const reviewRecoveryProofs = new WeakMap()
+  const closedDeliveryProofs = new WeakMap()
+  const heldDeliveryProof = createHeldDeliveryProof(rt)
   const providerOf = value => value?.[symbols.original] ?? value
   const persistenceOf = () => ctx.get?.('sessionPersistence') ?? ctx.sessionPersistence
   const isRecipientSession = (actor, sid, includePast) => rt.chatOf(actor) === sid
@@ -413,7 +416,7 @@ export function install(rt) {
           catch (error) { rt.warn?.('ds-bot: board commit listener: %s', error?.message || error) }
         }
       },
-      authorize: input => (input.actor === 'user' && ['create', 'link-goal-items', 'move-item', 'move-goal-item', 'edit', 'card-details', 'card-comment', 'card-comment-edit', 'card-comment-delete', 'participants', 'reorder', 'attach', 'remove-image', 'cancel', 'submit', 'restore', 'archive', 'unarchive', 'release-assign', 'release', 'proposal', 'share', 'unshare', 'personal-progress', 'schedule', 'unschedule', 'unblock', 'recover-to-room'].includes(input.type))
+      authorize: input => (input.actor === 'user' && ['create', 'link-goal-items', 'move-item', 'move-goal-item', 'edit', 'card-details', 'card-comment', 'card-comment-edit', 'card-comment-delete', 'participants', 'reorder', 'attach', 'remove-image', 'cancel', 'close-held-delivery', 'submit', 'restore', 'archive', 'unarchive', 'release-assign', 'release', 'proposal', 'share', 'unshare', 'personal-progress', 'schedule', 'unschedule', 'unblock', 'recover-to-room'].includes(input.type))
         || (input.actor === 'scheduler' && (input.type === 'claim' ? allowedAction(input.task, input.action) : input.type === 'receipt'))
         || (input.actor !== 'user' && input.type === 'proposal' && botWorkflow.authorize(input))
         || botWorkflow.authorize(input),
@@ -457,6 +460,10 @@ export function install(rt) {
       verifyReviewRecovery: (held, proof) => {
         const original = reviewRecoveryProofs.get(proof)
         return !!original && original.stillVerified() && isDeepStrictEqual(original.held, held)
+      },
+      verifyClosedDelivery: (held, proof) => {
+        const original = closedDeliveryProofs.get(proof)
+        if (instance?.store === store && original?.current() && isDeepStrictEqual(original.held, held)) return original.evidence
       },
       verifyReceipt: (action, state, receipt, intent) => {
         const saved = store.admission(action.id), proof = admissionProofs.get(action.id)
@@ -552,6 +559,14 @@ export function install(rt) {
     }
     const goalEditor=createGoalBoardEditor(rt)
     const api = createBoardApi({ store, images, assertWritable: writable, roster: () => rt.state, verifyDependency: dependencyAllowed,
+      canVerifyOriginal: action => {
+        const target = store.admission(action.id)?.targetSessionId
+        return !!target && isRecipientSession(action.actor, target, true)
+      },
+      canInspectClosedDelivery: task => {
+        const held = store.heldDelivery(task)
+        return !!held && heldDeliveryProof.available(held.intent.targetSessionId)
+      },
       goalImageReference:(scope,taskId,imageId)=>goalEditor.imageReference(scope,taskId,imageId),
       goalCardSnapshot:taskId=>goalEditor.pendingCard(taskId),
       shareTargets: task => Object.entries(rt.state.rooms).filter(([id]) => shareAllowed(task, id)).map(([id, room]) => ({ id, name:typeof room.name === 'string' && room.name ? room.name : id })),
@@ -700,7 +715,7 @@ export function install(rt) {
       + 'Read this card with board_task show before the next work step. Reconcile the new scope, stage or user reply; stop work if cancelled. Do not create or dispatch a second task.'
     await steerBoardUpdate(recipient, text, operationId)
   }
-  const mutate = (endpoint, payload) => {
+  const mutate = (endpoint, payload, closedDelivery) => {
     const { api, store } = service(), scope = payload.scope
     let committedHere = false
     const outcome = store.request({ operationId: payload.operationId, actor: 'user', taskId: payload.taskId, payload: requestKey(endpoint, payload), isRejection: rejected }, () => {
@@ -713,7 +728,7 @@ export function install(rt) {
         return api.command(scope, principal, { operationId:`${payload.operationId}:schedule`, taskId:created.id,
           expectedRevision:created.revision, type:'schedule' })
       }
-      return api.command(scope, principal, payload)
+      return api.command(scope, principal, payload, closedDelivery)
     })
     if (outcome.state === 'rejected') throw Object.assign(new Error(outcome.message), { code: 'bot/invalid' })
     const result = outcome.value
@@ -801,7 +816,7 @@ export function install(rt) {
     const { api, store, goalEditor } = service(), scope = payload.scope
     const missingRoom = scope?.kind === 'room' && !rt.roomOf(scope.id)
     if (missingRoom && (!retiredBoardEndpoints.has(endpoint) || endpoint === 'board-command' && ['create','confirm-delivery','goal-task-edit','goal-history-title','goal-card-details','goal-card-comment','goal-image-remove'].includes(payload.type))) {
-      throw Object.assign(new Error('This action requires an active group'), { code:'bot/invalid' })
+      throw Object.assign(new Error('This action is unavailable without an active group'), { code:'bot/invalid' })
     }
     switch (endpoint) {
       case 'board-project':
@@ -1004,6 +1019,27 @@ export function install(rt) {
         return result
       }
       case 'board-command': {
+        if (payload.type === 'close-held-delivery') {
+          writable()
+          // Replays should use the board receipt without touching the old Session.
+          if (typeof payload.operationId === 'string' && store.operation(payload.operationId)) return mutate(endpoint, payload)
+          const card = api.list(scope, principal).tasks.find(item => item.id === payload.taskId && !item.shared && !item.legacy)
+          const task = card && store.get(card.id)
+          const held = task?.revision === payload.expectedRevision && store.heldDelivery(task)
+          if (held && payload.value === undefined && typeof payload.operationId === 'string') {
+            const result = await heldDeliveryProof.inspect(held.intent, (evidence, current) => {
+              const proof = {}
+              closedDeliveryProofs.set(proof, { held, evidence, current })
+              const result = mutate(endpoint, payload, proof)
+              rt.inboxChanged?.()
+              notifyDriver()
+              return result
+            })
+            if (result) return result
+          }
+          if (task) return mutate(endpoint, payload)
+          throw Object.assign(new Error(heldDeliveryNotStopped), { code:'bot/invalid' })
+        }
         if (payload.type === 'confirm-delivery') {
           writable()
           const card = api.list(scope, principal).tasks.find(item => item.id === payload.taskId && !item.shared && !item.legacy)
