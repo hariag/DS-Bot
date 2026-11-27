@@ -229,7 +229,10 @@ export function install(rt) {
     // replaces it with its added text.
     const book = fromId !== undefined && from !== undefined && recordExchange && EXCHANGE_ROLES.has(role) && !deferred && !resumed && !retried ? pairBook(fromId, toId) : undefined
     if (book !== undefined) {
-      if (merged || !rt.ledger.records(book).some(record => record.event === undefined && record.id === exchangeId)) {
+      const exists = typeof rt.ledger.hasMessageId === 'function'
+        ? rt.ledger.hasMessageId(book, exchangeId)
+        : rt.ledger.records(book).some(record => record.event === undefined && record.id === exchangeId)
+      if (merged || !exists) {
         rt.ledger.append(book, { id: exchangeId, from: fromId, to: toId, role, text, time: Date.now(), ...(length !== undefined ? { length, files } : {}), ...(replyTo ? { replyTo } : {}), ...(audience === 'user' ? { audience } : {}), ...(roomId ? { roomId } : {}) })
       }
       // An existing in-memory record can still be waiting for, or have failed, its write.

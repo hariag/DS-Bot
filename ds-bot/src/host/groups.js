@@ -587,13 +587,17 @@ export function install(rt) {
       if (room === undefined) return
       ensureRoomLog(room)
       const book = bookOf(roomId)
-      const records = rt.ledger.records(book)
-      let oldestSeq
-      for (const record of records) {
-        if (Number.isInteger(record.seq) && (oldestSeq === undefined || record.seq < oldestSeq)) oldestSeq = record.seq
+      let oldestSeq = typeof rt.ledger.firstSeq === 'function' ? rt.ledger.firstSeq(book) : undefined
+      let records
+      if (oldestSeq === undefined && typeof rt.ledger.firstSeq !== 'function') {
+        records = rt.ledger.records(book)
+        for (const record of records) {
+          if (Number.isInteger(record.seq) && (oldestSeq === undefined || record.seq < oldestSeq)) oldestSeq = record.seq
+        }
       }
       if (oldestSeq !== undefined && oldestSeq <= since + 1) return
       if (oldestSeq === undefined && room.seq <= since) return
+      records ??= rt.ledger.records(book)
       if (typeof ctx.sessionController?.page !== 'function') return
       const partIds = [...(room.parts ?? []).map(segment => segment.sessionId), rt.sessionOfRoom(room)].filter(Boolean)
       const signal = AbortSignal.timeout(HISTORY_TIMEOUT_MS)
@@ -692,21 +696,25 @@ export function install(rt) {
     if (room !== undefined) ensureRoomLog(room)
     let end = to
     if (end === undefined) {
-      const records = rt.ledger.records(bookOf(roomId))
-      let at = anchor === undefined ? -1 : rt.ledger.anchorAt(bookOf(roomId), anchor)
-      // A window that only reads opens the book again on each call: a rewrite by the writing
-      // host in between moves the anchor, so the index must point at it in these records.
-      if (at !== -1 && (records[at]?.event !== 'anchor' || records[at].id !== anchor)) at = records.findIndex(record => record.event === 'anchor' && record.id === anchor)
-      let next = []
-      if (at === -1) next = records.filter(record => record.event === 'anchor' && record.from > from).map(record => record.from)
-      else {
-        for (let i = at + 1; i < records.length; i += 1) {
-          if (records[i].event !== 'anchor') continue
-          if (records[i].from !== undefined) next = [records[i].from]
-          break
+      if (typeof rt.ledger.nextAnchorFrom === 'function') {
+        end = rt.ledger.nextAnchorFrom(bookOf(roomId), from, anchor)
+      } else {
+        const records = rt.ledger.records(bookOf(roomId))
+        let at = anchor === undefined ? -1 : rt.ledger.anchorAt(bookOf(roomId), anchor)
+        // A window that only reads opens the book again on each call: a rewrite by the writing
+        // host in between moves the anchor, so the index must point at it in these records.
+        if (at !== -1 && (records[at]?.event !== 'anchor' || records[at].id !== anchor)) at = records.findIndex(record => record.event === 'anchor' && record.id === anchor)
+        let next = []
+        if (at === -1) next = records.filter(record => record.event === 'anchor' && record.from > from).map(record => record.from)
+        else {
+          for (let i = at + 1; i < records.length; i += 1) {
+            if (records[i].event !== 'anchor') continue
+            if (records[i].from !== undefined) next = [records[i].from]
+            break
+          }
         }
+        if (next.length > 0) end = Math.min(...next) - 1
       }
-      if (next.length > 0) end = Math.min(...next) - 1
     }
     // Not the messages the group's own Session shows itself.
     const rows = rt.ledger.range(bookOf(roomId), from, end).filter(record => record.session !== true).map(rowOf).filter(Boolean)
@@ -823,7 +831,11 @@ export function install(rt) {
   }
   // A sequence of words over everything said in the group, newest first, with each
   // hit's neighbours. `page` (`before` or `offset`) reads the next older page.
-  const groupSearch = (roomId, query, page) => searchGroupBook(rt.ledger.records(bookOf(roomId)), query, page)
+  const groupSearch = (roomId, query, page) => (
+    typeof rt.ledger.searchGroup === 'function'
+      ? rt.ledger.searchGroup(bookOf(roomId), query, page)
+      : searchGroupBook(rt.ledger.records(bookOf(roomId)), query, page)
+  )
 
   Object.assign(rt, {
     keepGroupLine, dropGroupLines, groupRows, groupRowsView: rowsView, groupRelayReplies, groupSearch,

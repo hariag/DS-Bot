@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { install, bookFile, parseBook } from '../src/host/ledger.js'
+import { writeManifestAtomic } from '../src/host/sqlite-shard-store.mjs'
 import { relayRange } from '../src/shared/group-replies.js'
 
-const host = (t, { home = mkdtempSync(join(tmpdir(), 'ds-bot-ledger-')), readOnly } = {}) => {
+const host = (t, { home = mkdtempSync(join(tmpdir(), 'ds-bot-ledger-')), readOnly, config } = {}) => {
   const warnings = []
-  const rt = { home, readOnly: () => readOnly?.(), warn: (...args) => warnings.push(args) }
+  const rt = { home, config, readOnly: () => readOnly?.(), warn: (...args) => warnings.push(args) }
   install(rt)
   t.after(() => rmSync(home, { recursive: true, force: true, maxRetries: 5 }))
   return { rt, home, warnings, file: book => join(home, 'ledger', bookFile(book)) }
@@ -199,4 +200,108 @@ test('prepend puts recovered records before existing ones and keeps concurrent a
     [1, 'one'], [2, 'two'], [3, 'three'], [4, 'four'], [5, 'five'],
   ])
   assert.deepEqual(reader.rt.ledger.records('group-r1').map(record => record.seq), [1, 2, 3, 4, 5])
+})
+
+test('oversized ledger books compact older records into sealed SQLite shards and preserve every query API', async (t) => {
+  const config = { ledgerMaxActiveBytes: 512, ledgerMaxActiveRecords: 20, ledgerKeepTailRecords: 5, ledgerMaxShardRows: 10 }
+  const { rt, home, file } = host(t, { config })
+  for (let seq = 5; seq <= 44; seq += 1) {
+    if (seq === 15) rt.ledger.append('group-s1', { event: 'anchor', id: 'anc-1', from: 15, time: seq })
+    if (seq === 35) rt.ledger.append('group-s1', { event: 'anchor', id: 'anc-2', from: 35, time: seq })
+    rt.ledger.append('group-s1', {
+      id: `msg-${seq}`,
+      seq,
+      botId: seq % 2 === 0 ? 'b1' : undefined,
+      who: seq % 2 === 0 ? 'Coder' : 'User',
+      text: seq % 5 === 0 ? `milestone launch item ${seq}` : `ordinary chatter ${seq}`,
+      time: 1000 + seq,
+    })
+  }
+  await rt.ledger.flush('group-s1')
+
+  // Hot JSONL tail is bounded to keepTailRecords while shards hold sealed SQLite archives without -wal/-shm sidecars.
+  const hotRows = parseBook(readFileSync(file('group-s1'), 'utf8'))
+  assert.equal(hotRows.length, 5)
+  const shardsDir = `${file('group-s1')}.shards`
+  const shardEntries = readdirSync(shardsDir)
+  assert.ok(shardEntries.includes('manifest.json'))
+  assert.equal(shardEntries.filter(n => n.endsWith('-wal') || n.endsWith('-shm')).length, 0)
+  assert.ok(shardEntries.filter(n => n.endsWith('.sqlite')).length >= 3)
+
+  // Every query works across shards + hot tail identically from both fresh writer and read-only reader.
+  const reader = host(t, { home, config, readOnly: () => 'read only' })
+  for (const l of [rt.ledger, reader.rt.ledger]) {
+    assert.equal(l.firstSeq('group-s1'), 5)
+    assert.equal(l.lastSeq('group-s1'), 44)
+    assert.equal(l.record('group-s1', 8)?.text, 'ordinary chatter 8')
+    assert.equal(l.record('group-s1', 44)?.text, 'ordinary chatter 44')
+    assert.equal(l.hasMessageId('group-s1', 'msg-6'), true)
+    assert.equal(l.hasMessageId('group-s1', 'msg-999'), false)
+    assert.deepEqual(l.range('group-s1', 14, 17).map(r => r.seq), [14, 15, 16, 17])
+    assert.deepEqual(l.after('group-s1', 41).map(r => r.seq), [42, 43, 44])
+    assert.equal(l.anchorAt('group-s1', 'anc-1'), 10)
+    assert.equal(l.anchorAt('group-s1', 'anc-2'), 31)
+    assert.equal(l.nextAnchorFrom('group-s1', 15, 'anc-1'), 34)
+    assert.equal(l.nextAnchorFrom('group-s1', 35, 'anc-2'), undefined)
+    assert.deepEqual(l.search('group-s1', 'milestone').map(r => r.seq), [40, 35, 30, 25, 20, 15, 10, 5])
+    const grouped = l.searchGroup('group-s1', 'launch', {})
+    assert.deepEqual(grouped.results.map(r => r.seq), [40, 35, 30, 25, 20, 15, 10, 5])
+    assert.equal(grouped.results[0].before.seq, 39)
+    assert.equal(grouped.results[0].after.seq, 41)
+  }
+
+  // Incremental tail append after rotation is seen by read-only reader without manifest rewrite.
+  rt.ledger.append('group-s1', { id: 'msg-45', seq: 45, text: 'milestone launch item 45', time: 1045 })
+  await rt.ledger.flush('group-s1')
+  assert.equal(reader.rt.ledger.lastSeq('group-s1'), 45)
+  assert.equal(reader.rt.ledger.search('group-s1', 'launch')[0].seq, 45)
+
+  // Prepend on a sharded book creates an earlier shard without touching existing shards.
+  const added = rt.ledger.prepend('group-s1', [{ seq: 3, text: 'early 3' }, { seq: 4, text: 'early 4' }, { seq: 5, text: 'dup 5' }])
+  assert.equal(added, 2)
+  await rt.ledger.flush('group-s1')
+  assert.equal(rt.ledger.firstSeq('group-s1'), 3)
+  assert.deepEqual(reader.rt.ledger.range('group-s1', 3, 6).map(r => r.seq), [3, 4, 5, 6])
+
+  // Drop removes both hot file and shards directory.
+  rt.ledger.drop('group-s1')
+  await rt.ledger.flush('group-s1')
+  assert.equal(existsSync(file('group-s1')), false)
+  assert.equal(existsSync(shardsDir), false)
+})
+
+test('startup auto-compacts legacy oversized jsonl and recovers pendingTrim cleanly', async (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'ds-bot-ledger-legacy-'))
+  t.after(() => rmSync(home, { recursive: true, force: true, maxRetries: 5 }))
+  const config = { ledgerMaxActiveBytes: 300, ledgerMaxActiveRecords: 12, ledgerKeepTailRecords: 4, ledgerMaxShardRows: 10 }
+  const dir = join(home, 'ledger')
+  mkdirSync(dir, { recursive: true })
+  const bookPath = join(dir, 'group-legacy.jsonl')
+  const rows = Array.from({ length: 20 }, (_, i) => ({ seq: i + 1, text: `legacy row ${i + 1}`, time: 100 + i }))
+  writeFileSync(bookPath, rows.map(r => `${JSON.stringify(r)}\n`).join(''), 'utf8')
+
+  const writer = host(t, { home, config })
+  assert.equal(writer.rt.ledger.lastSeq('group-legacy'), 20)
+  assert.equal(parseBook(readFileSync(bookPath, 'utf8')).length, 4)
+  assert.equal(writer.rt.ledger.records('group-legacy').length, 20)
+
+  // Simulate crash after pendingTrim recorded in manifest but before hot rename happened.
+  const shardsDir = `${bookPath}.shards`
+  const manifest = JSON.parse(readFileSync(join(shardsDir, 'manifest.json'), 'utf8'))
+  const oldSt = statSync(bookPath)
+  const untouched = [rows[16], rows[17], rows[18], rows[19], { seq: 21, text: 'tail survived crash', time: 121 }]
+  writeFileSync(bookPath, untouched.map(r => `${JSON.stringify(r)}\n`).join(''), 'utf8')
+  const crashedIno = statSync(bookPath).ino
+  // Pretend first 2 lines of the current hot file were already compacted into shards and pendingTrim stayed active.
+  writeManifestAtomic(shardsDir, { ...manifest, pendingTrim: { prefixLines: 2, oldInode: String(crashedIno || oldSt.ino) } })
+
+  // Read-only host honors pendingTrim without mutating disk.
+  const ro = host(t, { home, config, readOnly: () => 'read only' })
+  assert.deepEqual(ro.rt.ledger.after('group-legacy', 18).map(r => r.seq), [19, 20, 21])
+
+  // Writable host finishes trimming the prefix and clears pendingTrim.
+  const recovered = host(t, { home, config })
+  assert.deepEqual(recovered.rt.ledger.after('group-legacy', 18).map(r => r.seq), [19, 20, 21])
+  assert.equal(JSON.parse(readFileSync(join(shardsDir, 'manifest.json'), 'utf8')).pendingTrim, null)
+  assert.equal(parseBook(readFileSync(bookPath, 'utf8')).length, 3)
 })

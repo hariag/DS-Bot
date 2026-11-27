@@ -678,3 +678,29 @@ test('adopt slims duplicate inheritedSegments notes while preserving orphaned se
   assert.deepEqual(inh[0], { sessionId: 'seg-1', endedAt: 10, tokens: 100 })
   assert.equal(inh[1].note, 'orphan-note')
 })
+
+test('startup cleans expired dead-PID orphan state temp files while keeping live and recent temps', async (t) => {
+  const { rt, home, statePath } = runtime(t)
+  // Pick a dead PID unlikely to exist (high range) and set old mtime (> 10m).
+  const oldTime = new Date(Date.now() - 20 * 60 * 1000)
+  const deadOld = join(home, 'state.json.999998.tmp')
+  const deadFresh = join(home, 'state.json.999997.tmp')
+  const liveOld = join(home, `state.json.${process.ppid}.tmp`)
+  const unrelatedOld = join(home, 'state.json.pre-backup')
+  for (const p of [deadOld, deadFresh, liveOld, unrelatedOld]) fs.writeFileSync(p, 'tmp')
+  fs.utimesSync(deadOld, oldTime, oldTime)
+  fs.utimesSync(liveOld, oldTime, oldTime)
+  fs.utimesSync(unrelatedOld, oldTime, oldTime)
+  assert.ok(statePath.endsWith('state.json'))
+
+  await rt.load()
+  // Allow background cleanup task triggered on load() to settle.
+  for (let i = 0; i < 40 && fs.existsSync(deadOld); i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+
+  assert.equal(fs.existsSync(deadOld), false, 'dead old tmp removed')
+  assert.equal(fs.existsSync(deadFresh), true, 'recent tmp kept until age cutoff')
+  assert.equal(fs.existsSync(liveOld), true, 'live PID tmp preserved')
+  assert.equal(fs.existsSync(unrelatedOld), true, 'manual backup file preserved')
+})

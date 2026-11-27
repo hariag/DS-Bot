@@ -10,7 +10,7 @@ const CATALOG_TTL_MS = 10_000
 const ROUTE_WAIT_MS = 30_000
 // The DeepSeek account's sign-in grant (dsh-deepseek-account-platform).
 const ACCOUNT_RECORD = 'deepseek-account-platform/default'
-const TRANSIENT_LLM_CODES = new Set(['TRANSPORT', 'TIMEOUT', 'STREAM_CLOSED', 'EMPTY_RESPONSE', 'SERVER', 'RATE_LIMIT', 'MALFORMED_RESPONSE'])
+const TRANSIENT_LLM_CODES = new Set(['TRANSPORT', 'TIMEOUT', 'STREAM_CLOSED', 'MALFORMED_RESPONSE'])
 const MALFORMED_RETRIES = 2
 const DEFAULT_MODEL_RESTORE_DELAYS_MS = [150, 400, 900]
 const isNestedHmrError = error => /HMR transactions cannot be nested/i.test(error?.message ?? String(error ?? ''))

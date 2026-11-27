@@ -42,6 +42,15 @@ import { chineseRolePrompt } from './prompt-language.mjs'
 import { installReview } from './memory-review.js'
 import { installTidy } from './memory-tidy.js'
 import { output } from './tools.js'
+import {
+  compactRecordsToShards,
+  createShardPool,
+  readManifest,
+  readTailBytes,
+  recoverPendingTrim,
+  scanJsonLines,
+  sliceAfterLines,
+} from './sqlite-shard-store.mjs'
 
 export { MEMORY_LIMITS, addLink, cleanEntry, cleanTopic, formatEntry, insertEntry, looksLikeKey, looksSecret, matchEntries, parseAsk, parseMemory, parseReview, removeLink, reviewEntries, splitMeta } from './memory-entries.js'
 export { writtenIn } from './memory-copy.js'
@@ -62,6 +71,24 @@ const UPDATE_TEXT_MAX = 4_000
 const RECENT_ROWS_MAX = 2_000
 const RECENT_TAIL_CHARS = 512 * 1024
 const JOURNAL_TAIL_BYTES = 64 * 1024
+const DEFAULT_JOURNAL_MAX_ACTIVE_BYTES = 2 * 1024 * 1024
+const DEFAULT_JOURNAL_KEEP_TAIL_ROWS = 200
+const DEFAULT_JOURNAL_MAX_SHARD_BYTES = 8 * 1024 * 1024
+const DEFAULT_JOURNAL_MAX_SHARD_ROWS = 10_000
+const JOURNAL_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS rows (
+  idx INTEGER PRIMARY KEY AUTOINCREMENT,
+  id TEXT,
+  scope TEXT,
+  op TEXT,
+  time TEXT,
+  restored TEXT,
+  payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rows_id ON rows(id);
+CREATE INDEX IF NOT EXISTS idx_rows_scope_time ON rows(scope, time DESC);
+CREATE INDEX IF NOT EXISTS idx_rows_restored ON rows(restored) WHERE restored IS NOT NULL;
+`
 const QUERY_TERMS_MAX = 6
 const SOURCE_READ_MS = 5_000
 const MODEL_TIMEOUT_MS = 120_000
@@ -173,6 +200,11 @@ export function install(rt) {
   const recallCache = new Map()
   const mainCache = new Map()
   const memoryWatchers = new Map()
+  const journalPool = createShardPool({ maxOpen: 4 })
+  const maxJournalActiveBytes = config.memoryJournalMaxActiveBytes ?? DEFAULT_JOURNAL_MAX_ACTIVE_BYTES
+  const keepJournalTailRows = config.memoryJournalKeepTailRows ?? DEFAULT_JOURNAL_KEEP_TAIL_ROWS
+  const maxJournalShardBytes = config.memoryJournalMaxShardBytes ?? DEFAULT_JOURNAL_MAX_SHARD_BYTES
+  const maxJournalShardRows = config.memoryJournalMaxShardRows ?? DEFAULT_JOURNAL_MAX_SHARD_ROWS
   const watchMemoryDir = dir => {
     if (memoryWatchers.has(dir)) return memoryWatchers.get(dir) !== null
     try {
@@ -211,7 +243,9 @@ export function install(rt) {
   ctx.effect(() => () => {
     for (const watcher of memoryWatchers.values()) watcher?.close()
     memoryWatchers.clear()
+    journalPool.closeAll()
   }, 'ds-bot: memory cache watchers')
+  rt.onHomeDrain?.(() => { journalPool.closeAll() })
   const revisionOf = (path) => {
     try {
       const stat = statSync(path, { bigint: true, throwIfNoEntry: false })
@@ -365,6 +399,74 @@ export function install(rt) {
     }
   }
 
+  const journalShardsDir = path => `${path}.shards`
+
+  function insertJournalShardRows(db, batch) {
+    const stmt = db.prepare('INSERT INTO rows(id, scope, op, time, restored, payload) VALUES (?, ?, ?, ?, ?, ?)')
+    for (const row of batch) {
+      stmt.run(
+        typeof row.id === 'string' ? row.id : null,
+        typeof row.scope === 'string' ? row.scope : null,
+        typeof row.op === 'string' ? row.op : null,
+        typeof row.time === 'string' ? row.time : null,
+        typeof row.restored === 'string' ? row.restored : null,
+        JSON.stringify(row),
+      )
+    }
+  }
+
+  function updateJournalShardMeta(db, shard, batch) {
+    shard.count += batch.length
+    const stats = db.prepare('SELECT MIN(time) AS minTime, MAX(time) AS maxTime FROM rows').get()
+    shard.minTime = stats?.minTime ?? null
+    shard.maxTime = stats?.maxTime ?? null
+    shard.scopes = db.prepare('SELECT DISTINCT scope FROM rows WHERE scope IS NOT NULL').all().map(r => r.scope)
+  }
+
+  function hasRowIdInShards(path, id) {
+    if (typeof id !== 'string' || id === '') return false
+    const shardsDir = journalShardsDir(path)
+    const manifest = readManifest(shardsDir)
+    const shards = manifest?.shards ?? []
+    for (let i = shards.length - 1; i >= 0; i -= 1) {
+      const db = journalPool.getReadOnly(join(shardsDir, shards[i].file))
+      if (db.prepare('SELECT 1 FROM rows WHERE id = ? LIMIT 1').get(id) !== undefined) return true
+    }
+    return false
+  }
+
+  function maybeRotateJournal(path) {
+    let st
+    try { st = statSync(path) } catch { return }
+    if (st.size < maxJournalActiveBytes) return
+    const shardsDir = journalShardsDir(path)
+    const { skipLines } = recoverPendingTrim(path, shardsDir, { writable: true })
+    if (skipLines === 0) {
+      try { st = statSync(path) } catch { return }
+      if (st.size < maxJournalActiveBytes) return
+    }
+    const rawText = readFileSync(path, 'utf8')
+    const scanned = scanJsonLines(rawText)
+    if (scanned.length <= keepJournalTailRows) return
+    const splitAt = scanned.length - keepJournalTailRows
+    const splitItem = scanned[splitAt]
+    compactRecordsToShards({
+      hotPath: path,
+      shardsDir,
+      prefixRecords: scanned.slice(0, splitAt).map(item => item.record),
+      prefixRawLines: splitItem.startLine,
+      remainingTailText: rawText.slice(splitItem.startChar),
+      oldInode: st.ino,
+      maxShardBytes: maxJournalShardBytes,
+      maxShardRows: maxJournalShardRows,
+      schemaSql: JOURNAL_SCHEMA_SQL,
+      tableName: 'rows',
+      insertRows: insertJournalShardRows,
+      updateMeta: updateJournalShardMeta,
+      pool: journalPool,
+    })
+  }
+
   // The row of a change in the change log, written once: a change that is finished
   // twice (after an interruption) does not get a second row. The row keeps the
   // fields it always had, so a later undo can still read what each change replaced.
@@ -375,8 +477,9 @@ export function install(rt) {
   // are whole, and the row after it starts on a line of its own.
   async function journalRow(row) {
     const { path, torn } = journalFor(row.scope, row.op)
+    recoverPendingTrim(path, journalShardsDir(path), { writable: true })
     const { start, text } = journalTail(path)
-    if (journalled(text, row.id)) return false
+    if (journalled(text, row.id) || hasRowIdInShards(path, row.id)) return false
     const cut = text.lastIndexOf('\n') + 1
     const half = text.slice(cut)
     const line = JSON.stringify(row)
@@ -384,17 +487,20 @@ export function install(rt) {
     rememberRow(row)
     if (half === '') {
       await appendFile(path, `${line}\n`, 'utf8')
+      maybeRotateJournal(path)
       return true
     }
     if (whole(half)) {
       // A whole row that lost its newline: it is ended, and the row after it starts
       // on a line of its own.
       await appendFile(path, `\n${line}\n`, 'utf8')
+      maybeRotateJournal(path)
       return true
     }
     await appendFile(torn, `${half}\n`, 'utf8')
     truncateSync(path, start + Buffer.byteLength(text.slice(0, cut), 'utf8'))
     await appendFile(path, `${line}\n`, 'utf8')
+    maybeRotateJournal(path)
     return true
   }
 
@@ -410,11 +516,38 @@ export function install(rt) {
   function readTail(path) {
     if (tailsRead.has(path)) return
     tailsRead.add(path)
-    for (const line of readJournal(path).slice(-RECENT_TAIL_CHARS).split('\n')) {
+    const shardsDir = journalShardsDir(path)
+    const writable = rt.readOnly?.() === undefined
+    const { manifest, skipLines } = recoverPendingTrim(path, shardsDir, { writable })
+    let tailText = ''
+    try {
+      tailText = readTailBytes(path, RECENT_TAIL_CHARS)
+      if (skipLines > 0) tailText = sliceAfterLines(tailText, skipLines)
+    } catch (error) {
+      unreadable(path, error)
+    }
+    let loaded = 0
+    for (const line of tailText.split('\n')) {
       try {
         const row = JSON.parse(line)
-        if (typeof row?.id === 'string' && typeof row.time === 'string') rememberRow(row)
+        if (typeof row?.id === 'string' && typeof row.time === 'string') {
+          rememberRow(row)
+          loaded += 1
+        }
       } catch { /* a line cut by the tail, or half-written */ }
+    }
+    const shards = manifest?.shards ?? []
+    let remaining = RECENT_ROWS_MAX - loaded
+    for (let i = shards.length - 1; i >= 0 && remaining > 0; i -= 1) {
+      const db = journalPool.getReadOnly(join(shardsDir, shards[i].file))
+      const rows = db.prepare('SELECT payload FROM rows ORDER BY idx DESC LIMIT ?').all(remaining)
+      for (const item of rows) {
+        try {
+          const row = JSON.parse(item.payload)
+          if (typeof row?.id === 'string' && typeof row.time === 'string') rememberRow(row)
+        } catch {}
+      }
+      remaining -= rows.length
     }
   }
 
@@ -768,6 +901,7 @@ export function install(rt) {
       }
       const name = `${safeId(botId)}-${new Date().toISOString().replace(/[:.]/g, '-')}`
       await mkdir(join(root, 'archive'), { recursive: true })
+      journalPool.closeUnder(dir)
       await rename(dir, join(root, 'archive', name))
       recallCache.delete(dir)
       // The memory is in the archive from here: a log row that cannot be written must not
@@ -1735,14 +1869,21 @@ export function install(rt) {
   const journalPathsOf = panel => [...new Set(Object.values(panel.scopes).map(scope => journalFor(scopeKey(scope), 'restore').path))]
 
   const journalRows = (path) => {
+    const shardsDir = journalShardsDir(path)
+    const { skipLines } = recoverPendingTrim(path, shardsDir, { writable: rt.readOnly?.() === undefined })
+    const raw = skipLines > 0 ? sliceAfterLines(readJournal(path), skipLines) : readJournal(path)
     const rows = []
-    for (const line of readJournal(path).split('\n')) {
+    for (const line of raw.split('\n')) {
       try {
         const row = JSON.parse(line)
         if (row !== null && typeof row === 'object') rows.push(row)
       } catch { /* a half-written or foreign line is not a row */ }
     }
     return rows
+  }
+
+  function hasShardsFor(paths) {
+    return paths.some(path => (readManifest(journalShardsDir(path))?.shards?.length ?? 0) > 0)
   }
 
   // Every change the owner's scopes made, oldest first across the logs they
@@ -1758,8 +1899,127 @@ export function install(rt) {
 
   const HISTORY_PAGE = 50
 
+  function findRowByIdInJournalPaths(paths, keys, id) {
+    for (const path of paths) {
+      const hot = journalRows(path)
+      const hit = hot.find(row => row.id === id && keys.has(row.scope))
+      if (hit !== undefined) return hit
+      const shardsDir = journalShardsDir(path)
+      const shards = readManifest(shardsDir)?.shards ?? []
+      for (let i = shards.length - 1; i >= 0; i -= 1) {
+        const db = journalPool.getReadOnly(join(shardsDir, shards[i].file))
+        const row = db.prepare('SELECT payload FROM rows WHERE id = ? LIMIT 1').get(id)
+        if (row !== undefined) {
+          const parsed = JSON.parse(row.payload)
+          if (keys.has(parsed.scope)) return parsed
+        }
+      }
+    }
+    return undefined
+  }
+
+  function isRowRestoredInJournalPaths(paths, keys, id) {
+    for (const path of paths) {
+      if (journalRows(path).some(row => keys.has(row.scope) && row.restored === id)) return true
+      const shardsDir = journalShardsDir(path)
+      const shards = readManifest(shardsDir)?.shards ?? []
+      for (let i = shards.length - 1; i >= 0; i -= 1) {
+        const db = journalPool.getReadOnly(join(shardsDir, shards[i].file))
+        const found = db.prepare('SELECT scope FROM rows WHERE restored = ? LIMIT 1').get(id)
+        if (found !== undefined && keys.has(found.scope)) return true
+      }
+    }
+    return false
+  }
+
+  function shardedHistoryPage(panel, before) {
+    const paths = journalPathsOf(panel)
+    const keys = new Set(Object.values(panel.scopes).map(scopeKey))
+    const keyList = [...keys]
+    if (keyList.length === 0) return { rows: [], more: null }
+    let beforeTime
+    if (before !== undefined && before !== null) {
+      const target = findRowByIdInJournalPaths(paths, keys, before)
+      if (target === undefined) return { rows: [], more: null }
+      beforeTime = String(target.time)
+    }
+    const scopePlaceholders = keyList.map(() => '?').join(', ')
+    const candidates = []
+    let seqOrder = 0
+    for (const path of paths) {
+      const shardsDir = journalShardsDir(path)
+      const shards = readManifest(shardsDir)?.shards ?? []
+      for (const shard of shards) {
+        if (Array.isArray(shard.scopes) && !shard.scopes.some(s => keys.has(s))) continue
+        if (beforeTime !== undefined && shard.minTime && String(shard.minTime) > beforeTime) continue
+        const db = journalPool.getReadOnly(join(shardsDir, shard.file))
+        const sql = beforeTime !== undefined
+          ? `SELECT payload FROM rows WHERE scope IN (${scopePlaceholders}) AND op IN ('add', 'remove', 'replace') AND time <= ? ORDER BY time DESC, idx DESC`
+          : `SELECT payload FROM rows WHERE scope IN (${scopePlaceholders}) AND op IN ('add', 'remove', 'replace') ORDER BY time DESC, idx DESC LIMIT ?`
+        const queryRows = beforeTime !== undefined
+          ? db.prepare(sql).all(...keyList, beforeTime)
+          : db.prepare(sql).all(...keyList, HISTORY_PAGE + 1)
+        for (const item of queryRows) {
+          const row = JSON.parse(item.payload)
+          candidates.push({ row, order: seqOrder++ })
+        }
+      }
+      for (const row of journalRows(path)) {
+        if (!keys.has(row.scope)) continue
+        if (row.op !== 'add' && row.op !== 'remove' && row.op !== 'replace') continue
+        if (beforeTime !== undefined && String(row.time) > beforeTime) continue
+        candidates.push({ row, order: seqOrder++ })
+      }
+    }
+    candidates.sort((a, b) => {
+      const cmp = String(b.row.time).localeCompare(String(a.row.time))
+      return cmp !== 0 ? cmp : b.order - a.order
+    })
+    let slice = candidates.map(item => item.row)
+    if (before !== undefined && before !== null) {
+      const at = slice.findIndex(row => row.id === before)
+      slice = at === -1 ? [] : slice.slice(at + 1)
+    }
+    const page = slice.slice(0, HISTORY_PAGE)
+    const undone = new Set()
+    const pageIds = page.map(row => row.id).filter(Boolean)
+    if (pageIds.length > 0) {
+      const idSet = new Set(pageIds)
+      const restoredPlaceholders = pageIds.map(() => '?').join(', ')
+      for (const path of paths) {
+        for (const row of journalRows(path)) {
+          if (keys.has(row.scope) && typeof row.restored === 'string' && idSet.has(row.restored)) undone.add(row.restored)
+        }
+        const shardsDir = journalShardsDir(path)
+        const shards = readManifest(shardsDir)?.shards ?? []
+        for (const shard of shards) {
+          const db = journalPool.getReadOnly(join(shardsDir, shard.file))
+          for (const item of db.prepare(`SELECT restored, scope FROM rows WHERE restored IN (${restoredPlaceholders})`).all(...pageIds)) {
+            if (keys.has(item.scope)) undone.add(item.restored)
+          }
+        }
+      }
+    }
+    return {
+      rows: page.map(row => ({
+        id: row.id,
+        time: row.time,
+        op: row.op,
+        scope: row.scope === 'team' ? 'team' : typeof row.scope === 'string' && row.scope.startsWith('group:') ? 'group' : 'own',
+        text: splitMeta(String((row.op === 'remove' ? row.before : row.after) ?? '').replace(/^\s*[-*]\s+/, '')).text,
+        by: row.actor === 'user' ? 'user' : String(row.actorName ?? row.actor ?? ''),
+        restored: undone.has(row.id),
+      })),
+      more: slice.length > HISTORY_PAGE ? page.at(-1).id : null,
+    }
+  }
+
   async function memoryHistory(body) {
     const panel = panelOf(body)
+    const paths = journalPathsOf(panel)
+    if (hasShardsFor(paths)) {
+      return await settled(() => shardedHistoryPage(panel, body.before))
+    }
     const rows = await settled(() => ownerRows(panel))
     const undone = new Set(rows.map(row => row.restored).filter(id => typeof id === 'string'))
     const newest = rows.filter(row => row.op === 'add' || row.op === 'remove' || row.op === 'replace').reverse()
@@ -1805,10 +2065,20 @@ export function install(rt) {
       await recoverPending()
       // Only a change the owner's own scopes made can be undone: the row comes
       // from the same logs memory-history reads.
-      const rows = ownerRows(panel)
-      const row = rows.find(record => record.id === id)
+      const paths = journalPathsOf(panel)
+      const keys = new Set(Object.values(panel.scopes).map(scopeKey))
+      let row
+      let alreadyRestored
+      if (hasShardsFor(paths)) {
+        row = findRowByIdInJournalPaths(paths, keys, id)
+        if (row !== undefined) alreadyRestored = isRowRestoredInJournalPaths(paths, keys, id)
+      } else {
+        const rows = ownerRows(panel)
+        row = rows.find(record => record.id === id)
+        alreadyRestored = rows.some(record => record.restored === id)
+      }
       if (row === undefined) throw new Error('That change is not in the change log of this memory.')
-      if (rows.some(record => record.restored === id)) throw new Error('That change is already restored.')
+      if (alreadyRestored) throw new Error('That change is already restored.')
       const scope = journalScope(row.scope)
       if (scope === undefined || !flatFile(row.file)) {
         throw new Error('That change is not a change that can be restored.')

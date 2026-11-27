@@ -2,12 +2,12 @@
 // host on the same data from writing it, and the indexes that map a Session to the Bot
 // or group chat it belongs to.
 import { copyFileSync, mkdirSync, readFileSync, statSync } from 'node:fs'
-import { mkdir, unlink, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readdir, unlink, writeFile } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import { LEGACY_THEMES, MAX_EXCHANGES, ROOM_MODES, SECTION_COLORS, SECTION_NAME_MAX, TEXT_KEPT } from './constants.js'
 import { replaceFile } from './files.js'
 import { homeLock } from './home-lock.js'
-import { currentColor, headOf, normalize, unquote } from './text.js'
+import { currentColor, escapeRegExp, headOf, normalize, unquote } from './text.js'
 import { isActiveTask } from './threads.js'
 import { AMBIGUOUS_OLD_ROUTES, legacyRoute } from './local-agents/engines.js'
 
@@ -483,6 +483,34 @@ export function install(rt) {
     return tracked
   }
 
+  const isPidAlive = (pid) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch (error) {
+      return error?.code === 'EPERM'
+    }
+  }
+
+  const cleanupOrphanStateTemps = async () => {
+    const minAgeMs = rt.config?.orphanTempMinAgeMs ?? 10 * 60 * 1000
+    const base = basename(statePath)
+    const pattern = new RegExp(`^${escapeRegExp(base)}\\.(\\d+)\\.tmp$`)
+    const entries = await readdir(home).catch(() => [])
+    const cutoff = Date.now() - minAgeMs
+    for (const name of entries) {
+      const match = pattern.exec(name)
+      if (match === null) continue
+      const pid = Number(match[1])
+      if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid || isPidAlive(pid)) continue
+      const filePath = join(home, name)
+      const st = await Promise.resolve().then(() => statSync(filePath)).catch(() => null)
+      if (st !== null && st.mtimeMs <= cutoff) {
+        await unlink(filePath).catch(() => {})
+      }
+    }
+  }
+
   const load = () => loaded ??= (async () => {
     claimLock()
     if (holder !== undefined) warn('ds-bot: %s', readOnly())
@@ -490,6 +518,7 @@ export function install(rt) {
     storeReady = true
     notifyStoreSync()
     if (holder !== undefined) return
+    if (!lockBroken) void cleanupOrphanStateTemps().catch(() => {})
     void retireParts()
     if (migrated && stuck === undefined) {
       // A failed write must not poison `loaded`: the migrated state stays in

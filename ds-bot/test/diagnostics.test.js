@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import fsp from 'node:fs/promises'
 import { syncBuiltinESMExports } from 'node:module'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { gunzipSync } from 'node:zlib'
 import { cleanText, install as installDiagnostics, reportMarkdown } from '../src/host/diagnostics.js'
 import { BLOCKING_CODES, failureLine, install as installTurns, turnFailure } from '../src/host/turns.js'
 import { errorCode } from '../src/host/channel.js'
@@ -462,4 +463,58 @@ test('a browser error is noted once, repeats are counted, and clear empties the 
   assert.deepEqual(clientErrors().map(entry => entry.text), ['state: HTTP 502 (×2)'])
   clearClientErrors()
   assert.equal(clientErrors().length, 0)
+})
+
+test('diagnostics rotates into bounded gzip archives, backfills across restarts, and clears archives', async (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'ds-bot-diag-rotate-'))
+  t.after(() => rmSync(home, { recursive: true, force: true, maxRetries: 5 }))
+  t.mock.method(console, 'error', () => {})
+
+  // Seed legacy .1 file + small active rotation threshold.
+  const logDir = join(home, 'logs')
+  mkdirSync(logDir, { recursive: true })
+  writeFileSync(join(logDir, 'diagnostics.jsonl.1'), `${JSON.stringify({ time: 1, level: 'warn', source: 'host', text: 'legacy-one' })}\n`, 'utf8')
+
+  const rt = host(home, { config: { diagnosticsMaxBytes: 300, diagnosticsMaxFiles: 3 } })
+  for (let i = 0; i < 18; i += 1) {
+    rt.noteFailure({ source: 'host', text: `diag entry number ${i} padding ${'x'.repeat(80)}` })
+  }
+  await rt.stop()
+
+  const files = readdirSync(logDir)
+  const gzFiles = files.filter(name => /^diagnostics\.jsonl\.\d{8}-\d{6}-\d{3}\.\d+\.gz$/.test(name))
+  assert.equal(gzFiles.length, 3, `expected pruning to keep 3 archives, got: ${gzFiles.join(', ')}`)
+  assert.equal(files.some(name => name.endsWith('.tmp')), false)
+
+  // Decompress one archive to verify valid JSONL content.
+  const decoded = gunzipSync(readFileSync(join(logDir, gzFiles[0]))).toString('utf8')
+  assert.match(decoded, /diag entry number/)
+
+  // Restart backfills from active log + rotated .gz archives beyond active file alone.
+  const activeLines = readFileSync(join(logDir, 'diagnostics.jsonl'), 'utf8').trim().split('\n').filter(Boolean).length
+  const restarted = host(home, { config: { diagnosticsMaxBytes: 300, diagnosticsMaxFiles: 3 } })
+  const loaded = await restarted.diagnostics.entries()
+  assert.ok(loaded.length > activeLines, `expected backfill > ${activeLines}, got ${loaded.length}`)
+  for (let i = 1; i < loaded.length; i += 1) {
+    assert.ok(loaded[i].time >= loaded[i - 1].time)
+  }
+  assert.match(loaded.at(-1).text, /diag entry number 17/)
+  await restarted.stop()
+
+  // Legacy diagnostics.jsonl.1 backfill works when active file has fewer than KEEP entries.
+  const legacyHome = mkdtempSync(join(tmpdir(), 'ds-bot-diag-legacy-'))
+  t.after(() => rmSync(legacyHome, { recursive: true, force: true, maxRetries: 5 }))
+  mkdirSync(join(legacyHome, 'logs'), { recursive: true })
+  writeFileSync(join(legacyHome, 'logs', 'diagnostics.jsonl.1'), `${JSON.stringify({ time: 10, level: 'warn', source: 'host', text: 'legacy-one' })}\n`, 'utf8')
+  writeFileSync(join(legacyHome, 'logs', 'diagnostics.jsonl'), `${JSON.stringify({ time: 20, level: 'error', source: 'host', text: 'active-two' })}\n`, 'utf8')
+  const legacyHost = host(legacyHome)
+  assert.deepEqual((await legacyHost.diagnostics.entries()).map(e => e.text), ['legacy-one', 'active-two'])
+  await legacyHost.stop()
+
+  // Clear wipes active log AND rotated archives cleanly.
+  const cleaner = host(home, { config: { diagnosticsMaxBytes: 300, diagnosticsMaxFiles: 3 } })
+  await cleaner.diagnostics.clear()
+  assert.deepEqual(await cleaner.diagnostics.entries(), [])
+  assert.equal(readdirSync(logDir).filter(name => name !== 'diagnostics.jsonl').length, 0)
+  await cleaner.stop()
 })
