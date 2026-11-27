@@ -1298,7 +1298,7 @@ export function apply(ctx) {
   // question disappears externally (never on explicit submit, skip, scroll, or switch).
   ctx.effect(() => {
     const offRoster = roster.subscribe(() => { questionDrafts.reconcileRoster(roster.getSnapshot()) })
-    const sessionStatus = ctx.get('uiSession')?.sessionStatus
+    const sessionStatus = ctx.get('uiSession.sessionStatus')
     const offStatus = sessionStatus?.subscribe?.(() => { questionDrafts.reconcileBlocking(sessionStatus.getSnapshot(), roster.getSnapshot()) })
     return () => { offRoster(); offStatus?.() }
   }, 'ds-bot: rescue interrupted question drafts')
@@ -1790,7 +1790,7 @@ export function apply(ctx) {
   }, 'ds-bot: agent surface')
 
   ctx.effect(() => watchBotCompletions({
-    roster, sessions: ctx.sessions.list, statuses: ctx.get('uiSession')?.sessionStatus, unread: botCompletions, ui,
+    roster, sessions: ctx.sessions.list, statuses: ctx.get('uiSession.sessionStatus'), unread: botCompletions, ui,
   }), 'ds-bot: sidebar completions')
 
   ctx.effect(() => {
