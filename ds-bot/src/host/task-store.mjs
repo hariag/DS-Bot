@@ -192,7 +192,7 @@ const applyCardDetails = (target, value) => {
 }
 
 /** Open a private task journal. The containing directory must be private. */
-export function openTaskStore(path, { conversationKind = () => 'group', onProjectEvent, authorize = () => false, verifyRegistration = () => false, verifyEvidence = () => false, verifyGoalItems = () => false, verifyReceipt = () => false, verifyReviewRecovery = () => false, verifyInvalidation = () => false, verifyAttachment = () => false, verifyShare = () => false, verifyDependency = () => false, verifyAdmission = () => false, assertWriteLock = () => { throw new Error('write lock required') } } = {}) {
+export function openTaskStore(path, { conversationKind = () => 'group', onProjectEvent, onTaskCommit, authorize = () => false, verifyRegistration = () => false, verifyEvidence = () => false, verifyGoalItems = () => false, verifyReceipt = () => false, verifyReviewRecovery = () => false, verifyInvalidation = () => false, verifyAttachment = () => false, verifyShare = () => false, verifyDependency = () => false, verifyAdmission = () => false, assertWriteLock = () => { throw new Error('write lock required') } } = {}) {
   if (!isAbsolute(path)) throw new Error('database path must be absolute')
   const dir = lstatSync(dirname(path))
   if (!isPrivateDirectory(dirname(path), dir)) throw new Error('database directory must be private')
@@ -393,6 +393,18 @@ const releaseIsDone = release => {
   const dependents = id => reverseEdges.all(id).map(row => row.task_id)
   let audit
   const addHistory = db.prepare('INSERT INTO history(operation_id,actor,task_id,before,after) VALUES(?,?,?,?,?)')
+  const snapshot = row => row ? JSON.parse(JSON.stringify(row)) : null
+  const recordCommit = (before, after, info) => {
+    const id = after?.id ?? before?.id
+    if (!id) return
+    const existing = committed.get(id)
+    committed.set(id, {
+      before: existing ? existing.before : snapshot(before),
+      after: snapshot(after),
+      operationId: info?.operationId,
+      actor: info?.actor,
+    })
+  }
   const save = (before, after) => {
     if (update.run(after.revision, JSON.stringify(after), before.id, before.revision).changes !== 1) throw new Error('revision conflict')
     if (stable(before.dependencies) !== stable(after.dependencies) || stable(before.dependencyGrants ?? []) !== stable(after.dependencyGrants ?? [])) {
@@ -400,6 +412,7 @@ const releaseIsDone = release => {
     }
     if (!audit) throw new Error('missing audit context')
     addHistory.run(audit.operationId, audit.actor, before.id, JSON.stringify(before), JSON.stringify(after))
+    recordCommit(before, after, audit)
     coordination.taskChanged(before,after,audit)
     if (after.parentTaskId && before.status === 'done' && !before.stale && !before.blocked
       && (after.status !== 'done' || after.stale || after.blocked)) {
@@ -427,7 +440,7 @@ const releaseIsDone = release => {
   const action = (task, kind, actor) => {
     if (!isManualBoardTask(task)) addAction.run(actionId(task.id, task.actionRevision, kind), task.id, task.actionRevision, kind, actor)
   }
-  let poisoned = false, inTransaction = false
+  let poisoned = false, inTransaction = false, committed = new Map()
   const tx = fn => {
     if (poisoned) throw new Error('task store requires reconciliation')
     if (inTransaction) return fn()
@@ -435,11 +448,19 @@ const releaseIsDone = release => {
     const dirNow = lstatSync(dirname(path)), fileNow = lstatSync(path)
     if (dirNow.dev !== dir.dev || dirNow.ino !== dir.ino || fileNow.dev !== file.dev || fileNow.ino !== file.ino) throw new Error('task database identity changed')
     coordination.assertIdentity()
+    committed = new Map()
     db.exec('BEGIN IMMEDIATE'); let committing = false; inTransaction = true
     coordination.begin()
     let value
-    try { value = fn(); assertWriteLock(); committing = true; db.exec('COMMIT') } catch (e) { try { db.exec('ROLLBACK') } catch { poisoned = true }; if (committing) poisoned = true; throw e } finally { inTransaction = false }
+    try { value = fn(); assertWriteLock(); committing = true; db.exec('COMMIT') } catch (e) { committed = new Map(); try { db.exec('ROLLBACK') } catch { poisoned = true }; if (committing) poisoned = true; throw e } finally { inTransaction = false }
     coordination.committed()
+    if (committed.size && typeof onTaskCommit === 'function') {
+      const batch = [...committed.values()]
+      committed = new Map()
+      try { onTaskCommit(batch) } catch {}
+    } else {
+      committed = new Map()
+    }
     return value
   }
   let coordination
@@ -1290,7 +1311,7 @@ const releaseIsDone = release => {
           ...(intake !== undefined ? { intake:{ kind:'chat', actor, at:Date.now() } } : {}), ...(parentTaskId ? { parentTaskId } : {}),
           ...(releaseId && !parentTaskId ? { releaseId, releasePosition:releasePositionAfter(releaseId, null, id) } : {}) }
         db.prepare('INSERT INTO tasks(id,revision,body) VALUES(?,?,?)').run(id, 1, JSON.stringify(record)); insertEdges(record)
-        addHistory.run(operationId, actor, id, null, JSON.stringify(record)); coordination.taskChanged(null,record,{operationId,actor}); return record
+        addHistory.run(operationId, actor, id, null, JSON.stringify(record)); recordCommit(null, record, { operationId, actor }); coordination.taskChanged(null,record,{operationId,actor}); return record
       })
     },
     proposeChange({ operationId, actor, taskId, expectedRevision, value }) {
@@ -1333,7 +1354,7 @@ const releaseIsDone = release => {
           actionRevision:null, status:'waiting', type:parent && !attachToParent ? parent.type : after.type ?? old.type ?? 'other', authority:{kind:'personal',reference:boardRegistrationReference({id,revision:1})}, evidence:null, blocked:null, stale:false,
           position:appendPosition(old.scope), change, ...(old.acceptor === undefined ? {} : { acceptor:old.acceptor }) }
         db.prepare('INSERT INTO tasks(id,revision,body) VALUES(?,?,?)').run(id, 1, JSON.stringify(record)); insertEdges(record)
-        addHistory.run(operationId, actor, id, null, JSON.stringify(record)); coordination.taskChanged(null,record,{operationId,actor}); return ready(record)
+        addHistory.run(operationId, actor, id, null, JSON.stringify(record)); recordCommit(null, record, { operationId, actor }); coordination.taskChanged(null,record,{operationId,actor}); return ready(record)
       })
     },
     command({ operationId, taskId, expectedRevision, actor, type, value, sessionId, reviewRecovery }) {

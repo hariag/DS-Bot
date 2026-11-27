@@ -380,6 +380,8 @@ export function install(rt) {
   // Updates change the dsh profile, not the team, so a reading host may run them too.
   const READS = new Set(['queue-inspect', 'board-project', 'board-list', 'board-release-list', 'board-release-report', 'board-proposal-list', 'board-history', 'board-operation', 'board-image', 'secret-store', 'secret-unlock', 'state', 'version', 'models', 'efforts', 'providers', 'provider-models', 'earlier', 'chat', 'run-stats', 'room-progress', 'group-rows', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'thinking', 'avatar-library', 'computer-system-status', 'computer-shot', 'local-agents', 'local-agent-models', 'browser-frame', 'hello', 'notices', 'avatar', 'room-chat', 'usage-summary', 'image', 'markdown-image', 'file-download', 'changes-check', 'changes-summary', 'changes-diff', 'agent-chat', 'bot-task-read', 'group-relay-replies', 'deepseek-services', 'deepseek-synthesize'])
 
+  READS.add('linear-project-watch-status')
+
   async function setPrefs(body) {
     if (body.theme !== undefined) {
       if (typeof body.theme !== 'string' || !/^[a-z][\w-]{0,31}$/.test(body.theme)) throw invalid('Unknown theme')
@@ -458,6 +460,8 @@ export function install(rt) {
       const readOnly = rt.readOnly()
       if (readOnly !== undefined && !READS.has(endpoint)) return fail(readOnly, 'bot/read-only')
       switch (endpoint) {
+        case 'linear-project-watch-status':
+          return ok(rt.linearProjectWatchStatus?.() ?? { enabled: false })
         case 'queue-inspect':
           return ok(await inspectQueue(body, signal))
         // This handler is reached only through the authenticated instance-owner

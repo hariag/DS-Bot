@@ -673,6 +673,16 @@ export function install(rt) {
 
   const offFor = id => state.connectors?.[id]?.offFor ?? []
 
+  const linearProjectMcpAvailable = botId => !stopped && rt.botOf(botId) !== undefined
+    && !offFor('linear').includes(botId) && hasCredential('linear') && statuses.get('linear')?.state !== 'needs-sign-in'
+
+  async function linearProjectMcpGateway(botId) {
+    await rt.loadSecrets()
+    if (!linearProjectMcpAvailable(botId)) throw new Error('Linear connector unavailable')
+    const gw = await gateway()
+    return { url: gw.urlFor('linear'), headers: gw.headers() }
+  }
+
   async function publishDsBotIssue(botId, { title, body }) {
     const id = 'github'
     if (options?.api !== GITHUB_API || options.endpoints !== undefined || options.url !== undefined) return undefined
@@ -996,6 +1006,8 @@ export function install(rt) {
     connectorsView,
     connectorEndpoint,
     publishDsBotIssue,
+    linearProjectMcpAvailable,
+    linearProjectMcpGateway,
     connectorOffFor: (botId) => {
       const prefixes = []
       for (const entry of entries()) {

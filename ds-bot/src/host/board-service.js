@@ -405,6 +405,12 @@ export function install(rt) {
     const store = openTaskStore(join(root, 'tasks.sqlite'), {
       assertWriteLock: writable, conversationKind:actor=>botWorkflow.conversationKind(actor),
       onProjectEvent:projectChanged,
+      onTaskCommit: events => {
+        for (const fn of commitListeners) {
+          try { fn(events) }
+          catch (error) { rt.warn?.('ds-bot: board commit listener: %s', error?.message || error) }
+        }
+      },
       authorize: input => (input.actor === 'user' && ['create', 'link-goal-items', 'move-item', 'move-goal-item', 'edit', 'card-details', 'card-comment', 'card-comment-edit', 'card-comment-delete', 'participants', 'reorder', 'attach', 'remove-image', 'cancel', 'submit', 'restore', 'archive', 'unarchive', 'release-assign', 'release', 'proposal', 'share', 'unshare', 'personal-progress', 'schedule', 'unschedule', 'unblock'].includes(input.type))
         || (input.actor === 'scheduler' && (input.type === 'claim' ? allowedAction(input.task, input.action) : input.type === 'receipt'))
         || (input.actor !== 'user' && input.type === 'proposal' && botWorkflow.authorize(input))
@@ -721,6 +727,18 @@ export function install(rt) {
     return result
   }
   const previouslyBound=existsSync(join(rt.home,'board-v1','project-coordination.sqlite'))
+  const commitListeners = new Set()
+  const availableBoardStore = () => instance?.store
+    ?? (existsSync(join(rt.home, 'board-v1', 'tasks.sqlite')) && !closing && !rt.stopping && rt.readOnly?.() === undefined ? service().store : undefined)
+  rt.onBoardTaskCommit = fn => {
+    if (typeof fn !== 'function') return () => {}
+    commitListeners.add(fn)
+    return () => commitListeners.delete(fn)
+  }
+  rt.getBoardTask = taskId => typeof taskId === 'string' ? availableBoardStore()?.get(taskId) : undefined
+  rt.listRoomBoardTasks = roomId => typeof roomId === 'string'
+    ? (availableBoardStore()?.list().filter(task => task.scope === `room:${roomId}`) ?? [])
+    : []
   let toolSyncPending=false
   function projectChanged(event) {
     if (!toolSyncPending && projectRolesChanged(event)) {
