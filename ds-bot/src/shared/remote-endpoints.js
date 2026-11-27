@@ -67,6 +67,8 @@ export const COMPUTER_ONLY_ENDPOINTS = new Set([
   // Reads other apps' connector configurations and secrets from this computer's home folder.
   'connector-import-scan',
   'connector-import',
+  // Owner-side operation journals and deployment metadata.
+  'linear-project-watch-status', 'queue-inspect', 'version',
   // Claims the computer's own post-upgrade release notes notice; phones track their own app version locally.
   'release-notes-claim',
 ])
@@ -87,6 +89,8 @@ export const COMPUTER_ONLY_PREFIXES = Object.freeze([
   'job-',
   'api-',
   'mcp-',
+  'board-',
+  'legacy-review-',
   'workspace-',
   'terminal-',
   'engine-',
@@ -117,6 +121,7 @@ export function computerOnlyError(endpoint) {
   if (endpoint.startsWith('job-')) return { code: 'bot/refused', message: 'Background jobs are available on the computer', details: {} }
   if (endpoint.startsWith('api-')) return { code: 'bot/refused', message: 'External API settings and tokens are managed on the computer', details: {} }
   if (endpoint.startsWith('mcp-')) return { code: 'bot/refused', message: 'MCP access is set up on the computer', details: {} }
+  if (endpoint.startsWith('board-') || endpoint.startsWith('legacy-review-')) return { code: 'bot/refused', message: 'Use the authenticated owner connection for this board.', details: {} }
   if (endpoint.startsWith('workspace-') || endpoint.startsWith('terminal-')) return { code: 'bot/refused', message: 'Workspace files and terminals are available on the computer', details: {} }
   if (endpoint.startsWith('engine-')) return { code: 'bot/refused', message: 'Engine settings are managed on the computer', details: {} }
   if (endpoint.startsWith('plugins-')) return { code: 'bot/refused', message: 'Plugins are managed on the computer', details: {} }

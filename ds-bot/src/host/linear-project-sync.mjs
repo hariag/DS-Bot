@@ -173,6 +173,7 @@ export function createLinearProjectSync({
   linear,
   boardRoomId,
   getBoardTask,
+  readBoardChanges,
   assertActive = () => {},
   postComments = true,
   syncCancelled = true,
@@ -217,19 +218,39 @@ export function createLinearProjectSync({
     })
   }
 
+  function checkJob(job) {
+    const finish = (status, reason) => {
+      if (status === 'conflict') store.markOutboundConflict(job.operation_id, reason)
+      else store.markOutboundSuperseded(job.operation_id, reason)
+      return status
+    }
+    if (job.target_linear_state && store.hasNewerStateJob(job.task_id, job.task_revision)) {
+      return finish('superseded', 'A newer board revision already supplies the intended Linear state')
+    }
+    if (typeof getBoardTask !== 'function') return
+    const task = getBoardTask(job.task_id)
+    const binding = store.bindingByTask(job.task_id)
+    if (!task || task.scope !== `room:${boardRoomId}` || task.parentTaskId || !binding || binding.issueId !== job.issue_id) {
+      return finish('conflict', 'Bound top-level board task or issue is no longer in the configured scope')
+    }
+    if (task.revision < job.task_revision) return finish('conflict', 'Board history is older than the queued transition')
+    if (task.archivedAt) return finish('superseded', 'The bound board task has been archived')
+    if (job.to_status === 'done' && !hasIndependentAcceptances(task)) {
+      return task.status === 'done'
+        ? finish('conflict', 'Independent acceptance gate no longer holds on board task')
+        : finish('superseded', 'The board task is no longer done')
+    }
+    const applies = job.to_status === 'blocked' ? Boolean(task.blocked)
+      : job.to_status === 'unblocked' ? !task.blocked
+      : job.to_status === 'rework' ? task.status === 'waiting' && task.review?.result === 'rework'
+      : job.to_status === task.status
+    if (!applies) return finish('superseded', 'The board task has moved beyond the queued transition')
+  }
+
   async function processJob(job) {
     assertActive()
-    if (typeof getBoardTask === 'function') {
-      const liveTask = getBoardTask(job.task_id)
-      if (!liveTask) {
-        store.markOutboundConflict(job.operation_id, 'Bound board task no longer exists')
-        return 'conflict'
-      }
-      if (job.to_status === 'done' && !hasIndependentAcceptances(liveTask)) {
-        store.markOutboundConflict(job.operation_id, 'Independent acceptance gate no longer holds on board task')
-        return 'conflict'
-      }
-    }
+    const blocked = checkJob(job)
+    if (blocked) return blocked
 
     if (job.target_linear_state) {
       if (typeof linear?.getIssueSnapshot !== 'function' || typeof linear?.updateIssueState !== 'function') {
@@ -237,12 +258,23 @@ export function createLinearProjectSync({
         return 'conflict'
       }
       const snapshot = await linear.getIssueSnapshot({ issueId: job.issue_id })
+      if (snapshot.archivedAt) {
+        store.markOutboundConflict(job.operation_id, 'Bound Linear issue has been archived')
+        return 'conflict'
+      }
+      const obsolete = checkJob(job)
+      if (obsolete) return obsolete
       const attemptedMs = now()
       let finalState = snapshot.state
       let finalUpdatedAt = snapshot.updatedAt
       let finalStartedAt = snapshot.latestStateStartedAt
 
       if (snapshot.state.name.toLowerCase() !== job.target_linear_state.toLowerCase()) {
+        if (job.expected_linear_state_id && job.expected_linear_state_id !== snapshot.state.id
+          && !store.isKnownOutboundState(job.issue_id, snapshot.state.id, snapshot.latestStateStartedAt)) {
+          store.markOutboundConflict(job.operation_id, 'Linear state changed independently since this transition was queued')
+          return 'conflict'
+        }
         store.markOutboundAttempt(job.operation_id, iso(attemptedMs), snapshot.updatedAt)
         const updated = await linear.updateIssueState({
           issueId: job.issue_id,
@@ -253,19 +285,19 @@ export function createLinearProjectSync({
         finalState = updated.state
         finalUpdatedAt = updated.updatedAt
         finalStartedAt = updated.stateStartedAt
+        store.recordOutboundEcho({
+          issueId: job.issue_id,
+          toStateId: finalState.id,
+          toStateName: finalState.name,
+          operationId: job.operation_id,
+          attemptedMs,
+          verifiedMs: now(),
+          remoteUpdatedMs: Date.parse(finalUpdatedAt) || null,
+          stateStartedMs: finalStartedAt ? (Date.parse(finalStartedAt) || null) : null,
+        })
       }
-      const verifiedMs = now()
-      store.recordOutboundEcho({
-        issueId: job.issue_id,
-        toStateId: finalState.id,
-        toStateName: finalState.name,
-        operationId: job.operation_id,
-        attemptedMs,
-        verifiedMs,
-        remoteUpdatedMs: Date.parse(finalUpdatedAt) || null,
-        stateStartedMs: finalStartedAt ? (Date.parse(finalStartedAt) || null) : null,
-      })
 
+      const verifiedMs = now()
       let commentPosted = Boolean(job.comment_posted)
       if (postComments && !commentPosted && nonempty(job.comment_body) && typeof linear.addIssueComment === 'function') {
         const commentOutcome = await linear.addIssueComment({ issueId: job.issue_id, body: job.comment_body })
@@ -322,6 +354,23 @@ export function createLinearProjectSync({
     return draining
   }
 
+  function replayBoardChanges() {
+    if (typeof readBoardChanges !== 'function') return false
+    const previous = store.boardCheckpoint(boardRoomId)?.sequence ?? null
+    const page = readBoardChanges(boardRoomId, previous)
+    if (page === undefined) return false
+    if (previous !== null && page.cursor === previous) return true
+    for (const { before, after, operationId } of page.entries) {
+      enqueueForTransition(before, after, operationId)
+    }
+    // A crash can replay an already persisted job. The unique outbound identity
+    // keeps that replay harmless and the cursor advances only after all enqueues.
+    if (!store.advanceBoardCheckpoint(boardRoomId, previous, page.cursor)) {
+      throw new Error('Linear board history checkpoint changed')
+    }
+    return true
+  }
+
   function handleBoardCommit(events) {
     if (!Array.isArray(events) || !events.length) return []
     const queued = []
@@ -349,6 +398,7 @@ export function createLinearProjectSync({
 
   return {
     handleBoardCommit,
+    replayBoardChanges,
     syncTaskNow,
     drain,
   }

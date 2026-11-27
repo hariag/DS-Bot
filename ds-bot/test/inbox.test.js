@@ -242,3 +242,18 @@ test('connector-health, linear-sync, and remote-watch alert items sort under fix
   const firstFixIdx = view.items.findIndex(item => item.group === 'fix')
   if (lastDecideIdx !== -1) assert.ok(lastDecideIdx < firstFixIdx)
 })
+
+test('connector inbox alerts keep provider diagnostics out of the shared summary', async (t) => {
+  const { rt } = openHost(t)
+  await rt.load()
+  rt.state.connectors ??= {}
+  rt.state.connectors.notion = {}
+  const statuses = rt.connectorsInternals.statuses
+  const alert = () => rt.inboxView().items.find(item => item.id === 'connector-health:notion')
+  statuses.set('notion', { state: 'error', error: 'upstream diagnostic includes a private URL' })
+  assert.equal(alert()?.text, 'Notion connector unavailable (Settings → Connectors)')
+  statuses.set('notion', { state: 'needs-sign-in', error: 'upstream authentication details' })
+  assert.equal(alert()?.text, 'Notion needs sign-in again (Settings → Connectors)')
+  statuses.set('notion', { state: 'error', transientRefreshFailure: true })
+  assert.equal(alert(), undefined)
+})

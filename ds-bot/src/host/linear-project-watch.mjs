@@ -155,9 +155,9 @@ function createProjectWatcher(rt, spec) {
     outboundSync, watchContentChanges, postComments, syncCancelled, deliverGapMs, stateMap,
   } = spec
   const stop = new AbortController()
-  let store, sync, timer, running, lastPoll, readReason, handoffState
+  let store, sync, timer, running, lastPoll, readReason, handoffState, boardReplayError
   let readAfter = 0, failures = 0
-  let readFailedAt = 0, conflictAt = 0, uncertainAt = 0, lastInboxSig = ''
+  let readFailedAt = 0, conflictAt = 0, uncertainAt = 0, boardReplayFailedAt = 0, lastInboxSig = ''
 
   function inboxItems() {
     const items = []
@@ -181,6 +181,16 @@ function createProjectWatcher(rt, spec) {
       })
     } else uncertainAt = 0
 
+    const pending = store?.pendingSummary()
+    const oldestWaitingAt = Date.parse(pending?.oldestObservedAt)
+    if (pending?.count > 0 && Number.isFinite(oldestWaitingAt) && Date.now() - oldestWaitingAt >= DELIVER_LEASE_MS) {
+      items.push({
+        kind: 'linear-pending', group: 'fix', ref: `${projectId}:unhandled-events`, at: oldestWaitingAt,
+        botId: managerId, sessionId: rt.chatOf(managerId),
+        text: `Linear 有 ${pending.count} 条变更仍待项目经理处理（项目 ${projectId.slice(0, 8)}）`,
+      })
+    }
+
     if (readReason && failures >= 3) {
       readFailedAt ||= Date.now()
       items.push({
@@ -189,6 +199,14 @@ function createProjectWatcher(rt, spec) {
         text: `Linear watch degraded: ${readReason}`,
       })
     } else readFailedAt = 0
+
+    if (boardReplayError) {
+      boardReplayFailedAt ||= Date.now()
+      items.push({
+        kind: 'linear-sync', group: 'fix', ref: `${projectId}:board-history`, at: boardReplayFailedAt,
+        botId: managerId, roomId: boardRoomId, text: 'Linear 同步暂时无法读取任务看板变更记录',
+      })
+    } else boardReplayFailedAt = 0
 
     return items
   }
@@ -201,16 +219,21 @@ function createProjectWatcher(rt, spec) {
     }
   }
 
-  function assertActive() {
-    if (stop.signal.aborted || rt.stopping || !rt.botOf(managerId) || (readSecret === undefined
-      ? rt.linearProjectMcpAvailable(managerId) !== true
-      : rt.canUseSecret(readSecret, managerId) !== true)) {
+  function assertLocal() {
+    if (stop.signal.aborted || rt.stopping || !rt.botOf(managerId)) {
       throw new LinearProjectReadError('Linear authorization unavailable')
     }
     if (boardRoomId && !rt.roomOf(boardRoomId)?.members?.includes(managerId)) {
       throw new LinearProjectReadError('Configured Linear project board is unavailable to its project manager')
     }
     rt.requireHomeLock()
+  }
+
+  function assertActive() {
+    assertLocal()
+    if (readSecret === undefined ? rt.linearProjectMcpAvailable(managerId) !== true : rt.canUseSecret(readSecret, managerId) !== true) {
+      throw new LinearProjectReadError('Linear authorization unavailable')
+    }
   }
 
   async function loadAccess() {
@@ -251,6 +274,7 @@ function createProjectWatcher(rt, spec) {
       linear,
       boardRoomId,
       getBoardTask: id => rt.getBoardTask?.(id),
+      readBoardChanges: rt.readRoomBoardTaskChanges,
       assertActive,
       postComments,
       syncCancelled,
@@ -261,8 +285,8 @@ function createProjectWatcher(rt, spec) {
   }
 
   const open = () => {
-    assertActive()
-    store ??= openLinearProjectMonitor({ path: storePath(rt.home, projectId), projectId, intakeStateIds, linear, assertActive })
+    assertLocal()
+    store ??= openLinearProjectMonitor({ path: storePath(rt.home, projectId), projectId, intakeStateIds, linear, assertActive: assertLocal })
     ensureSync(store)
     return store
   }
@@ -277,13 +301,17 @@ function createProjectWatcher(rt, spec) {
       lastPoll: lastPoll ?? null,
       readReason: readReason ?? null,
       handoffState: handoffState ?? null,
+      pendingChanges: store?.pendingSummary() ?? { count: 0, oldestObservedAt: null },
       bindingsCount: stats?.bindingsCount ?? 0,
       suppressedEchoCount: stats?.suppressedEchoCount ?? 0,
       outbound: {
         enabled: outboundSync && Boolean(boardRoomId),
+        boardCheckpoint: boardRoomId ? store?.boardCheckpoint(boardRoomId) ?? null : null,
+        boardReplayError: boardReplayError ?? null,
         pending: stats?.outbound?.pending ?? 0,
         verified: stats?.outbound?.verified ?? 0,
         conflict: stats?.outbound?.conflict ?? 0,
+        superseded: stats?.outbound?.superseded ?? 0,
         lastSync: stats?.outbound?.lastSync ?? null,
       },
     }
@@ -359,8 +387,25 @@ function createProjectWatcher(rt, spec) {
     return 'Unsupported action.'
   }
 
+  function replayBoard() {
+    if (!outboundSync || !boardRoomId || !rt.readRoomBoardTaskChanges) return true
+    try {
+      if (!ensureSync(open())?.replayBoardChanges()) throw new Error('Board task history unavailable')
+      boardReplayError = undefined
+      return true
+    } catch {
+      if (!stop.signal.aborted && !boardReplayError) rt.warn?.('ds-bot: Linear board history replay unavailable')
+      boardReplayError = 'Board task history unavailable'
+      return false
+    }
+  }
+
   async function tick() {
     try {
+      if (outboundSync && boardRoomId) {
+        await rt.load()
+        replayBoard()
+      }
       if (Date.now() >= readAfter) {
         try {
           await loadAccess()
@@ -379,8 +424,7 @@ function createProjectWatcher(rt, spec) {
       if (!store || stop.signal.aborted) return
       assertActive()
       const activeSync = ensureSync(store)
-      if (activeSync) {
-        await loadAccess().catch(() => {})
+      if (activeSync && replayBoard()) {
         await activeSync.drain().catch(() => {})
       }
       const batch = store.getBatch(12, { minDeliveryGapMs: deliverGapMs, unresolvedDeliveryLeaseMs: DELIVER_LEASE_MS })
@@ -416,10 +460,14 @@ function createProjectWatcher(rt, spec) {
     executeTool,
     onBoardCommit(events) {
       if (stop.signal.aborted) return
+      if (rt.readRoomBoardTaskChanges) {
+        if (replayBoard()) void sync?.drain().catch(() => {})
+        return
+      }
       try {
         const opened = open()
         ensureSync(opened)?.handleBoardCommit(events)
-      } catch { /* Poll tick will retry once access/store becomes available. */ }
+      } catch { /* Compatibility for hosts lacking the board history interface. */ }
     },
     start() { schedule(0) },
     async stop() {

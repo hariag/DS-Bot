@@ -10,6 +10,9 @@ import { retryDelay } from './retry.js'
 
 const API = 'https://slack.com/api/'
 const TEXT_LIMIT = 4000
+// Leave room for the ACK to travel before Slack's three-second deadline.
+const ACK_WINDOW_MS = 2500
+const RECENT_DELIVERIES = 4096
 // A section block's `text` is capped at 3000 characters. Slack rejects the whole
 // message with invalid_blocks when one is longer, so the blocks have to be split
 // by that limit even though the message-level `text` field allows more.
@@ -61,6 +64,9 @@ export default {
     let reconnectTimer
     let reconnectAttempt = 0
     let selfId = ''
+    let fallbackSequence = 0
+    const handling = new Map()
+    const acknowledged = new Set()
 
     const api = (method, params) => call(env, { botToken }, method, params)
     const openUrl = async () => {
@@ -97,8 +103,11 @@ export default {
       }
       if (stopped) return
       const text = String(event.text ?? '').replaceAll(`<@${selfId}>`, '').trim()
-      await handlers.onMessage({
-        chat: { key: String(event.channel ?? ''), kind: direct ? 'direct' : 'group', title: '' },
+      return handlers.onMessage({
+        chat: {
+          key: String(event.channel ?? ''), kind: direct ? 'direct' : 'group', title: '',
+          threadId: event.thread_ts ?? (mentioned ? event.ts : undefined),
+        },
         sender: { id: String(event.user ?? ''), name: String(event.user ?? '') },
         text, images, files, mentioned,
         messageId: String(event.ts ?? ''),
@@ -109,11 +118,34 @@ export default {
       if (payload.type !== 'block_actions') return
       const action = payload.actions?.[0]
       if (action === undefined) return
-      await handlers.onAction({
-        chat: { key: String(payload.channel?.id ?? ''), kind: 'direct', title: '' },
+      return handlers.onAction({
+        chat: { key: String(payload.channel?.id ?? ''), kind: 'direct', title: '', threadId: payload.message?.thread_ts },
         sender: { id: String(payload.user?.id ?? ''), name: String(payload.user?.name ?? payload.user?.id ?? '') },
         data: String(action.value ?? action.action_id ?? ''),
         messageId: String(payload.message?.ts ?? ''),
+      })
+    }
+
+    const deliver = (id, type, receive, ack) => {
+      if (acknowledged.has(id)) { ack(); return }
+      let delivery = handling.get(id)
+      if (delivery === undefined) {
+        delivery = Promise.resolve().then(receive).then(accepted => {
+          if (accepted === false) return false
+          acknowledged.add(id)
+          if (acknowledged.size > RECENT_DELIVERIES) acknowledged.delete(acknowledged.values().next().value)
+          return true
+        }, error => {
+          env.log?.warn?.('ds-bot im: slack %s failed: %s', type, error?.message ?? error)
+          return false
+        }).finally(() => handling.delete(id))
+        handling.set(id, delivery)
+      }
+      const deadline = performance.now() + ACK_WINDOW_MS
+      void delivery.then(done => {
+        // An unacknowledged delivery may come back with a new envelope id.
+        // A retry shares the in-flight handoff or acknowledges a completed one.
+        if (done && performance.now() < deadline) ack()
       })
     }
 
@@ -154,15 +186,27 @@ export default {
           handlers.onStatus({ state: 'ready' })
           return
         }
-        // Every envelope is ACKed by echoing its id.
-        if (packet.envelope_id !== undefined && next.readyState === 1) {
-          try { next.send(JSON.stringify({ envelope_id: packet.envelope_id })) } catch { /* closing */ }
+        const envelopeId = packet.envelope_id
+        const ack = () => {
+          if (envelopeId === undefined || stopped || next.readyState !== 1) return
+          try { next.send(JSON.stringify({ envelope_id: envelopeId })) } catch { /* closing */ }
         }
-        if (packet.type === 'disconnect') { next.close(4000); return }
         if (packet.type === 'events_api' && packet.payload?.type === 'event_callback') {
-          void onEvent(packet.payload.event ?? {}).catch(error => env.log?.warn?.('ds-bot im: slack event failed: %s', error?.message ?? error))
+          const event = packet.payload.event ?? {}
+          const eventId = typeof packet.payload.event_id === 'string' && packet.payload.event_id !== ''
+            ? `event:${packet.payload.event_id}`
+            : `envelope:${envelopeId ?? ++fallbackSequence}`
+          deliver(eventId, 'event', () => onEvent(event), ack)
         } else if (packet.type === 'interactive') {
-          void onInteractive(packet.payload ?? {}).catch(error => env.log?.warn?.('ds-bot im: slack action failed: %s', error?.message ?? error))
+          const payload = packet.payload ?? {}
+          const actionId = payload.actions?.[0]?.action_ts
+          const id = typeof actionId === 'string' && actionId !== ''
+            ? `action:${payload.team?.id ?? ''}:${payload.user?.id ?? ''}:${actionId}`
+            : `envelope:${envelopeId ?? ++fallbackSequence}`
+          deliver(id, 'action', () => onInteractive(payload), ack)
+        } else {
+          ack()
+          if (packet.type === 'disconnect') next.close(4000)
         }
       })
       next.addEventListener('close', () => {
@@ -210,6 +254,7 @@ export default {
         for (const [index, chunk] of chunks.entries()) {
           const result = await api('chat.postMessage', {
             channel: chat.key,
+            thread_ts: chat.threadId,
             text: chunk,
             blocks: blocksFor(toMrkdwn(chunk), index === chunks.length - 1 ? buttons : undefined),
           })
@@ -276,7 +321,7 @@ export default {
           doneResp = await env.fetch(`${apiBase(env)}files.completeUploadExternal`, {
             method: 'POST',
             headers: { authorization: `Bearer ${botToken}`, 'content-type': 'application/json; charset=utf-8' },
-            body: JSON.stringify({ files: [{ id: meta.file_id, title: image.alt || name }], channel_id: chat.key }),
+            body: JSON.stringify({ files: [{ id: meta.file_id, title: image.alt || name }], channel_id: chat.key, thread_ts: chat.threadId }),
             signal: AbortSignal.timeout(30_000),
           })
         } catch (error) {

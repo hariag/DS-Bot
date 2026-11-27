@@ -876,7 +876,7 @@ export function install(rt) {
         botId: primaryBotId,
         text: row.state === 'needs-sign-in'
           ? `${entry.name} needs sign-in again (Settings → Connectors)`
-          : `${entry.name} connector error: ${row.error ?? 'unavailable'}`,
+          : `${entry.name} connector unavailable (Settings → Connectors)`,
       })
     }
     for (const id of [...alertSince.keys()]) {

@@ -1133,6 +1133,69 @@ test('reply origin: an IM turn answers its own chat, and only that chat', async 
   assert.deepEqual(s.fake.sent.map(entry => entry.chat.key), ['dm-u1'])
 })
 
+test('reply origin distinguishes threads in one channel', async (t) => {
+  const s = await start()
+  t.after(s.stop)
+  await pairedConn(s)
+  const ask = threadId => dm(s, 'u1', 'question', { chat: { key: 'dm-u1', kind: 'direct', threadId } })
+  const respond = text => s.emitEvent('a', 'assistant/message', { message: { content: [{ type: 'text', text }] } })
+  await ask('1.0')
+  s.imTurn('a')
+  respond('context one')
+  await s.flush()
+  assert.deepEqual(s.fake.sent.map(entry => entry.chat.threadId), ['1.0'])
+
+  await ask('2.0')
+  s.emitEvent('a', 'user/message', { source: { kind: 'user', rpcId: s.prompts.at(-1).requestId } })
+  respond('mixed context')
+  await s.flush()
+  assert.deepEqual(s.fake.sent.map(entry => entry.text), ['context one'])
+})
+
+test('a numbered answer cannot cross into a different thread', async (t) => {
+  const s = await start()
+  t.after(s.stop)
+  await pairedConn(s)
+  const message = (threadId, text) => dm(s, 'u1', text, { chat: { key: 'dm-u1', kind: 'direct', threadId } })
+  await message('1.0', 'ask me')
+  s.imTurn('a')
+  s.rt.state.questions.a = { id: 'q1', question: 'Proceed?', options: [{ label: 'yes' }] }
+  await s.rt.save()
+  await s.flush()
+  assert.equal(s.fake.sent.at(-1).chat.threadId, '1.0')
+  await message('2.0', '1')
+  assert.equal(s.rt.state.questions.a.id, 'q1')
+  await message('1.0', '1')
+  assert.equal(s.rt.state.questions.a, undefined)
+})
+
+test('Slack rechecks an uncertain DSH handoff without answering a later numbered card', async (t) => {
+  const s = await start({ platform: 'slack' })
+  t.after(s.stop)
+  const conn = await add(s, { appToken: 'xapp-test', botToken: 'xoxb-test' })
+  s.rt.state.im.connections[conn.id].paired.push({ id: 'u1', at: 1 })
+  await s.rt.save()
+  let confirmed = false
+  s.rt.confirmSessionFlushed = async () => confirmed
+  const numeric = () => dm(s, 'u1', '1', { messageId: '1.0' })
+  assert.equal(await numeric(), false)
+  const requestId = s.prompts.at(-1).requestId
+  s.imTurn('a')
+  s.rt.state.questions.a = { id: 'q1', question: 'Proceed?', options: [{ label: 'yes' }] }
+  await s.rt.save()
+  s.rt.findAdmittedForSend = async options => {
+    assert.equal(options.requestId, requestId)
+    return { admitted: true, durable: false, sessionId: 'a' }
+  }
+  assert.equal(await numeric(), false)
+  assert.equal(s.rt.state.questions.a.id, 'q1')
+
+  confirmed = true
+  assert.equal(await numeric(), true)
+  assert.equal(s.rt.state.questions.a.id, 'q1')
+  assert.equal(s.prompts.length, 1)
+})
+
 test('member cards follow only the originating IM group and answers return through the room', async (t) => {
   const s = await start()
   t.after(s.stop)

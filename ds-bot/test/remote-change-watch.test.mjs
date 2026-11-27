@@ -61,6 +61,7 @@ test('diverged or incomplete history preserves original cursor and events',async
     {status:'diverged',merge_base_commit:{sha:a},total_commits:1,commits:[commit(c)]},
     {status:'ahead',merge_base_commit:{sha:a},total_commits:1001,commits:[commit(c)]},
     {status:'ahead',merge_base_commit:{sha:a},total_commits:2,commits:[commit(c)]},
+    {status:'ahead',merge_base_commit:{sha:a},total_commits:1,commits:[commit(b)]},
   ]) {
     const f=fixture(),s=openRemoteChangeStore(':memory:',spec,f.assertOwner)
     const request=async(url,opts)=>url.includes('/compare/')?response(body):f.request(url,opts)
@@ -97,6 +98,84 @@ test('rate limiting and the API file cap remain visible without moving the curso
       assert.equal(s.state().cursor,a);assert.equal(s.rows().length,0)
     } finally {s.close()}
   }
+})
+
+test('GitHub rate-limit responses use the later server retry boundary', async () => {
+  const now = Date.parse('2026-11-27T08:00:00Z')
+  for (const { headers, body, delay } of [
+    { headers: { 'retry-after': '2100' }, body: {}, delay: 2_100_000 },
+    { headers: { 'retry-after': '30', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(now / 1000 + 3600) }, body: {}, delay: 3_600_000 },
+    { headers: {}, body: { message: 'You have exceeded a secondary rate limit.' }, delay: 0 },
+  ]) {
+    const store = openRemoteChangeStore(':memory:', spec, () => {})
+    const request = async () => ({ ok: false, status: 403, headers: { get: name => headers[name] ?? null }, json: async () => body })
+    try {
+      const poll = createRemoteChangePoller({ spec, store, request, authorize: async () => 'test-token', clock: () => new Date(now) })
+      await assert.rejects(poll(), error => error.message === 'rate limited' && error.retryDelay === delay)
+      assert.equal(store.state().cursor, a)
+    } finally { store.close() }
+  }
+})
+
+test('the watcher waits for GitHub Retry-After and continues with the same cursor', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'remote-watch-backoff-'))
+  t.after(() => rmSync(home, { recursive: true, force: true }))
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.parse('2026-11-27T08:00:00Z') })
+  const f = fixture()
+  let dispose, requests = 0
+  t.mock.method(globalThis, 'fetch', async (...args) => {
+    if (++requests > 1) return f.request(...args)
+    return { ok: false, status: 429, headers: { get: name => name === 'retry-after' ? '1800' : null } }
+  })
+  const rt = {
+    home, config: { remoteChangeWatch: spec }, state: { bots: { pm: {} } }, ctx: { effect: fn => { dispose = fn() } },
+    load: async () => {}, loadSecrets: async () => {}, canUseSecret: () => true, secretValue: () => 'test-token', requireHomeLock() {},
+  }
+  install(rt)
+  const settle = () => new Promise(resolve => setImmediate(resolve))
+  try {
+    t.mock.timers.tick(15_000)
+    await settle()
+    assert.equal(rt.remoteChangeView().status, 'rate limited')
+    t.mock.timers.tick(1_800_000 - 1)
+    await settle()
+    assert.equal(requests, 1)
+    t.mock.timers.tick(1)
+    await settle()
+    assert.equal(rt.remoteChangeView().status, 'ok')
+    assert.equal(rt.remoteChangeView().events[0].sha, c)
+  } finally { await dispose() }
+})
+
+test('the watcher resumes a staged comparison promptly after a transient upstream failure', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'remote-watch-catch-up-'))
+  t.after(() => rmSync(home, { recursive: true, force: true }))
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const f = fixture()
+  let dispose, failed = false
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (!failed && url.includes(`/commits/${c}?`)) {
+      failed = true
+      return response({}, { status: 503 })
+    }
+    return f.request(url, options)
+  })
+  const rt = {
+    home, config: { remoteChangeWatch: spec }, state: { bots: { pm: {} } }, ctx: { effect: fn => { dispose = fn() } },
+    load: async () => {}, loadSecrets: async () => {}, canUseSecret: () => true, secretValue: () => 'test-token', requireHomeLock() {},
+  }
+  install(rt)
+  const settle = () => new Promise(resolve => setImmediate(resolve))
+  try {
+    t.mock.timers.tick(15_000)
+    await settle()
+    assert.equal(rt.remoteChangeView().status, 'unavailable')
+    t.mock.timers.tick(30_000)
+    await settle()
+    assert.equal(rt.remoteChangeView().status, 'ok')
+    assert.equal(rt.remoteChangeView().events[0].sha, c)
+    assert.equal(f.calls.filter(({ url }) => url.includes('/compare/')).length, 1)
+  } finally { await dispose() }
 })
 
 test('loss of the Host lock before commit leaves cursor and staged work unchanged',async()=>{

@@ -73,7 +73,11 @@ async function openPage(t) {
   }
   const actions = {
     ...teamActions({ call, after: async promise => { const value = await promise; roster.set(await read()); return value }, partFor: id => id, roster, ui, live: createSource({}), cards: createSource({}), heldCards: createSource({}) }),
-    openSession: id => opened.push(id),
+    openSession: id => {
+      opened.push(id)
+      ui.set(state => ({ ...state, inbox: false, inboxTarget: state.inbox ? id : null }))
+    },
+    openPersonalBoard: () => ui.set(state => ({ ...state, personalBoard: true })),
     reportError: (error) => { throw error },
   }
   const completions = createSource({})
@@ -122,6 +126,46 @@ test('the page shows the host\'s list in its three groups, directly actionable w
   // The tabs count what waits; the filter pills list every Bot and group something waits in.
   assert.deepEqual(all(tree, node => node.type === 'button' && node.props['aria-pressed'] !== undefined && !hasClass(node, 'bt-ib-pill')).map(textOf), ['Waiting for you9', 'New replies'])
   assert.deepEqual(all(tree, node => hasClass(node, 'bt-ib-pill')).map(textOf), ['All', 'Chief', 'Writer', 'Desk', 'Coder'])
+})
+
+test('integration alerts lead to settings or the appropriate board without acting on the alert', async (t) => {
+  const { rt, ui, actions, opened, draw, refresh } = await openPage(t)
+  t.after(rt.addInboxSource(() => [
+    { kind: 'connector-health', ref: 'notion', group: 'fix', botId: 'chief' },
+    { kind: 'linear-watch', ref: 'project:watch-error', group: 'fix', botId: 'chief', roomId: 'desk' },
+    { kind: 'linear-sync', ref: 'project:outbound-conflict', group: 'fix', botId: 'chief', roomId: 'desk' },
+    { kind: 'linear-pending', ref: 'project:unhandled-events', group: 'fix', botId: 'chief' },
+    { kind: 'remote-watch', ref: 'owner/repo:main', group: 'fix', botId: 'chief' },
+  ]))
+  await refresh()
+  const action = (id, label) => {
+    actions.openInbox()
+    const row = rowOf(draw(), id)
+    assert.ok(row, id)
+    assert.equal(button(row, 'Open in chat'), undefined)
+    button(row, label).props.onClick()
+    assert.ok(rt.inboxView().items.some(item => item.id === id))
+    assert.equal(ui.getSnapshot().inbox, false)
+  }
+  action('connector-health:notion', 'Connectors')
+  assert.equal(ui.getSnapshot().settings.page, 'connectors')
+  actions.closeSettings()
+  action('linear-watch:project:watch-error', 'Connectors')
+  assert.equal(ui.getSnapshot().settings.page, 'connectors')
+  actions.closeSettings()
+  action('linear-sync:project:outbound-conflict', 'Task board')
+  assert.deepEqual(opened, ['desk'])
+  assert.equal(ui.getSnapshot().inboxBoardTarget, 'desk')
+  actions.consumeInboxTaskBoard('other')
+  assert.equal(ui.getSnapshot().inboxBoardTarget, 'desk')
+  actions.consumeInboxTaskBoard('desk')
+  assert.equal(ui.getSnapshot().inboxBoardTarget, null)
+  actions.openInbox()
+  button(rowOf(draw(), 'linear-pending:project:unhandled-events'), 'Open in chat').props.onClick()
+  assert.deepEqual(opened, ['desk', 'chief'])
+  assert.equal(ui.getSnapshot().inbox, false)
+  action('remote-watch:owner/repo:main', 'Remote code changes')
+  assert.equal(ui.getSnapshot().personalBoard, true)
 })
 
 test('answering an item directly in the list settles it in the host and leaves after the grace period', async (t) => {

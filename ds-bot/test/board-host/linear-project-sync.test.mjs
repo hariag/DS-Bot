@@ -29,6 +29,7 @@ function createFakeLinearMcpServer({ projectId = PROJECT_ID, includeComments = t
   let clock = Date.parse('2026-11-27T01:00:00Z')
   const stateByName = new Map(STATES.map(s => [s.name.toLowerCase(), s]))
   const issues = new Map()
+  const readCalls = []
   const writeCalls = []
   const comments = []
 
@@ -54,6 +55,7 @@ function createFakeLinearMcpServer({ projectId = PROJECT_ID, includeComments = t
   }
 
   const call = async (name, args) => {
+    readCalls.push([name, structuredClone(args)])
     if (name === 'list_issue_statuses') return STATES
     if (name === 'list_issues') {
       const list = [...issues.values()].filter(issue => {
@@ -106,6 +108,7 @@ function createFakeLinearMcpServer({ projectId = PROJECT_ID, includeComments = t
   return {
     api,
     issues,
+    readCalls,
     writeCalls,
     comments,
     addIssue,
@@ -443,6 +446,181 @@ test('outbound sync degrades gracefully without comment tools, syncs block/cance
   sync2.handleBoardCommit([{ before: prev, after: cancelled, operationId: 'op-cancel', actor: 'user' }])
   await sync2.drain()
   assert.equal(remote.issues.get(issueUuid).status, 'Canceled')
+})
+
+test('board journal starts at cutover, preserves offline commits, and never replays an older state over a newer one', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'linear-journal-test-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const remote = createFakeLinearMcpServer()
+  const issueId = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbb3'
+  remote.addIssue({ uuid: issueId, id: 'HAR-12' })
+  remote.advanceClock()
+  const path = join(dir, 'monitor.sqlite')
+  const watch = () => openLinearProjectMonitor({ path, projectId: PROJECT_ID, linear: remote.api, now: remote.now })
+  let monitor = watch()
+  t.after(() => monitor.close())
+  await monitor.poll()
+  const board = openTaskStore(join(dir, 'tasks.sqlite'), {
+    assertWriteLock() {},
+    authorize: () => true,
+    verifyEvidence: () => true,
+  })
+  t.after(() => board.close())
+  const card = board.create({ operationId: 'journal-register', actor: MANAGER_ID, intake: {},
+    task: { id: 'T-HAR-0012', scope: `room:${ROOM_ID}`, type: 'feature', title: 'HAR-12',
+      owner: 'dev', reviewer: 'reviewer', acceptance: 'Verify original change' } })
+  const command = (id, operationId, type, value, actor = 'dev') => board.command({
+    operationId, taskId: id, expectedRevision: board.get(id).revision, actor, type, value,
+  })
+  command(card.id, 'before-cutover', 'start')
+  monitor.bindIssue({ taskId: card.id, issueId, identifier: 'HAR-12', roomId: ROOM_ID })
+  let connected = false
+  let failRead = true
+  const sync = () => createLinearProjectSync({
+    store: monitor, boardRoomId: ROOM_ID, getBoardTask: id => board.get(id), now: remote.now,
+    readBoardChanges: (room, cursor) => board.roomTaskChanges(room, cursor),
+    assertActive() { if (!connected) throw new Error('MCP offline') },
+    linear: { ...remote.api, getIssueSnapshot(args) {
+      if (failRead) { failRead = false; throw new Error('temporary MCP read failure') }
+      return remote.api.getIssueSnapshot(args)
+    } },
+  })
+  let worker = sync()
+  assert.equal(worker.replayBoardChanges(), true)
+  const baseline = monitor.boardCheckpoint(ROOM_ID)
+  assert.ok(baseline.baselineSequence > 0)
+  assert.deepEqual(monitor.listOutbound(), [])
+
+  command(card.id, 'offline-report', 'report', { kind: 'personal', environment: 'test', evidence: 'Implementation' })
+  const unrelated = board.create({ operationId: 'unrelated-register', actor: MANAGER_ID, intake: {},
+    task: { id: 'T-OTHER-0012', scope: 'room:other', type: 'feature', title: 'HAR-12',
+      owner: 'dev', reviewer: 'reviewer', acceptance: 'Different room' } })
+  command(unrelated.id, 'other-start', 'start')
+  assert.equal(worker.replayBoardChanges(), true)
+  assert.equal(monitor.listOutbound().length, 1)
+  const originalJob = monitor.listOutbound()[0]
+  assert.match(originalJob.operation_id, /^outbound:offline-report:/)
+  assert.equal(originalJob.to_status, 'reported')
+  assert.ok(monitor.boardCheckpoint(ROOM_ID).sequence > baseline.sequence)
+  await worker.drain()
+  assert.equal(remote.writeCalls.length, 0)
+  connected = true
+  await worker.drain()
+  assert.equal(monitor.getOutbound(originalJob.operation_id).status, 'retry')
+
+  await monitor.close()
+  command(card.id, 'down-cancel', 'cancel', { reason: 'Scope halted' }, 'user')
+  monitor = watch()
+  worker = sync()
+  assert.equal(worker.replayBoardChanges(), true)
+  assert.equal(monitor.boardCheckpoint(ROOM_ID).baselineSequence, baseline.baselineSequence)
+  await worker.drain()
+  assert.equal(remote.issues.get(issueId).status, 'Canceled')
+  assert.match(monitor.listOutbound()[0].operation_id, /^outbound:down-cancel:/)
+  remote.advanceClock(10_000)
+  assert.equal(worker.replayBoardChanges(), true)
+  await worker.drain()
+  assert.deepEqual(remote.writeCalls.filter(([tool]) => tool === 'save_issue').map(([, { state }]) => state), ['Canceled'])
+  assert.equal(monitor.listOutbound().length, 2)
+  assert.equal(monitor.getOutbound(originalJob.operation_id).status, 'superseded')
+})
+
+test('remote changes are preserved on a queued conflict and a matching no-op does not swallow a user event', async t => {
+  const remote = createFakeLinearMcpServer()
+  const issueId = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbb4'
+  remote.addIssue({ uuid: issueId, id: 'HAR-13' })
+  remote.advanceClock()
+  const monitor = openLinearProjectMonitor({ path: ':memory:', projectId: PROJECT_ID, linear: remote.api, now: remote.now })
+  t.after(() => monitor.close())
+  await monitor.poll()
+  let card = { id: 'T-HAR-0013', revision: 2, status: 'working', scope: `room:${ROOM_ID}`, type: 'feature' }
+  monitor.bindIssue({ taskId: card.id, issueId, identifier: 'HAR-13', roomId: ROOM_ID })
+  const worker = createLinearProjectSync({ store: monitor, linear: remote.api, boardRoomId: ROOM_ID,
+    getBoardTask: () => card, postComments: false, now: remote.now })
+  remote.setIssueState(issueId, 'In Progress')
+  worker.handleBoardCommit([{ before: { status: 'proposed' }, after: card, operationId: 'observed-start' }])
+  await worker.drain()
+  assert.deepEqual(remote.writeCalls, [])
+  remote.advanceClock()
+  assert.equal((await monitor.poll()).queued, 1)
+  assert.equal(monitor.pending().at(-1).toStateId, 'st-prog')
+  assert.equal(monitor.stats().suppressedEchoCount, 0)
+
+  const before = card
+  card = { ...card, status: 'reported', revision: 3 }
+  worker.handleBoardCommit([{ before, after: card, operationId: 'conflicted-report' }])
+  remote.setIssueState(issueId, 'Backlog')
+  await worker.drain()
+  assert.deepEqual(remote.writeCalls, [])
+  assert.equal(remote.issues.get(issueId).status, 'Backlog')
+  assert.match(monitor.listOutbound()[0].last_error, /changed independently/)
+  assert.equal(monitor.stats().outbound.conflict, 1)
+})
+
+test('MCP builds and upgrades the content baseline without historical replay and preserves distinct repeated edits after a short outage', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'linear-content-test-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const remote = createFakeLinearMcpServer()
+  const issueId = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbb5'
+  remote.addIssue({ uuid: issueId, id: 'HAR-14', description: 'scope A' })
+  remote.advanceClock()
+  const options = { projectId: PROJECT_ID, now: remote.now, linear: remote.api }
+  const fresh = openLinearProjectMonitor({ ...options, path: ':memory:' })
+  t.after(() => fresh.close())
+  assert.equal((await fresh.poll()).queued, 0)
+  assert.equal(remote.readCalls.filter(([name]) => name === 'get_issue').length, 0)
+
+  const path = join(dir, 'monitor.sqlite')
+  const legacy = openLinearProjectMonitor({ ...options, path, linear: {
+    async listIssues(args) {
+      const page = await remote.api.listIssues(args)
+      return { ...page, nodes: page.nodes.map(({ contentMeta: _legacyDidNotCaptureContent, ...issue }) => issue) }
+    },
+    listHistory() { assert.fail('The legacy baseline has no content and does not replay issue history') },
+  } })
+  await legacy.poll()
+  await legacy.close()
+  remote.advanceClock(30_000)
+  let missingListField = true
+  let unavailable = false
+  const upgraded = openLinearProjectMonitor({ ...options, path, linear: {
+    ...remote.api,
+    async listIssues(args) {
+      if (unavailable) throw new Error('Temporary MCP outage')
+      const page = await remote.api.listIssues(args)
+      if (!missingListField) return page
+      return { ...page, nodes: page.nodes.map(({ contentMeta: _partialProjection, ...issue }) => issue) }
+    },
+  } })
+  t.after(() => upgraded.close())
+  assert.deepEqual({ ...(await upgraded.poll()), checkpoint: null }, { baseline: false, scanned: 1, queued: 0, checkpoint: null })
+  const fallback = remote.readCalls.filter(([name]) => name === 'get_issue')
+  assert.equal(fallback.length, 1)
+  assert.ok(fallback[0][1].fields.includes('description'))
+  missingListField = false
+
+  unavailable = true
+  remote.setIssueContent(issueId, { description: 'scope B' })
+  remote.advanceClock()
+  await assert.rejects(upgraded.poll(), /Temporary MCP outage/)
+  unavailable = false
+  assert.equal((await upgraded.poll()).queued, 1)
+  assert.equal((await fresh.poll()).queued, 1)
+
+  for (const description of ['scope A', 'scope B']) {
+    remote.setIssueContent(issueId, { description })
+    remote.advanceClock()
+    assert.equal((await upgraded.poll()).queued, 1)
+    remote.advanceClock()
+    assert.equal((await upgraded.poll()).queued, 0)
+  }
+  const changes = upgraded.pending()
+  assert.equal(changes.length, 3)
+  assert.ok(changes.every(event => event.kind === 'content_changed' && event.changedFields.join() === 'description'))
+  assert.deepEqual(changes[0].contentHash, changes[2].contentHash)
+  assert.notEqual(changes[0].id, changes[2].id)
+  assert.doesNotMatch(JSON.stringify(changes), /scope [AB]/)
+  assert.deepEqual(remote.writeCalls, [])
 })
 
 test('multi-project watcher config, Chinese role handoff, manual bind tool and extended status endpoint', async t => {

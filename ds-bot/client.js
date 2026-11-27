@@ -23978,10 +23978,18 @@ function teamActions({ call: call2, after, partFor, roster, ui, live, cards, hel
     },
     // The inbox page sits over the conversation column like New chat (inbox.js).
     openInbox: () => {
-      ui.set((state) => ({ ...state, inbox: true, inboxTarget: null, newChat: null, newChatSection: null, exchange: null, menu: null, palette: null, groupSearch: null, leftDrawer: false }));
+      ui.set((state) => ({ ...state, inbox: true, inboxTarget: null, inboxBoardTarget: null, newChat: null, newChatSection: null, exchange: null, menu: null, palette: null, groupSearch: null, leftDrawer: false }));
     },
     closeInbox: () => {
       ui.set((state) => state.inbox ? { ...state, inbox: false, inboxTarget: null } : state);
+    },
+    // A board request belongs to the same Session navigation that closes the inbox.
+    openInboxTaskBoard: (roomId) => {
+      const sessionId = partFor(roomId);
+      ui.set((state) => state.inboxTarget === sessionId ? { ...state, inboxBoardTarget: sessionId } : state);
+    },
+    consumeInboxTaskBoard: (sessionId) => {
+      ui.set((state) => state.inboxBoardTarget === sessionId ? { ...state, inboxBoardTarget: null } : state);
     },
     openPalette: (query = "") => {
       ui.set((state) => ({ ...state, palette: { query, token: Date.now() }, newChat: null, menu: null }));
@@ -33298,7 +33306,7 @@ function CellEmpty({ className }) {
   return (0, import_react8.createElement)("span", { ref, className, hidden: true, "data-bt-empty": true });
 }
 
-// ../../../../root/.dsh/profiles/web/node_modules/deep-view/src/react/ui.js
+// node_modules/deep-view/src/react/ui.js
 var import_react9 = require("react");
 var FallbackMarkdown = ({ text }) => (0, import_react9.createElement)("span", null, String(text ?? ""));
 var ViewUi = (0, import_react9.createContext)({ t: (key) => key, Markdown: FallbackMarkdown });
@@ -33365,7 +33373,7 @@ function useOptionKeys(count, onPick, ownRef) {
   return count > 0 && listening2 <= 1;
 }
 
-// ../../../../root/.dsh/profiles/web/node_modules/deep-view/src/core/formula.js
+// node_modules/deep-view/src/core/formula.js
 var FUNCTIONS = {
   min: { args: [1, Infinity], run: (...values) => Math.min(...values.map(num)) },
   max: { args: [1, Infinity], run: (...values) => Math.max(...values.map(num)) },
@@ -33646,7 +33654,7 @@ function evaluate(tree, lookup) {
   }
 }
 
-// ../../../../root/.dsh/profiles/web/node_modules/deep-view/src/core/views.js
+// node_modules/deep-view/src/core/views.js
 var LAYOUT = ["stack", "row"];
 var DISPLAY = ["text", "metric", "table", "chart", "progress", "callout", "sources", "html"];
 var INPUT_TYPES = ["slider", "choice", "toggle", "number"];
@@ -34278,7 +34286,7 @@ function validateForm(node, values) {
   return { fields };
 }
 
-// ../../../../root/.dsh/profiles/web/node_modules/deep-view/src/react/chart.js
+// node_modules/deep-view/src/react/chart.js
 var import_react10 = require("react");
 var PALETTE = ["var(--dv-accent)", "var(--dv-ink-tangerine)", "var(--dv-ink-green)", "var(--dv-ink-violet)", "var(--dv-ink-sky)", "var(--dv-ink-rose)", "var(--dv-ink-yellow)", "var(--dv-ink-cyan)", "var(--dv-ink-magenta)"];
 var colorAt = (index) => PALETTE[index % PALETTE.length];
@@ -34717,7 +34725,7 @@ var CHART_CSS = `
 @media (prefers-reduced-motion:reduce){.dv-chart-mark,.dv-chart-dot{transition:none}.dv-chart-tip{animation:none}}
 `;
 
-// ../../../../root/.dsh/profiles/web/node_modules/deep-view/src/react/frame.js
+// node_modules/deep-view/src/react/frame.js
 var import_react11 = require("react");
 var THEME_VARS = [
   ["--view-ink", "--bt-ink", "--dv-ink"],
@@ -34799,7 +34807,7 @@ var HTML_CSS = `
 .dv-view-frame-stopped{margin:0;font-size:13px;line-height:18px;color:var(--dv-ink-2)}
 `;
 
-// ../../../../root/.dsh/profiles/web/node_modules/deep-view/src/react/card.js
+// node_modules/deep-view/src/react/card.js
 var import_react12 = require("react");
 var mdLabels2 = (ui) => ({ code: { copyLabel: ui.t("Copy"), copiedLabel: ui.t("Copied") }, footnotes: ui.t("Footnotes") });
 var TONES2 = ["good", "warn", "bad"];
@@ -35541,7 +35549,7 @@ ${CHART_CSS}
 ${HTML_CSS}
 `;
 
-// ../../../../root/.dsh/profiles/web/node_modules/deep-view/src/react/styles.js
+// node_modules/deep-view/src/react/styles.js
 var THEME_CSS = `
 body{
 --dv-ink:var(--dsw-alias-label-primary);
@@ -35639,7 +35647,7 @@ button.dv-q-opt:active{background:var(--dv-active)}
 @media (prefers-reduced-motion:reduce){.dv-q,.dv-view-bare,.dv-q-submit,.dv-menu,.dv-q-check{animation:none}}
 `;
 
-// ../../../../root/.dsh/profiles/web/node_modules/deep-view/src/react/index.js
+// node_modules/deep-view/src/react/index.js
 var DEEP_VIEW_CSS = THEME_CSS + QUESTION_CSS + WIDGET_CSS;
 
 // src/client/enter-key.js
@@ -37464,7 +37472,7 @@ var COMPUTER_CSS = `
 .bt-cstep-shot-open img{max-height:280px;max-width:480px}
 `;
 
-// ../../../../root/.dsh/profiles/web/node_modules/deep-view/src/core/reply.js
+// node_modules/deep-view/src/core/reply.js
 var REPLY_KIND = "user-question-reply";
 var REPLY_SOURCE_KIND = "deep-view-reply";
 function viewCardText(args) {
@@ -49618,6 +49626,7 @@ var TAGS = {
   "connector-health": "Connector",
   "linear-sync": "Linear",
   "linear-watch": "Linear",
+  "linear-pending": "Linear",
   "remote-watch": "GitHub"
 };
 var inboxTag = (item) => TAGS[item?.kind] ?? "Alert";
@@ -49803,6 +49812,25 @@ function ItemBody({ item, bot, summary, roster, actions, hooks }) {
     } : {}
   };
   switch (item.kind) {
+    case "connector-health":
+    case "linear-watch":
+      return compact2("Connectors", () => {
+        actions.closeInbox();
+        actions.openConnectors();
+      });
+    case "linear-sync":
+      return item.roomId ? compact2("Task board", () => {
+        actions.openSession(item.roomId);
+        actions.openInboxTaskBoard(item.roomId);
+      }) : compact2("My task board", () => {
+        actions.closeInbox();
+        actions.openPersonalBoard();
+      });
+    case "remote-watch":
+      return compact2("Remote code changes", () => {
+        actions.closeInbox();
+        actions.openPersonalBoard();
+      });
     case "approval": {
       const approval = hooks.approvals.find((entry) => entry.id === item.ref);
       return approval && bot ? (0, import_react45.createElement)(ApprovalCard, { approval, bot, actions: guardedActions }) : compact2("Open in chat", open);
@@ -54089,7 +54117,7 @@ var CONNECTORS_PAGE_CSS = `
 @media (prefers-reduced-motion:reduce){.bt-app[data-fresh]::after,.bt-app[data-fresh] .bt-app-icon,.bt-app[data-fresh] .bt-app-btn-done{animation:none}}
 `;
 
-// ../../dsbot-room-patrol-fix-20261125/ds-bot/node_modules/qrcode-generator/dist/qrcode.mjs
+// node_modules/qrcode-generator/dist/qrcode.mjs
 var qrcode = function(typeNumber, errorCorrectionLevel) {
   const PAD0 = 236;
   const PAD1 = 17;
@@ -73543,6 +73571,17 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
     pending: botPendingOf(roster, bot)
   }) : "idle";
   const room2 = roster.roomsById[sessionId];
+  const inboxBoard = useUi((state) => state.inboxTarget === sessionId && state.inboxBoardTarget === sessionId);
+  (0, import_react83.useEffect)(() => {
+    if (!inboxBoard || !room2) return;
+    if (away) {
+      selectView("chat");
+      return;
+    }
+    setBoardReview(false);
+    setBoardOpen(true);
+    actions.consumeInboxTaskBoard(sessionId);
+  }, [inboxBoard, room2?.id, away, sessionId]);
   const goal = room2?.goal;
   const goalCompose = useUi((state) => room2 !== void 0 && state.goalCompose === room2.id);
   const goalOpen = useUi((state) => room2 !== void 0 && state.goalOpen === room2.id);

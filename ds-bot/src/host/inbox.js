@@ -20,6 +20,19 @@ const GROUP_OF = {
 const TEXT_MAX = 300
 const clip = value => (typeof value === 'string' ? value.trim().slice(0, TEXT_MAX) : '')
 const time = value => (Number.isFinite(value) ? value : 0)
+const sourceSets = new WeakMap()
+
+// Integration effects can start before the inbox subscribes to browser holds.
+export function prepare(rt) {
+  const sources = new Set()
+  rt.addInboxSource = source => {
+    sources.add(source)
+    rt.inboxChanged?.()
+    return () => { sources.delete(source); rt.inboxChanged?.() }
+  }
+  sourceSets.set(rt, sources)
+  return sources
+}
 
 // An extra source's items, kept to the shape every client reads.
 function sourceItem(raw) {
@@ -40,7 +53,7 @@ function sourceItem(raw) {
 
 export function install(rt) {
   const { state } = rt
-  const sources = new Set()
+  const sources = sourceSets.get(rt) ?? prepare(rt)
   const listeners = new Set()
   const changeListeners = new Set()
 
@@ -261,12 +274,6 @@ export function install(rt) {
     if (lastSnapshot === null) refresh({ live: false })
     return () => changeListeners.delete(listener)
   }
-  const addInboxSource = (source) => {
-    sources.add(source)
-    refresh()
-    return () => { sources.delete(source); refresh() }
-  }
-
   // What can add or remove an item: a save (cards, requests, blocks, pauses, goals —
   // already broadcast as a state revision, so no extra live ping), an approval, a
   // browser hold. Computer asks/holds and learning proposals call inboxChanged themselves.
@@ -282,5 +289,5 @@ export function install(rt) {
     sources.clear()
   }, 'ds-bot: inbox')
 
-  Object.assign(rt, { inboxView, inboxChanged: () => refresh(), onInboxAdded, onInboxChanged, addInboxSource })
+  Object.assign(rt, { inboxView, inboxChanged: () => refresh(), onInboxAdded, onInboxChanged })
 }

@@ -393,6 +393,11 @@ const releaseIsDone = release => {
   const dependents = id => reverseEdges.all(id).map(row => row.task_id)
   let audit
   const addHistory = db.prepare('INSERT INTO history(operation_id,actor,task_id,before,after) VALUES(?,?,?,?,?)')
+  const historyHead = db.prepare('SELECT COALESCE(MAX(sequence), 0) AS sequence FROM history')
+  const roomTaskChanges = db.prepare(`SELECT sequence,operation_id,before,after FROM history
+    WHERE sequence>? AND sequence<=? AND json_extract(after,'$.scope')=?
+      AND json_extract(after,'$.type') IN ('feature','bugfix') AND json_extract(after,'$.parentTaskId') IS NULL
+    ORDER BY sequence LIMIT ?`)
   const snapshot = row => row ? JSON.parse(JSON.stringify(row)) : null
   const recordCommit = (before, after, info) => {
     const id = after?.id ?? before?.id
@@ -1238,6 +1243,18 @@ const releaseIsDone = release => {
       })
     },
     listActions(id) { return db.prepare('SELECT id,task_id AS taskId,revision,kind,actor,state,receipt FROM actions WHERE task_id=? ORDER BY rowid').all(requireId(id, 'task id')) },
+    roomTaskChanges(roomId, after, count = 100) {
+      requireId(roomId, 'room id')
+      const { sequence:head } = historyHead.get()
+      if (after === null) return { cursor:head, entries:[] }
+      if (!Number.isSafeInteger(after) || after < 0 || after > head
+        || !Number.isSafeInteger(count) || count < 1 || count > 500) throw new Error('invalid room task history cursor')
+      const rows = roomTaskChanges.all(after, head, `room:${roomId}`, count)
+      return {
+        cursor: rows.length === count ? rows.at(-1).sequence : head,
+        entries: rows.map(row => ({ operationId:row.operation_id, before:row.before && JSON.parse(row.before), after:JSON.parse(row.after) })),
+      }
+    },
     history(id) {
       const rows = db.prepare(`SELECT h.before,h.after,
           CASE WHEN d.operation_id='owner-start-confirmed:'||d.action_id THEN d.created_at END AS confirmed_at,

@@ -172,6 +172,18 @@ function ItemBody({ item, bot, summary, roster, actions, hooks }) {
     } : {}),
   }
   switch (item.kind) {
+    case 'connector-health':
+    case 'linear-watch':
+      return compact('Connectors', () => { actions.closeInbox(); actions.openConnectors() })
+    case 'linear-sync':
+      return item.roomId
+        ? compact('Task board', () => {
+            actions.openSession(item.roomId)
+            actions.openInboxTaskBoard(item.roomId)
+          })
+        : compact('My task board', () => { actions.closeInbox(); actions.openPersonalBoard() })
+    case 'remote-watch':
+      return compact('Remote code changes', () => { actions.closeInbox(); actions.openPersonalBoard() })
     case 'approval': {
       const approval = hooks.approvals.find(entry => entry.id === item.ref)
       return approval && bot

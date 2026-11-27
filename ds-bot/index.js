@@ -126,6 +126,7 @@ export function createRuntime(ctx, config = {}, codeMode) {
       mainRole: config.mainRole ?? 'Chief of Staff',
     },
   }
+  inbox.prepare(rt)
   for (const module of [...MODULES, chatgpt]) module.install(rt)
   ctx.effect(() => () => { rt.stopping = true }, 'ds-bot: stopping')
   if (codeMode !== undefined) installBotCodeMode(rt, codeMode)

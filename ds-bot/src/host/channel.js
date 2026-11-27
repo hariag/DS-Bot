@@ -1716,6 +1716,8 @@ export function install(rt) {
   // Reject those calls rather than letting a remote peer inherit that identity.
   const carrierCall = (endpoint, payload, signal, remote = false) => endpoint === 'queue-inspect'
     ? Promise.resolve(fail('Use the authenticated owner connection to inspect inboxes.', 'bot/refused'))
+    : endpoint === 'linear-project-watch-status' || endpoint === 'version'
+    ? Promise.resolve(fail('Use the authenticated owner connection for host status.', 'bot/refused'))
     : endpoint.startsWith('legacy-review-') || endpoint.startsWith('board-')
     ? Promise.resolve(fail('Use the authenticated owner connection for this board.', 'bot/refused'))
     : handle(endpoint, payload, signal, remote)

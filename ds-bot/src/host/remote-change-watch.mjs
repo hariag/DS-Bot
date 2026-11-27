@@ -13,6 +13,22 @@ const MAX_FILES = 3000
 const INTERVAL = 15 * 60_000
 const MAX_EVENTS = 5000
 
+async function githubError(response, now) {
+  const header = name => response.headers?.get?.(name)
+  const retryAfter = header('retry-after')
+  const exhausted = header('x-ratelimit-remaining') === '0'
+  let limited = response.status === 429 || (response.status === 403 && (exhausted || retryAfter != null))
+  if (response.status === 403 && !limited) {
+    const body = await response.json?.().catch(() => undefined)
+    limited = typeof body?.message === 'string' && /secondary rate limit/i.test(body.message)
+  }
+  if (!limited) return new Error([401, 403].includes(response.status) ? 'authorization unavailable' : 'remote unavailable')
+  const serverDelay = /^\d+$/.test(retryAfter ?? '') ? Number(retryAfter) * 1000 : Date.parse(retryAfter) - now
+  const resetDelay = exhausted ? Number(header('x-ratelimit-reset')) * 1000 - now : 0
+  const retryDelay = Math.max(0, ...[serverDelay, resetDelay].filter(Number.isFinite))
+  return Object.assign(new Error('rate limited'), { retryDelay })
+}
+
 function configOf(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const { repository, branch, ownerBotId, initialCursor } = value
@@ -109,7 +125,7 @@ export function createRemoteChangePoller({ spec, store, authorize, request = fet
       method:'GET', redirect:'error', signal,
       headers:{ Authorization:`Bearer ${token}`, Accept:'application/vnd.github+json', 'User-Agent':'ds-bot-remote-watch', 'X-GitHub-Api-Version':'2022-11-28' },
     })
-    if (!response.ok) throw new Error(response.status===429 || (response.status===403 && response.headers?.get?.('x-ratelimit-remaining')==='0') ? 'rate limited' : response.status===401 || response.status===403 ? 'authorization unavailable' : 'remote unavailable')
+    if (!response.ok) throw await githubError(response, clock().getTime())
     const body=await response.json()
     return { body, more:nextLink(response.headers?.get?.('link')) }
   }
@@ -133,7 +149,8 @@ export function createRemoteChangePoller({ spec, store, authorize, request = fet
           || c.total_commits<1 || c.total_commits>MAX_COMMITS || (total!==undefined && total!==c.total_commits) || !Array.isArray(c.commits)) throw new Error('history requires reconciliation')
         total=c.total_commits;commits.push(...c.commits);more=compare.more;page++
       }
-      if (commits.length!==total || new Set(commits.map(commit=>commit?.sha)).size!==total || commits.some(commit=>!SHA.test(commit?.sha ?? ''))) throw new Error('remote response incomplete')
+      const commitIds = new Set(commits.map(commit => commit?.sha))
+      if (commits.length!==total || commitIds.size!==total || !commitIds.has(head) || commits.some(commit=>!SHA.test(commit?.sha ?? ''))) throw new Error('remote response incomplete')
       commits=commits.map(commit=>({sha:commit.sha,title:String(commit?.commit?.message ?? '').split('\n',1)[0].slice(0,300),author:String(commit?.commit?.author?.name ?? '').slice(0,120),committedAt:String(commit?.commit?.committer?.date ?? '').slice(0,40)}))
       await authorize();store.begin(cursor,head,commits);work=store.pending()
     }
@@ -182,7 +199,7 @@ export function install(rt) {
   if (configured===undefined || configured===false) return
   const spec=configOf(configured)
   if (!spec) { rt.remoteChangeView=()=>({status:'invalid configuration',events:[]}); return }
-  let store, timer, pending, stopped=false, status='waiting', failures=0, lastWarnStatus=null, errorSince=0, alertActive=false, lastAlertText=''
+  let store, timer, pending, stopped=false, status='waiting', failures=0, rateFailures=0, lastWarnStatus=null, errorSince=0, alertActive=false, lastAlertText=''
   const immediateAlertStatuses=new Set(['authorization unavailable','history requires reconciliation','monitor capacity reached'])
   const syncInboxAlert=()=>{
     const nextText=alertActive ? `GitHub ${spec.repository}@${spec.branch}: ${status}` : ''
@@ -218,11 +235,23 @@ export function install(rt) {
     let delay=INTERVAL
     pending=(async()=>{ try {
       await authorize(); const result=await createRemoteChangePoller({spec,store:open(),authorize})(); status=result.status
-      failures=0; lastWarnStatus=null; errorSince=0; alertActive=false; syncInboxAlert()
+      failures=0; rateFailures=0; lastWarnStatus=null; errorSince=0; alertActive=false; syncInboxAlert()
       if(status==='catching up')delay=3000
     } catch (error) {
       status=['authorization unavailable','history requires reconciliation','monitor capacity reached','rate limited'].includes(error?.message) ? error.message : 'unavailable'
+      if (status === 'rate limited') {
+        rateFailures++
+        const backoff = INTERVAL * 2 ** Math.min(rateFailures - 1, 2)
+        delay = Math.min(2_147_483_647, Math.max(backoff, error.retryDelay ?? 0))
+      } else rateFailures = 0
       failures++; if (!errorSince) errorSince=Date.now()
+      // A temporary failure during durable catch-up should not stall the scan
+      // for the full idle interval. Rate limits still use the server's bound.
+      if (status === 'unavailable') {
+        try {
+          if (store?.pending()) delay = Math.min(INTERVAL, 30_000 * 2 ** Math.min(failures - 1, 5))
+        } catch { /* An unavailable store keeps the regular retry interval. */ }
+      }
       if (!stopped && status!==lastWarnStatus) { lastWarnStatus=status; rt.warn?.('ds-bot: GitHub remote change watch (%s@%s): %s', spec.repository, spec.branch, status) }
       alertActive=immediateAlertStatuses.has(status) || failures>=3
       syncInboxAlert()

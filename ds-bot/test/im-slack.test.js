@@ -96,7 +96,61 @@ test('a message in an im channel is direct, app_mention is group, every envelope
   assert.equal(messages[1].chat.kind, 'group')
   assert.equal(messages[1].mentioned, true)
   assert.equal(messages[1].text, 'ping')
+  assert.equal(messages[0].chat.threadId, undefined)
+  assert.equal(messages[1].chat.threadId, '2.0')
   await until(() => fake.acks.length === 4)
+})
+
+test('Socket Mode deduplicates by event id and only ACKs an accepted handoff', async (t) => {
+  const fake = await fakeSlack()
+  const release = Promise.withResolvers()
+  let calls = 0
+  const handle = slack.connect(FIELDS, env(fake), {
+    async onMessage() {
+      calls += 1
+      return calls === 1 ? false : release.promise
+    },
+    onAction() {},
+    onStatus() {},
+  })
+  t.after(() => { release.resolve(); handle.stop(); fake.close() })
+  const ws = await until(() => fake.sockets[0])
+  const event = envelope({ type: 'app_mention', channel: 'C1', user: 'U3', text: '<@U81> ping', ts: '2.0', thread_ts: '1.0' })
+  event.payload.event_id = 'Ev1'
+  const send = id => fake.push(ws, { ...event, envelope_id: id })
+  send('rejected')
+  assert.equal(await until(() => calls === 1), true)
+  assert.deepEqual(fake.acks, [])
+
+  send('retry')
+  assert.equal(await until(() => calls === 2), true)
+  send('concurrent')
+  release.resolve()
+  assert.equal(await until(() => fake.acks.length === 2), true)
+
+  send('already-accepted')
+  assert.equal(await until(() => fake.acks.length === 3), true)
+  assert.equal(calls, 2)
+  assert.deepEqual(fake.acks.sort(), ['already-accepted', 'concurrent', 'retry'])
+})
+
+test('Slack replies target the parent of the originating thread', async (t) => {
+  const fake = await fakeSlack()
+  const messages = []
+  const handle = slack.connect(FIELDS, env(fake), {
+    onMessage: msg => { messages.push(msg) },
+    onAction() {},
+    onStatus() {},
+  })
+  t.after(() => { handle.stop(); fake.close() })
+  const ws = await until(() => fake.sockets[0])
+  fake.push(ws, envelope({ type: 'app_mention', channel: 'C1', user: 'U3', text: '<@U81> ping', ts: '2.0', thread_ts: '1.0' }))
+  assert.equal(await until(() => messages.length === 1), true)
+  await handle.send(messages[0].chat, { text: 'reply' })
+  const post = fake.calls.find(call => call.method === 'chat.postMessage')
+  assert.equal(post.params.channel, 'C1')
+  assert.equal(post.params.thread_ts, '1.0')
+  assert.equal(post.params.reply_broadcast, undefined)
 })
 
 test('stop and card commands pass through direct messages and mentioned group messages alike', async (t) => {

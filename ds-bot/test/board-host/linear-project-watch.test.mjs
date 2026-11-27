@@ -50,6 +50,7 @@ test('project worker scans all pages, hands multiple issue changes to the manage
   })
   let cleanup
   const messages = []
+  const sources = []
   const rt = {
     config: { linearProjectWatch: { projectId, managerId, readSecret: 'LINEAR_TEST' } }, home, state: {}, teamTools: [],
     ctx: { effect: start => { cleanup = start() } },
@@ -58,6 +59,7 @@ test('project worker scans all pages, hands multiple issue changes to the manage
     chatOf: () => 'manager-chat', chatOwners: new Map([['manager-chat', managerId]]), groupOwners: new Map(),
     load: async () => {}, save: async () => {}, loadSecrets: async () => {}, requireHomeLock() {},
     readOnly: () => undefined, canUseSecret: () => true, secretValue: () => 'test-read-credential', warn() {},
+    addInboxSource: fn => { sources.push(fn); return () => {} },
     async deliver(args, observer) {
       const agent = { id: args.sessionId }
       observer.beforeAdmission(agent)
@@ -95,11 +97,22 @@ test('project worker scans all pages, hands multiple issue changes to the manage
     assert.equal(messages[0].toId, managerId)
     assert.match(messages[0].text, /TEST-1/)
     assert.match(messages[0].text, /TEST-2/)
+    const visible = () => sources.flatMap(fn => fn()).filter(item => item.ref.endsWith(':unhandled-events'))
+    assert.deepEqual(visible(), [])
+    t.mock.timers.tick(5 * 60_000)
+    await until(() => visible().length === 1)
+    assert.equal(visible()[0].sessionId, 'manager-chat')
+    assert.match(visible()[0].text, /2 条/)
+    assert.equal(messages.length, 1)
     assert.match(await tool.execute({ action: 'resolve', event_ids: [items[0].id], note: 'Filed the original task update.' },
       { agent: { id: 'manager-chat' } }), /1 events/)
+    assert.match(visible()[0].text, /1 条/)
     assert.deepEqual(JSON.parse(await inbox('manager-chat')).changes.map(row => row.id), [items[1].id])
     const afterHandled = await tool.execute({ action: 'list', after: items[0].id }, { agent: { id: 'manager-chat' } })
     assert.deepEqual(JSON.parse(afterHandled).changes.map(row => row.id), [items[1].id])
+    await tool.execute({ action: 'resolve', event_ids: [items[1].id], note: 'Linked the second task update.' },
+      { agent: { id: 'manager-chat' } })
+    assert.deepEqual(visible(), [])
   } finally {
     await cleanup()
   }

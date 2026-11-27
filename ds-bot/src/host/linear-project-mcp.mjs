@@ -4,7 +4,7 @@ import { LinearProjectReadError } from './linear-project-api.mjs'
 const STATUS_TTL_MS = 5 * 60_000
 const ISSUES_FIELDS = ['uuid', 'status', 'statusType', 'url', 'projectId', 'updatedAt', 'teamId', 'archivedAt']
 const HISTORY_FIELDS = ['uuid', 'projectId', 'stateHistory', 'updatedAt']
-const CONTENT_HISTORY_FIELDS = [...HISTORY_FIELDS, 'title', 'description', 'priority', 'labels']
+const CONTENT_FIELDS = ['title', 'description', 'priority', 'labels']
 const SNAPSHOT_FIELDS = ['uuid', 'id', 'status', 'statusType', 'url', 'projectId', 'teamId', 'updatedAt', 'archivedAt', 'stateHistory']
 const nonempty = value => typeof value === 'string' && value.length > 0
 const endOfPages = () => ({ hasNextPage: false, endCursor: null })
@@ -45,20 +45,12 @@ function latestStateStart(spans) {
 }
 
 function extractContentMeta(issue) {
-  const hasAny = ['title', 'description', 'priority', 'labels'].some(key => Object.hasOwn(issue, key))
-  if (!hasAny) return undefined
-  const meta = {}
-  if (typeof issue.title === 'string') meta.title = issue.title
-  if (typeof issue.description === 'string') meta.description = issue.description
-  else if (issue.description === null) meta.description = ''
-  if (issue.priority !== undefined) meta.priority = issue.priority
-  if (Array.isArray(issue.labels)) {
-    meta.labels = [...issue.labels]
-      .map(entry => typeof entry === 'string' ? entry : (entry?.name ?? entry?.id ?? ''))
-      .filter(Boolean)
-      .sort()
-  }
-  return Object.keys(meta).length ? meta : undefined
+  const { title, description, priority, labels } = issue
+  if (typeof title !== 'string' || (typeof description !== 'string' && description !== null)
+    || (priority !== null && !Number.isFinite(priority) && !Number.isFinite(priority?.value)) || !Array.isArray(labels)) return
+  const names = labels.map(entry => typeof entry === 'string' ? entry : entry?.name ?? entry?.id)
+  if (!names.every(nonempty)) return
+  return { title, description:description ?? '', priority, labels:names.sort() }
 }
 
 export function createLinearProjectMcpApi({ projectId, call, callWrite, hasWriteTool, ensureConnected, watchContentChanges = false, now = Date.now }) {
@@ -108,7 +100,8 @@ export function createLinearProjectMcpApi({ projectId, call, callWrite, hasWrite
 
   async function getIssueSnapshot({ issueId }) {
     const issue = await call('get_issue', { id: issueId, fields: SNAPSHOT_FIELDS })
-    if (issue?.uuid !== issueId || ![issue.id, issue.updatedAt, issue.teamId].every(nonempty)) {
+    if (![issue?.uuid, issue?.id, issue?.updatedAt, issue?.teamId].every(nonempty)
+      || (issue.uuid.toLowerCase() !== issueId.toLowerCase() && issue.id.toLowerCase() !== issueId.toLowerCase())) {
       throw new LinearProjectReadError('Linear MCP issue unavailable')
     }
     if (issue.projectId !== projectId) throw new LinearProjectReadError('Linear project scope mismatch')
@@ -126,10 +119,12 @@ export function createLinearProjectMcpApi({ projectId, call, callWrite, hasWrite
   }
 
   return {
+    watchContentChanges,
     async listIssues({ projectId: requestedProjectId, after, from }) {
       if (requestedProjectId !== projectId) throw new LinearProjectReadError('Linear project scope mismatch')
       const page = await call('list_issues', {
-        project: projectId, includeArchived: true, orderBy: 'updatedAt', limit: 50, fields: ISSUES_FIELDS,
+        project: projectId, includeArchived: true, orderBy: 'updatedAt', limit: 50,
+        fields: watchContentChanges ? [...ISSUES_FIELDS, ...CONTENT_FIELDS] : ISSUES_FIELDS,
         ...(after ? { cursor: after } : {}), ...(from ? { updatedAt: from } : {}),
       })
       if (!Array.isArray(page?.issues) || typeof page.hasNextPage !== 'boolean') {
@@ -143,20 +138,22 @@ export function createLinearProjectMcpApi({ projectId, call, callWrite, hasWrite
           throw new LinearProjectReadError('Linear MCP project issue scope unavailable')
         }
         const state = await issueState(issue)
-        nodes.push({ id: issue.uuid, identifier: issue.id, url: issue.url, updatedAt: issue.updatedAt, archivedAt: issue.archivedAt, state })
+        const contentMeta = watchContentChanges ? extractContentMeta(issue) : undefined
+        nodes.push({ id: issue.uuid, identifier: issue.id, url: issue.url, updatedAt: issue.updatedAt, archivedAt: issue.archivedAt, state,
+          ...(contentMeta ? { contentMeta } : {}) })
       }
       return { nodes, pageInfo: { hasNextPage: page.hasNextPage, endCursor } }
     },
-    async listHistory({ issueId }) {
-      const fields = watchContentChanges ? CONTENT_HISTORY_FIELDS : HISTORY_FIELDS
+    async listHistory({ issueId, includeContent = true }) {
+      const fields = watchContentChanges && includeContent ? [...HISTORY_FIELDS, ...CONTENT_FIELDS] : HISTORY_FIELDS
       const issue = await call('get_issue', { id: issueId, fields })
       if (issue?.uuid !== issueId) throw new LinearProjectReadError('Linear MCP issue unavailable')
       if (issue.projectId !== projectId) return { nodes: [], pageInfo: endOfPages() }
-      const contentMeta = watchContentChanges ? extractContentMeta(issue) : undefined
+      const contentMeta = watchContentChanges && includeContent ? extractContentMeta(issue) : undefined
       return {
         nodes: historyRows(issueId, issue.stateHistory),
         pageInfo: endOfPages(),
-        ...(contentMeta ? { contentMeta } : {}),
+        ...(contentMeta ? { contentMeta, contentUpdatedAt:issue.updatedAt } : {}),
       }
     },
     getIssueSnapshot,

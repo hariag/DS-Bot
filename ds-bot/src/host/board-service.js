@@ -736,6 +736,14 @@ export function install(rt) {
     return () => commitListeners.delete(fn)
   }
   rt.getBoardTask = taskId => typeof taskId === 'string' ? availableBoardStore()?.get(taskId) : undefined
+  rt.readRoomBoardTaskChanges = (roomId, after) => {
+    const store = availableBoardStore()
+    if (store) return store.roomTaskChanges(roomId, after)
+    if (!closing && !rt.stopping && rt.readOnly?.() === undefined
+      && !existsSync(join(rt.home, 'board-v1', 'tasks.sqlite')) && (after === null || after === 0)) {
+      return { cursor:0, entries:[] }
+    }
+  }
   rt.listRoomBoardTasks = roomId => typeof roomId === 'string'
     ? (availableBoardStore()?.list().filter(task => task.scope === `room:${roomId}`) ?? [])
     : []

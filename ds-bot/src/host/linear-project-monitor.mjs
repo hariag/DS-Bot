@@ -94,10 +94,13 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
       task_id TEXT NOT NULL UNIQUE, room_id TEXT NOT NULL, source TEXT NOT NULL,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS linear_board_checkpoint (
+      room_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, baseline_sequence INTEGER NOT NULL, updated_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS linear_outbound_sync (
       operation_id TEXT PRIMARY KEY, issue_id TEXT NOT NULL, identifier TEXT NOT NULL,
       task_id TEXT NOT NULL, task_revision INTEGER NOT NULL, from_status TEXT, to_status TEXT NOT NULL,
-      target_linear_state TEXT, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+      target_linear_state TEXT, expected_linear_state_id TEXT, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
       next_retry_ms INTEGER NOT NULL DEFAULT 0, attempted_at TEXT, verified_at TEXT,
       remote_before_at TEXT, remote_after_at TEXT, state_started_at TEXT,
       last_error TEXT, comment_body TEXT, comment_posted INTEGER NOT NULL DEFAULT 0,
@@ -113,13 +116,17 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
       to_state_id TEXT NOT NULL, matched_operation_id TEXT NOT NULL, suppressed_at TEXT NOT NULL, payload TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS monitor_events_by_batch ON monitor_events(batch_id, handled_at);
+    CREATE INDEX IF NOT EXISTS monitor_pending_events ON monitor_events(seq) WHERE handled_at IS NULL;
     CREATE INDEX IF NOT EXISTS linear_outbound_status_idx ON linear_outbound_sync(status, next_retry_ms);
+    CREATE INDEX IF NOT EXISTS linear_outbound_task_idx ON linear_outbound_sync(task_id, task_revision);
     CREATE INDEX IF NOT EXISTS linear_echo_lookup_idx ON linear_outbound_echo(issue_id, to_state_id, consumed_at);
   `)
   const issueCols = new Set(db.prepare('PRAGMA table_info(monitor_issues)').all().map(row => row.name))
   if (!issueCols.has('identifier')) db.exec('ALTER TABLE monitor_issues ADD COLUMN identifier TEXT')
   if (!issueCols.has('content_hash')) db.exec('ALTER TABLE monitor_issues ADD COLUMN content_hash TEXT')
   if (!issueCols.has('content_meta')) db.exec('ALTER TABLE monitor_issues ADD COLUMN content_meta TEXT')
+  const outboundCols = new Set(db.prepare('PRAGMA table_info(linear_outbound_sync)').all().map(row => row.name))
+  if (!outboundCols.has('expected_linear_state_id')) db.exec('ALTER TABLE linear_outbound_sync ADD COLUMN expected_linear_state_id TEXT')
 
   db.prepare('INSERT OR IGNORE INTO monitor_checkpoint(id, project_id) VALUES (1, ?)').run(projectId)
   const readCheckpoint = db.prepare('SELECT project_id, started_ms, until_ms FROM monitor_checkpoint WHERE id = 1')
@@ -147,9 +154,10 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
       state_id = CASE WHEN excluded.updated_ms >= monitor_issues.updated_ms THEN excluded.state_id ELSE monitor_issues.state_id END,
       updated_ms = MAX(monitor_issues.updated_ms, excluded.updated_ms),
       identifier = COALESCE(excluded.identifier, monitor_issues.identifier),
-      content_hash = COALESCE(excluded.content_hash, monitor_issues.content_hash),
-      content_meta = COALESCE(excluded.content_meta, monitor_issues.content_meta)`)
+      content_hash = CASE WHEN excluded.updated_ms >= monitor_issues.updated_ms THEN COALESCE(excluded.content_hash, monitor_issues.content_hash) ELSE monitor_issues.content_hash END,
+      content_meta = CASE WHEN excluded.updated_ms >= monitor_issues.updated_ms THEN COALESCE(excluded.content_meta, monitor_issues.content_meta) ELSE monitor_issues.content_meta END`)
   const hasMissingIdentifier = db.prepare('SELECT 1 FROM monitor_issues WHERE identifier IS NULL LIMIT 1')
+  const hasMissingContent = db.prepare('SELECT 1 FROM monitor_issues WHERE content_hash IS NULL LIMIT 1')
   const saveEvent = db.prepare('INSERT OR IGNORE INTO monitor_events(id, payload) VALUES (?, ?)')
   const updateCheckpoint = db.prepare('UPDATE monitor_checkpoint SET started_ms = COALESCE(started_ms, ?), until_ms = ? WHERE id = 1')
   const reconciledIntake = db.prepare('SELECT state_id FROM monitor_intake_reconciliation')
@@ -181,7 +189,7 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
   function contentChangedEvent(issue, changedFields, previousHash, nextHash) {
     const observedAt = iso(now())
     return {
-      id: hash([projectId, issue.id, 'content_changed', previousHash, nextHash]),
+      id: hash([projectId, issue.id, 'content_changed', issue.updatedAt, previousHash, nextHash]),
       projectId, issueId: issue.id, identifier: issue.identifier, url: issue.url ?? null,
       kind: 'content_changed', historyId: null, actorId: null,
       fromStateId: issue.state.id, toStateId: issue.state.id,
@@ -198,13 +206,16 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
     if (!Number.isFinite(eventMs)) return null
     const rows = selectEchoCandidates.all(event.issueId, event.toStateId)
     for (const row of rows) {
-      if (row.state_started_ms !== null && Math.abs(eventMs - row.state_started_ms) <= 2_000) return row
-      if (eventMs >= row.attempted_ms - 5_000 && eventMs <= row.verified_ms + 15_000) return row
+      if (row.state_started_ms !== null) {
+        if (eventMs === row.state_started_ms) return row
+      } else if (eventMs >= row.attempted_ms && eventMs <= row.verified_ms) return row
     }
     return null
   }
 
   let identifierBackfilled = false
+  let contentBackfilled = false
+  const watchContent = linear.watchContentChanges === true
 
   async function scan() {
     assertActive()
@@ -217,12 +228,12 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
     const pendingIntake = new Set([...intakeStates].filter(state => !previouslyReconciled.has(state)))
     const reconcile = pendingIntake.size > 0
     const needsIdentifierBackfill = !initial && !identifierBackfilled && Boolean(hasMissingIdentifier.get())
-    const fullSnapshot = reconcile || needsIdentifierBackfill
+    const needsContentBackfill = watchContent && !initial && !contentBackfilled && Boolean(hasMissingContent.get())
+    const fullSnapshot = reconcile || needsIdentifierBackfill || needsContentBackfill
     const from = initial ? null : Math.max(0, previous - overlapMs)
     const window = { from:from === null ? null : iso(from), until:iso(until) }
-    // An existing monitor may have recorded these issues before intake was enabled or
-    // before monitor_issues stored identifier. Fetch current snapshots once without widening
-    // the status-history window.
+    // Fetch current snapshots for new intake settings and missing baselines without
+    // widening the status-history window.
     const snapshotWindow = fullSnapshot ? { ...window, from:null } : window
     const snapshots = new Map()
     await pages(after => {
@@ -237,18 +248,23 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
 
     const events = []
     const contentUpdates = new Map()
-    if (!initial) {
-      for (const { issue, time } of snapshots.values()) {
-        if (time < from) continue
-        const persisted = readIssue.get(issue.id)
-        if (persisted?.updated_ms > time) continue
+    for (const { issue, time } of snapshots.values()) {
+      const persisted = readIssue.get(issue.id)
+      if (persisted?.updated_ms > time) continue
+      const incremental = !initial && time >= from
+      let contentMeta = issue.contentMeta
+      const useFallbackContent = response => {
+        if (!contentMeta && response?.contentMeta && (!watchContent || Date.parse(response.contentUpdatedAt) === time)) {
+          contentMeta = response.contentMeta
+        }
+      }
+      if (incremental) {
         const history = []
-        let contentMeta
         // The adapter orders history by most recently updated first.
         await pages(async after => {
           assertActive()
-          const page = await linear.listHistory({ issueId:issue.id, after, ...window })
-          if (after == null && page?.contentMeta && typeof page.contentMeta === 'object') contentMeta = page.contentMeta
+          const page = await linear.listHistory({ issueId:issue.id, after, ...window, includeContent:!contentMeta })
+          if (after == null) useFallbackContent(page)
           return page
         }, row => {
           const historyTime = timestamp(row?.updatedAt ?? row?.createdAt)
@@ -262,17 +278,19 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
           && change.time >= (persisted?.updated_ms ?? 0))) {
           events.push(statusEvent(issue, { historyId:null, actorId:null, fromStateId:previousStatus, toStateId:issue.state.id, time }))
         }
-        const digest = contentDigests(contentMeta)
-        if (digest) {
-          contentUpdates.set(issue.id, { hash: digest.hash, meta: JSON.stringify(digest.fields) })
-          if (persisted?.content_hash && persisted.content_hash !== digest.hash) {
-            let oldFields = {}
-            try { oldFields = JSON.parse(persisted.content_meta || '{}') } catch {}
-            const changedFields = Object.keys({ ...oldFields, ...digest.fields })
-              .filter(key => oldFields[key] !== digest.fields[key])
-            if (changedFields.length) {
-              events.push(contentChangedEvent(issue, changedFields, persisted.content_hash, digest.hash))
-            }
+      } else if (watchContent && !contentMeta && !persisted?.content_hash) {
+        assertActive()
+        useFallbackContent(await linear.listHistory({ issueId:issue.id, after:null, ...window, includeContent:true }))
+      }
+      const digest = contentDigests(contentMeta)
+      if (digest) {
+        contentUpdates.set(issue.id, { hash: digest.hash, meta: JSON.stringify(digest.fields) })
+        if (incremental && persisted?.content_hash && persisted.content_hash !== digest.hash) {
+          let oldFields = {}
+          try { oldFields = JSON.parse(persisted.content_meta || '{}') } catch {}
+          const changedFields = Object.keys({ ...oldFields, ...digest.fields }).filter(key => oldFields[key] !== digest.fields[key])
+          if (changedFields.length) {
+            events.push(contentChangedEvent(issue, changedFields, persisted.content_hash, digest.hash))
           }
         }
       }
@@ -315,12 +333,15 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
       return { queued, intakeQueued, suppressedEchoes }
     })
     if (needsIdentifierBackfill) identifierBackfilled = true
+    if (initial || needsContentBackfill) contentBackfilled = true
     return { baseline:initial, scanned:snapshots.size, queued, checkpoint:window.until,
       ...(suppressedEchoes ? { suppressedEchoes } : {}),
       ...(reconcile ? { intakeReconciled:true, intakeQueued } : {}) }
   }
 
   const selectPending = db.prepare('SELECT payload FROM monitor_events WHERE handled_at IS NULL AND seq > ? ORDER BY seq LIMIT ?')
+  const countPending = db.prepare('SELECT count(*) AS count, min(seq) AS first FROM monitor_events WHERE handled_at IS NULL')
+  const readEvent = db.prepare('SELECT payload FROM monitor_events WHERE seq = ?')
   const selectPosition = db.prepare('SELECT seq FROM monitor_events WHERE id = ?')
   const selectBatch = db.prepare("SELECT id, status FROM monitor_batches WHERE status = 'queued' ORDER BY seq LIMIT 1")
   const deliveredPending = db.prepare(`SELECT b.updated_at FROM monitor_batches b WHERE b.status = 'delivered'
@@ -341,9 +362,17 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
   const deleteBindingByTask = db.prepare('DELETE FROM linear_issue_bindings WHERE task_id = ?')
   const selectKnownIssues = db.prepare('SELECT id, identifier, state_id AS stateId, updated_ms AS updatedMs FROM monitor_issues ORDER BY updated_ms DESC')
   const selectKnownIssueByQuery = db.prepare('SELECT id, identifier, state_id AS stateId, updated_ms AS updatedMs FROM monitor_issues WHERE lower(id) = lower(?) OR lower(identifier) = lower(?) LIMIT 1')
+  const readBoardCheckpoint = db.prepare('SELECT sequence, baseline_sequence AS baselineSequence, updated_at AS updatedAt FROM linear_board_checkpoint WHERE room_id = ?')
+  const insertBoardCheckpoint = db.prepare('INSERT INTO linear_board_checkpoint(room_id, sequence, baseline_sequence, updated_at) VALUES (?, ?, ?, ?)')
+  const updateBoardCheckpoint = db.prepare('UPDATE linear_board_checkpoint SET sequence = ?, updated_at = ? WHERE room_id = ? AND sequence = ?')
   const insertEcho = db.prepare('INSERT OR IGNORE INTO linear_outbound_echo(issue_id, to_state_id, to_state_name, operation_id, attempted_ms, verified_ms, remote_updated_ms, state_started_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-  const insertOutbound = db.prepare("INSERT OR IGNORE INTO linear_outbound_sync(operation_id, issue_id, identifier, task_id, task_revision, from_status, to_status, target_linear_state, status, attempts, next_retry_ms, comment_body, comment_posted, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, 0, ?, 0, ?, ?)")
+  const selectKnownEcho = db.prepare('SELECT 1 FROM linear_outbound_echo WHERE issue_id = ? AND to_state_id = ? AND state_started_ms = ? LIMIT 1')
+  const insertOutbound = db.prepare(`INSERT OR IGNORE INTO linear_outbound_sync(operation_id, issue_id, identifier, task_id, task_revision, from_status,
+    to_status, target_linear_state, expected_linear_state_id, status, attempts, next_retry_ms, comment_body, comment_posted, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, 0, ?, 0, ?, ?)`)
   const selectOutboundById = db.prepare('SELECT * FROM linear_outbound_sync WHERE operation_id = ?')
+  const selectOutboundEquivalent = db.prepare('SELECT * FROM linear_outbound_sync WHERE task_id = ? AND task_revision = ? AND to_status = ? ORDER BY rowid LIMIT 1')
+  const selectNewerStateJob = db.prepare('SELECT 1 FROM linear_outbound_sync WHERE task_id = ? AND task_revision > ? AND target_linear_state IS NOT NULL LIMIT 1')
   const selectNextOutbound = db.prepare("SELECT * FROM linear_outbound_sync WHERE status IN ('pending', 'retry', 'attempted') AND next_retry_ms <= ? ORDER BY created_at ASC, rowid ASC LIMIT 1")
   const selectOutboundList = db.prepare('SELECT * FROM linear_outbound_sync ORDER BY rowid DESC LIMIT ?')
   const updateOutboundAttempt = db.prepare("UPDATE linear_outbound_sync SET status = 'attempted', attempts = attempts + 1, attempted_at = ?, remote_before_at = COALESCE(remote_before_at, ?), updated_at = ? WHERE operation_id = ?")
@@ -351,7 +380,10 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
   const updateOutboundComment = db.prepare('UPDATE linear_outbound_sync SET comment_posted = ?, updated_at = ? WHERE operation_id = ?')
   const updateOutboundRetry = db.prepare("UPDATE linear_outbound_sync SET status = 'retry', next_retry_ms = ?, last_error = ?, updated_at = ? WHERE operation_id = ?")
   const updateOutboundConflict = db.prepare("UPDATE linear_outbound_sync SET status = 'conflict', last_error = ?, updated_at = ? WHERE operation_id = ?")
-  const reactivateOutbound = db.prepare("UPDATE linear_outbound_sync SET status = 'pending', next_retry_ms = 0, last_error = NULL, updated_at = ? WHERE operation_id = ? AND status IN ('conflict', 'retry')")
+  const updateOutboundSuperseded = db.prepare("UPDATE linear_outbound_sync SET status = 'superseded', last_error = ?, updated_at = ? WHERE operation_id = ?")
+  const reactivateOutbound = db.prepare(`UPDATE linear_outbound_sync SET status = 'pending', next_retry_ms = 0, last_error = NULL,
+    expected_linear_state_id = COALESCE((SELECT state_id FROM monitor_issues WHERE id = linear_outbound_sync.issue_id), expected_linear_state_id),
+    updated_at = ? WHERE operation_id = ? AND status IN ('conflict', 'retry')`)
   const countBindings = db.prepare('SELECT count(*) AS n FROM linear_issue_bindings')
   const countSuppressed = db.prepare('SELECT count(*) AS n FROM monitor_suppressed_echoes')
   const countOutboundByStatus = db.prepare('SELECT status, count(*) AS n FROM linear_outbound_sync GROUP BY status')
@@ -372,6 +404,10 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
       const position = after === undefined ? 0 : selectPosition.get(after)?.seq
       if (position === undefined) throw new Error('Unknown inbox cursor')
       return selectPending.all(position, limit(count)).map(load)
+    },
+    pendingSummary() {
+      const { count, first } = countPending.get()
+      return { count, oldestObservedAt: first === null ? null : load(readEvent.get(first)).observedAt ?? null }
     },
     getBatch(count = 20, { minDeliveryGapMs = 0, unresolvedDeliveryLeaseMs = Infinity } = {}) {
       if (!Number.isSafeInteger(minDeliveryGapMs) || minDeliveryGapMs < 0) throw new Error('Invalid delivery gap')
@@ -430,22 +466,35 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
     listBindings: () => selectBindings.all(),
     listKnownIssues: () => selectKnownIssues.all(),
     findKnownIssue: query => nonempty(query) ? selectKnownIssueByQuery.get(query.trim(), query.trim()) : undefined,
+    boardCheckpoint: roomId => readBoardCheckpoint.get(roomId) ?? null,
+    advanceBoardCheckpoint(roomId, expected, sequence) {
+      const at = iso(now())
+      return transaction(() => expected === null
+        ? insertBoardCheckpoint.run(roomId, sequence, sequence, at).changes === 1
+        : updateBoardCheckpoint.run(sequence, at, roomId, expected).changes === 1)
+    },
     recordOutboundEcho({ issueId, toStateId, toStateName = null, operationId, attemptedMs, verifiedMs, remoteUpdatedMs = null, stateStartedMs = null }) {
       if (![issueId, toStateId, operationId].every(nonempty)) throw new Error('Invalid outbound echo record')
       return transaction(() => insertEcho.run(issueId, toStateId, toStateName, operationId, attemptedMs, verifiedMs, remoteUpdatedMs, stateStartedMs).changes > 0)
     },
+    isKnownOutboundState: (issueId, stateId, startedAt) => Number.isFinite(Date.parse(startedAt))
+      && Boolean(selectKnownEcho.get(issueId, stateId, Date.parse(startedAt))),
     enqueueOutbound({ operationId, issueId, identifier, taskId, taskRevision, fromStatus = null, toStatus, targetLinearState = null, commentBody = null }) {
       if (![operationId, issueId, identifier, taskId, toStatus].every(nonempty) || !Number.isSafeInteger(taskRevision)) {
         throw new Error('Invalid Linear outbound sync job')
       }
       const at = iso(now())
       return transaction(() => {
-        const inserted = insertOutbound.run(operationId, issueId, identifier, taskId, taskRevision, fromStatus, toStatus, targetLinearState, commentBody, at, at).changes > 0
+        const existing = selectOutboundEquivalent.get(taskId, taskRevision, toStatus)
+        if (existing) return { inserted: false, job: existing }
+        const expectedState = readIssue.get(issueId)?.state_id ?? null
+        const inserted = insertOutbound.run(operationId, issueId, identifier, taskId, taskRevision, fromStatus, toStatus, targetLinearState, expectedState, commentBody, at, at).changes > 0
         return { inserted, job: selectOutboundById.get(operationId) }
       })
     },
     nextOutbound: (atMs = now()) => selectNextOutbound.get(atMs),
     getOutbound: operationId => nonempty(operationId) ? selectOutboundById.get(operationId) : undefined,
+    hasNewerStateJob: (taskId, revision) => Boolean(selectNewerStateJob.get(taskId, revision)),
     listOutbound: (count = 25) => selectOutboundList.all(limit(count)),
     markOutboundAttempt(operationId, attemptedAt = iso(now()), remoteBeforeAt = null) {
       return transaction(() => updateOutboundAttempt.run(attemptedAt, remoteBeforeAt, iso(now()), operationId).changes > 0)
@@ -456,6 +505,7 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
     markOutboundCommentPosted: (operationId, posted = true) => transaction(() => updateOutboundComment.run(posted ? 1 : 0, iso(now()), operationId).changes > 0),
     markOutboundRetry: (operationId, nextRetryMs, reason) => transaction(() => updateOutboundRetry.run(nextRetryMs, String(reason || 'retry').slice(0, 400), iso(now()), operationId).changes > 0),
     markOutboundConflict: (operationId, reason) => transaction(() => updateOutboundConflict.run(String(reason || 'conflict').slice(0, 400), iso(now()), operationId).changes > 0),
+    markOutboundSuperseded: (operationId, reason) => transaction(() => updateOutboundSuperseded.run(reason, iso(now()), operationId).changes > 0),
     retryOutbound: operationId => transaction(() => reactivateOutbound.run(iso(now()), operationId).changes > 0),
     stats() {
       const counts = Object.fromEntries(countOutboundByStatus.all().map(row => [row.status, row.n]))
@@ -467,6 +517,7 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
           pending,
           verified: counts.verified ?? 0,
           conflict: counts.conflict ?? 0,
+          superseded: counts.superseded ?? 0,
           lastSync: lastVerifiedOutbound.get() ?? null,
         },
       }
