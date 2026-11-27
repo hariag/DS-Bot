@@ -167,3 +167,40 @@ for (const [policy, retries] of [
     }
   })
 }
+
+test('auxiliary calls retry EMPTY_RESPONSE, SERVER, RATE_LIMIT, and STREAM_CLOSED per policy', async () => {
+  for (const code of ['EMPTY_RESPONSE', 'SERVER', 'RATE_LIMIT', 'STREAM_CLOSED']) {
+    let attempts = 0
+    const ctx = {
+      llm: {
+        providerRetryPolicy: () => ({ mode: 'normal', maxRetries: 2, retryableCodes: ['EMPTY_RESPONSE', 'SERVER', 'RATE_LIMIT', 'TRANSPORT', 'TIMEOUT'] }),
+        async *stream() {
+          attempts += 1
+          if (attempts === 1) {
+            yield { type: 'finish', reason: { kind: 'error', failure: { code, message: `transient ${code}` } } }
+            return
+          }
+          yield { type: 'text-delta', index: 0, text: '{"action":"compact","reason":"recovered"}' }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        },
+      },
+    }
+    const result = await assembleLlmStream(ctx, { provider: 'mock', model: 'mock' }, { backoff: { initialDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } })
+    assert.equal(attempts, 2, code)
+    assert.equal(result.finish.kind, 'stop', code)
+  }
+
+  let offAttempts = 0
+  const offCtx = {
+    llm: {
+      providerRetryPolicy: () => ({ mode: 'off' }),
+      async *stream() {
+        offAttempts += 1
+        yield { type: 'finish', reason: { kind: 'error', failure: { code: 'STREAM_CLOSED', message: 'closed' } } }
+      },
+    },
+  }
+  const offResult = await assembleLlmStream(offCtx, { provider: 'mock', model: 'mock' }, { backoff: { initialDelayMs: 0, maxDelayMs: 0, jitterRatio: 0 } })
+  assert.equal(offAttempts, 1)
+  assert.equal(offResult.finish.failure.code, 'STREAM_CLOSED')
+})

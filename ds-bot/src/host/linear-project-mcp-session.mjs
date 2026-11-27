@@ -28,9 +28,9 @@ function validateWriteArgs(name, args) {
   throw new LinearProjectReadError('Linear MCP tool outside write scope')
 }
 
-export function createLinearProjectMcpSession({ getGateway, assertActive, signal, request = fetch, allowWrite = false }) {
+export function createLinearProjectMcpSession({ getGateway, assertActive, signal, request = fetch, allowWrite = false, timeoutMs = 15_000 }) {
   let client, writeTools = new Set(), retryAt = 0
-  const options = { signal, timeout: 8_000 }
+  const options = { signal, timeout: timeoutMs }
 
   async function close() {
     const previous = client
@@ -82,9 +82,10 @@ export function createLinearProjectMcpSession({ getGateway, assertActive, signal
     return client
   }
 
-  async function invokeTool(name, args) {
+  async function invokeTool(name, args, { retryOnSessionError = false } = {}) {
     assertActive()
     if (retryAt > Date.now()) throw new LinearProjectReadError('rate limited', retryAt - Date.now())
+    const reused = client !== undefined
     try {
       const active = client ?? await connect()
       assertActive()
@@ -96,9 +97,13 @@ export function createLinearProjectMcpSession({ getGateway, assertActive, signal
       return JSON.parse(entry.text)
     } catch (error) {
       await close()
+      assertActive()
       if (retryAt > Date.now()) throw new LinearProjectReadError('rate limited', retryAt - Date.now())
       if (error instanceof LinearProjectReadError) throw error
       if (error?.code === -32001) throw new LinearProjectReadError('Linear authorization unavailable')
+      if (retryOnSessionError && reused && !signal?.aborted) {
+        return invokeTool(name, args, { retryOnSessionError: false })
+      }
       throw new LinearProjectReadError('Linear MCP unavailable')
     }
   }
@@ -106,13 +111,13 @@ export function createLinearProjectMcpSession({ getGateway, assertActive, signal
   return {
     async call(name, args) {
       if (!READ_TOOLS.has(name)) throw new LinearProjectReadError('Linear MCP tool outside read scope')
-      return invokeTool(name, args)
+      return invokeTool(name, args, { retryOnSessionError: true })
     },
     async callWrite(name, args) {
       if (allowWrite !== true) throw new LinearProjectReadError('Linear MCP write disabled')
       if (!WRITE_TOOLS.has(name)) throw new LinearProjectReadError('Linear MCP tool outside write scope')
       validateWriteArgs(name, args)
-      return invokeTool(name, args)
+      return invokeTool(name, args, { retryOnSessionError: false })
     },
     async ensureConnected() {
       assertActive()

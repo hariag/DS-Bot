@@ -352,3 +352,56 @@ test('outbound echo suppression migrates existing monitor_issues schema and drop
   assert.equal(monitor.pending().length, 1)
   assert.equal(monitor.pending()[0].toStateId, 'In Review')
 })
+
+test('incremental poll backfills missing identifier on pre-migration monitor_issues once without replaying history', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'linear-monitor-idbackfill-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const dbPath = join(dir, 'legacy.sqlite')
+  const legacy = new DatabaseSync(dbPath)
+  legacy.exec(`
+    CREATE TABLE monitor_checkpoint (id INTEGER PRIMARY KEY CHECK(id = 1), project_id TEXT NOT NULL, started_ms INTEGER, until_ms INTEGER);
+    CREATE TABLE monitor_issues (id TEXT PRIMARY KEY, state_id TEXT NOT NULL, updated_ms INTEGER NOT NULL);
+    CREATE TABLE monitor_batches (seq INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, status TEXT NOT NULL, updated_at TEXT NOT NULL, receipt TEXT);
+    CREATE TABLE monitor_events (seq INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL, batch_id TEXT, handled_at TEXT, handled_by TEXT, note TEXT);
+    CREATE TABLE monitor_intake_reconciliation (state_id TEXT PRIMARY KEY, reconciled_at TEXT NOT NULL);
+    INSERT INTO monitor_checkpoint VALUES (1, 'test-project', ${start}, ${start + 60_000});
+    INSERT INTO monitor_issues VALUES ('issue-old', 'Todo', ${start - 1000});
+    INSERT INTO monitor_issues VALUES ('issue-orphan', 'Done', ${start - 2000});
+  `)
+  legacy.close()
+
+  let nowOffset = 70_000
+  const reads = []
+  let historyCalls = 0
+  const monitor = openLinearProjectMonitor({
+    path: dbPath,
+    projectId: 'test-project',
+    now: () => start + nowOffset,
+    linear: {
+      listIssues: async args => {
+        reads.push(args)
+        return page([{ id: 'issue-old', identifier: 'HAR-7', url: 'https://linear.app/test/issue/HAR-7', state: { id: 'Todo', name: 'Todo' }, updatedAt: time(-1000) }])
+      },
+      listHistory: async () => {
+        historyCalls += 1
+        return page([])
+      },
+    },
+  })
+  t.after(() => monitor.close())
+
+  // First incremental poll sees NULL identifier -> widens listIssues once (from: null), backfills HAR-7,
+  // emits no history replay or status events.
+  const first = await monitor.poll()
+  assert.equal(first.scanned, 1)
+  assert.equal(first.queued, 0)
+  assert.equal(reads.at(-1).from, null)
+  assert.equal(historyCalls, 0)
+  assert.equal(monitor.findKnownIssue('HAR-7')?.id, 'issue-old')
+
+  // Next poll reverts to narrow window even though issue-orphan still has NULL identifier.
+  // Default overlapMs is 15_000, so from = 70_000 - 15_000 = 55_000.
+  nowOffset = 80_000
+  await monitor.poll()
+  assert.equal(reads.at(-1).from, time(55_000))
+})

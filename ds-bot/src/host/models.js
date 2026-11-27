@@ -10,8 +10,10 @@ const CATALOG_TTL_MS = 10_000
 const ROUTE_WAIT_MS = 30_000
 // The DeepSeek account's sign-in grant (dsh-deepseek-account-platform).
 const ACCOUNT_RECORD = 'deepseek-account-platform/default'
-const TRANSIENT_LLM_CODES = new Set(['TRANSPORT', 'TIMEOUT', 'MALFORMED_RESPONSE'])
+const TRANSIENT_LLM_CODES = new Set(['TRANSPORT', 'TIMEOUT', 'STREAM_CLOSED', 'EMPTY_RESPONSE', 'SERVER', 'RATE_LIMIT', 'MALFORMED_RESPONSE'])
 const MALFORMED_RETRIES = 2
+const DEFAULT_MODEL_RESTORE_DELAYS_MS = [150, 400, 900]
+const isNestedHmrError = error => /HMR transactions cannot be nested/i.test(error?.message ?? String(error ?? ''))
 
 function retryPolicyOf(ctx, provider) {
   try {
@@ -59,8 +61,14 @@ function abortedAssembler(failure) {
 function canRetryPolicy(policy, code, retry) {
   if (policy?.mode !== 'normal' && policy?.mode !== 'always') return false
   if (code === 'MALFORMED_RESPONSE') return retry <= (policy.mode === 'normal' ? Math.min(MALFORMED_RETRIES, policy.maxRetries) : MALFORMED_RETRIES)
+  if (code === 'STREAM_CLOSED') {
+    const configured = Array.isArray(policy.retryableCodes) && policy.retryableCodes.includes(code)
+    const limit = policy.mode === 'normal'
+      ? (configured ? policy.maxRetries : Math.min(MALFORMED_RETRIES, policy.maxRetries))
+      : MALFORMED_RETRIES
+    return retry <= limit
+  }
   if (policy.mode === 'always') return true
-  if (policy.mode !== 'normal') return false
   return Array.isArray(policy.retryableCodes) && policy.retryableCodes.includes(code) && retry <= policy.maxRetries
 }
 
@@ -431,6 +439,23 @@ export function install(rt) {
     }
   }
 
+  async function restoreDefaultSelection(defaults, before) {
+    const delays = rt.config?.defaultModelRestoreDelaysMs ?? DEFAULT_MODEL_RESTORE_DELAYS_MS
+    for (let attempt = 0; ; attempt += 1) {
+      if (llm() === undefined) return
+      try {
+        await defaults.saveSelection(before)
+        return
+      } catch (error) {
+        if (!isNestedHmrError(error) || attempt >= delays.length || llm() === undefined) {
+          rt.warn('ds-bot: the default model was not restored: %s', error)
+          return
+        }
+        await new Promise(resolve => setTimeout(resolve, delays[attempt]))
+      }
+    }
+  }
+
   function selectSessionModel(sessionId, { provider, model, reasoningEffort }, { force = false } = {}) {
     const run = selecting.then(async () => {
       if (llm() === undefined) return
@@ -456,7 +481,7 @@ export function install(rt) {
       state.sessionModelSelections ??= {}
       state.sessionModelSelections[sessionId] = { requested: { ...route }, resolved: { ...saved } }
       if (llm() !== undefined && before?.provider && before?.model && !sameSelection(before, saved)) {
-        await defaults.saveSelection(before).catch(error => rt.warn('ds-bot: the default model was not restored: %s', error))
+        await restoreDefaultSelection(defaults, before)
       }
       await rt.save().catch(error => rt.warn?.('ds-bot: the model selection of %s was not saved: %s', sessionId, error))
       if (llm() === undefined) return result

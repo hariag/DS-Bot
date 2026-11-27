@@ -875,3 +875,53 @@ test('selectRoomSession checks resolveModelInfo when listModels omits inputModal
   await rt.syncModels()
   assert.ok(selected.includes('r1:local-claude-code/default'), selected.join(', '))
 })
+
+test('restoring the DSH default retries nested HMR transaction errors and warns once on other errors', async () => {
+  const warnings = []
+  let current = { provider: 'stepfun', model: 'step-5' }
+  let hmrFails = 2
+  const defaults = {
+    currentSelection: () => ({ ...current }),
+    saveSelection: async (next) => {
+      if (hmrFails > 0) {
+        hmrFails -= 1
+        throw new Error('HMR transactions cannot be nested')
+      }
+      current = { ...next }
+    },
+  }
+  const ctx = {
+    llm: { listProviders: () => [], listModels: async () => [] },
+    get: name => (name === 'agentDefaultModel' ? defaults : undefined),
+    sessionController: {
+      selectModel: async ({ provider, model }) => {
+        current = { provider, model }
+        return { selected: { provider, model } }
+      },
+    },
+  }
+  const rt = {
+    ctx,
+    state: { bots: {} },
+    config: { defaultModelRestoreDelaysMs: [0, 0, 0] },
+    save: async () => {},
+    warn: (...args) => warnings.push(args.join(' ')),
+  }
+  install(rt)
+
+  await rt.selectSessionModel('g1', { provider: 'deepseek', model: 'v4-flash' })
+  assert.equal(hmrFails, 0)
+  assert.deepEqual(current, { provider: 'stepfun', model: 'step-5' })
+  assert.deepEqual(warnings, [])
+
+  // Non-HMR errors fail once immediately without retrying.
+  let attempts = 0
+  defaults.saveSelection = async () => {
+    attempts += 1
+    throw new Error('permission denied')
+  }
+  await rt.selectSessionModel('g2', { provider: 'deepseek', model: 'v4-flash' })
+  assert.equal(attempts, 1)
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /permission denied/)
+})

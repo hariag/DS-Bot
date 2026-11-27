@@ -149,6 +149,7 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
       identifier = COALESCE(excluded.identifier, monitor_issues.identifier),
       content_hash = COALESCE(excluded.content_hash, monitor_issues.content_hash),
       content_meta = COALESCE(excluded.content_meta, monitor_issues.content_meta)`)
+  const hasMissingIdentifier = db.prepare('SELECT 1 FROM monitor_issues WHERE identifier IS NULL LIMIT 1')
   const saveEvent = db.prepare('INSERT OR IGNORE INTO monitor_events(id, payload) VALUES (?, ?)')
   const updateCheckpoint = db.prepare('UPDATE monitor_checkpoint SET started_ms = COALESCE(started_ms, ?), until_ms = ? WHERE id = 1')
   const reconciledIntake = db.prepare('SELECT state_id FROM monitor_intake_reconciliation')
@@ -203,6 +204,8 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
     return null
   }
 
+  let identifierBackfilled = false
+
   async function scan() {
     assertActive()
     const { started_ms:started, until_ms:previous } = readCheckpoint.get()
@@ -213,11 +216,14 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
     const previouslyReconciled = new Set(reconciledIntake.all().map(row => row.state_id))
     const pendingIntake = new Set([...intakeStates].filter(state => !previouslyReconciled.has(state)))
     const reconcile = pendingIntake.size > 0
+    const needsIdentifierBackfill = !initial && !identifierBackfilled && Boolean(hasMissingIdentifier.get())
+    const fullSnapshot = reconcile || needsIdentifierBackfill
     const from = initial ? null : Math.max(0, previous - overlapMs)
     const window = { from:from === null ? null : iso(from), until:iso(until) }
-    // An existing monitor may have recorded these issues before intake was enabled.
-    // Fetch their current snapshots once without widening the status-history window.
-    const snapshotWindow = reconcile ? { ...window, from:null } : window
+    // An existing monitor may have recorded these issues before intake was enabled or
+    // before monitor_issues stored identifier. Fetch current snapshots once without widening
+    // the status-history window.
+    const snapshotWindow = fullSnapshot ? { ...window, from:null } : window
     const snapshots = new Map()
     await pages(after => {
       assertActive()
@@ -225,7 +231,7 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
     }, issue => {
       if (![issue?.id, issue?.identifier, issue?.state?.id].every(nonempty)) throw new Error('Invalid Linear issue status')
       const time = timestamp(issue.updatedAt)
-      if (time >= until || (!reconcile && from !== null && time < from)) return
+      if (time >= until || (!fullSnapshot && from !== null && time < from)) return
       if (time >= (snapshots.get(issue.id)?.time ?? 0)) snapshots.set(issue.id, { issue, time })
     })
 
@@ -308,6 +314,7 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
       updateCheckpoint.run(until, until)
       return { queued, intakeQueued, suppressedEchoes }
     })
+    if (needsIdentifierBackfill) identifierBackfilled = true
     return { baseline:initial, scanned:snapshots.size, queued, checkpoint:window.until,
       ...(suppressedEchoes ? { suppressedEchoes } : {}),
       ...(reconcile ? { intakeReconciled:true, intakeQueued } : {}) }

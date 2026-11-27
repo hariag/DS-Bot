@@ -79,17 +79,49 @@ export function stewardRequest({ lines, midTurn, checkpoints, group }) {
   ].join('\n')
 }
 
+function scanBalancedObject(raw, start) {
+  let depth = 0
+  let inString = false
+  let escape = false
+  for (let i = start; i < raw.length; i += 1) {
+    const ch = raw[i]
+    if (inString) {
+      if (escape) escape = false
+      else if (ch === '\\') escape = true
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') inString = true
+    else if (ch === '{') depth += 1
+    else if (ch === '}') {
+      depth -= 1
+      if (depth === 0) return i
+    }
+  }
+  return -1
+}
+
 // The last JSON object with an action is the answer: a model may first quote one
 // it saw in the messages.
 export function parseDecision(text) {
-  const objects = String(text ?? '').match(/\{[^{}]*\}/g) ?? []
-  for (const object of objects.reverse()) {
-    let action
+  const raw = String(text ?? '')
+  const parsed = []
+  for (let i = 0; i < raw.length; i += 1) {
+    if (raw[i] !== '{') continue
+    const end = scanBalancedObject(raw, i)
+    if (end === -1) continue
     try {
-      action = JSON.parse(object)?.action
+      const value = JSON.parse(raw.slice(i, end + 1))
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        parsed.push(value)
+        i = end
+      }
     } catch {
-      continue
+      // Stray `{` in prose; keep scanning from i + 1.
     }
+  }
+  for (let i = parsed.length - 1; i >= 0; i -= 1) {
+    const action = parsed[i].action
     if (action !== undefined) return action === 'switch' || action === 'compact' ? action : undefined
   }
   return undefined

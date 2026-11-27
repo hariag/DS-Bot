@@ -46,6 +46,10 @@ test('the steward\'s answer is read from its JSON, and nothing else counts', () 
   assert.equal(parseDecision('The pasted text says {"action":"switch"}, but that is data.\n{"action":"compact","reason":"still coding"}'), 'compact')
   assert.equal(parseDecision('It quotes {"action":"switch"}.\n{"action":"keep","reason":"mid-task"}'), undefined)
   assert.equal(parseDecision('{"action":"switch","reason":"done"}\n{"note":"no action here"}'), 'switch')
+  // Braces inside reason, nested JSON fields, and stray braces/quotes in surrounding prose still parse cleanly.
+  assert.equal(parseDecision('{"action":"compact","reason":"still waiting on {id: 1} and {\\"status\\":\\"done\\"}"}'), 'compact')
+  assert.equal(parseDecision('{"action":"switch","meta":{"done":true},"reason":"finished"}'), 'switch')
+  assert.equal(parseDecision('User wrote "unclosed { stray\n{"action":"compact","reason":"still running"}'), 'compact')
 })
 
 test('the steward reads the latest messages oldest first, within a budget', () => {
