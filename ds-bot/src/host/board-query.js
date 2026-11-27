@@ -44,7 +44,7 @@ export function boardList({ scope, principal, rooms = {}, bots = {}, tasks = [],
     ? task.scope === key
     : scope.id === 'user'
       ? task.scope === key || task.owner === 'user' || task.reviewer === 'user'
-      : task.scope === key || task.owner === scope.id || task.reviewer === scope.id).sort(byPositionThenId)
+      : task.scope === key || task.owner === scope.id || task.reviewer === scope.id || task.acceptor === scope.id).sort(byPositionThenId)
   const shares = scope.kind !== 'room' ? [] : tasks.flatMap(task => (task.shares ?? [])
     .filter(grant => grant && !grant.revoked && grant.targetRoomId === scope.id && grant.taskId === task.id && verifyShare(task, grant, scope, principal) === true)
     .map(grant => ({ id:task.id, title:grant.fields.includes('title') ? grant.titleSnapshot : 'Shared task', status:task.stale ? 'shared-stale' : task.blocked ? 'shared-blocked' : task.status, shared:true })))
@@ -66,6 +66,8 @@ export function boardList({ scope, principal, rooms = {}, bots = {}, tasks = [],
     tasks: [...selected.map(task => ({
       id: task.id, revision: task.revision, title: task.title, status: task.status,
       owner: task.owner, reviewer: task.reviewer,
+      ...(task.acceptor !== undefined ? { acceptor:task.acceptor } : {}),
+      ...(task.acceptor !== undefined && task.reviewReceipts ? { reviewReceipts:task.reviewReceipts } : {}),
       ...(selectedIds.has(task.parentTaskId) && taskById.get(task.parentTaskId)?.scope === task.scope ? { parentTaskId:task.parentTaskId } : {}),
       ...(principal.kind === 'user' && task.change ? {change:{sourceTaskId:task.change.sourceTaskId, sourceRevision:task.change.sourceRevision,
         before:{...task.change.before, dependencies:(task.change.before.dependencies ?? []).filter(id => visibleIds.has(id))},

@@ -57,6 +57,7 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
     const participant = actor => actor === 'user' || (rt.botOf?.(actor) && member(room, actor))
     return room && task.scope === `room:${room.id}` && member(room, caller.actor)
       && participant(task.owner) && participant(task.reviewer)
+      && (task.acceptor === undefined || (member(room, task.acceptor) && ![task.owner, task.reviewer].includes(task.acceptor)))
   }
 
   // Only a verified, durable user grant may expose an immutable, minimal
@@ -131,7 +132,7 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
   // The owner, reviewer, participant (for example someone the user @mentioned
   // on the card), or Main Bot reviewing personal:user may reply on it.
   const canComment = (task, caller) => !!task && direct(task, caller) && !task.archivedAt
-    && (caller.actor === task.owner || caller.actor === task.reviewer || (task.participants ?? []).includes(caller.actor)
+    && (caller.actor === task.owner || caller.actor === task.reviewer || caller.actor === task.acceptor || (task.participants ?? []).includes(caller.actor)
       || (task.scope === 'personal:user' && rt.isMain?.(caller.actor) === true))
   const parentSummary = task => {
     const parent = task?.parentTaskId ? store.get(task.parentTaskId) : undefined
@@ -169,6 +170,8 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       ...(linked ? {projectRead:{action:'show',room_id:linked.originRoomId,revision:linked.revision}} : {}),
       id: task.id, scope:task.scope, revision: task.revision, title: task.title, status: task.status,
       owner: task.owner, reviewer: task.reviewer, acceptance: task.acceptance, dependencies,
+      ...(task.acceptor !== undefined ? { acceptor:task.acceptor } : {}),
+      ...(task.acceptor !== undefined && task.reviewReceipts ? { reviewReceipts:task.reviewReceipts } : {}),
       // Card content the owner works with, so a show after a handoff or a part switch
       // does not lose what the dispatch prompt carried once.
       description: typeof task.description === 'string' ? task.description : '',
@@ -234,20 +237,21 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       if (!caller.roomId) required.push('room_id for a private chat')
       if (!id(args.taskId)) required.push('a valid task_id')
       if (!id(args.operationId)) required.push('a stable operation_id')
-      if (!args.change?.value) required.push('change.value with the card fields')
+      if (!args.change?.value || typeof args.change.value !== 'object' || Array.isArray(args.change.value)) required.push('a change.value object with title, owner, reviewer and acceptance')
       if (required.length) throw new Error(`board_task register requires ${required.join(', ')}`)
-      // Bots know each other by display name, not by session id. Resolve the two
-      // people fields against this room's members before intake authorizes them;
-      // otherwise a perfectly normal `owner: "前端开发"` is refused as unauthorized.
       const room = rt.roomOf?.(caller.roomId)
-      const resolveMember = name => {
-        if (typeof name !== 'string' || !name || rt.botOf?.(name)) return name
-        const bot = (room?.members ?? []).map(id => rt.botOf?.(id)).find(candidate => candidate?.name === name)
-        return bot?.id ?? name
+      const resolveMember = (field, value) => {
+        if (value === 'user' && field !== 'acceptor') return value
+        if (id(value) && rt.botOf?.(value) && member(room, value)) return value
+        const matches = (room?.members ?? []).filter(actor => member(room, actor) && rt.botOf?.(actor)?.name === value)
+        if (id(value) && matches.length === 1) return matches[0]
+        throw invalid(`Set change.value.${field} to an exact Bot ID or unique display name in this room${field === 'acceptor' ? '' : ', or user'}.`)
       }
       const fields = { ...args.change.value }
-      if (Object.hasOwn(fields, 'owner')) fields.owner = resolveMember(fields.owner)
-      if (Object.hasOwn(fields, 'reviewer')) fields.reviewer = resolveMember(fields.reviewer)
+      fields.owner = resolveMember('owner', fields.owner)
+      fields.reviewer = resolveMember('reviewer', fields.reviewer)
+      if (fields.owner === fields.reviewer) throw invalid('The reviewer must be independent. Use different members in change.value.owner and change.value.reviewer.')
+      if (Object.hasOwn(fields, 'acceptor')) fields.acceptor = resolveMember('acceptor', fields.acceptor)
       const request = prepareBoardIntake({actor:caller.actor, scope:`room:${caller.roomId}`, taskId:args.taskId,
         operationId:args.operationId, parentTaskId:args.parentTaskId, releaseId:args.releaseId, value:fields})
       if (!intakeAllowed(caller, request.task)) throw refused()
@@ -277,7 +281,7 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       if (value.type !== undefined && !taskTypes.has(value.type)) throw refused()
       if (value.dependencies !== undefined && (!Array.isArray(value.dependencies) || value.dependencies.length > 100 || value.dependencies.some(item => !id(item)))) throw refused()
       if (value.draft !== undefined && typeof value.draft !== 'boolean') throw refused()
-      if (args.note !== undefined && (typeof args.note !== 'string' || args.note.length > 2000)) throw refused()
+      if (args.note !== undefined && (typeof args.note !== 'string' || Buffer.byteLength(args.note, 'utf8') > 2000)) throw invalid('A proposal note must be text of up to 2000 UTF-8 bytes.')
       const targetScope = caller.roomId ? `room:${caller.roomId}` : `personal:${caller.actor}`
       const taskId = `card-${randomUUID()}`
       const proposalId = args.operationId ? `proposal:${args.operationId}` : `proposal:${randomUUID()}`
@@ -306,7 +310,8 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       if (!proposal || proposal.proposer !== caller.actor) throw refused()
       return { proposal }
     }
-    if (!args || !id(args.taskId) || typeof args.action !== 'string') throw refused()
+    if (!args || typeof args.action !== 'string') throw refused()
+    if (!id(args.taskId)) throw invalid(`board_task ${args.action} requires the original task_id from the card.`)
     const task = store.get(args.taskId)
     if (!task && args.taskId.startsWith('legacy-')) {
       const goal = goalCards(caller).find(card => card.id === args.taskId)
@@ -329,7 +334,7 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       if (!Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 1) throw new Error('comment requires expected_revision from the current card')
       const text = typeof args.note === 'string' ? args.note : ''
       if (!text.trim()) throw new Error('comment requires note text')
-      if (Buffer.byteLength(text) > 2048) throw new Error(`comment note is ${Buffer.byteLength(text)} bytes; the limit is 2048 bytes. Shorten it or post the detail in the group and keep a summary here`)
+      if (Buffer.byteLength(text, 'utf8') > 2048) throw invalid(`comment note is ${Buffer.byteLength(text, 'utf8')} UTF-8 bytes; the limit is 2048 bytes. Keep a summary here and refer to the detailed evidence.`)
       const command = { operationId:args.operationId, taskId:task.id, expectedRevision:args.expectedRevision, actor:caller.actor, type:'card-comment', value:{ text } }
       const context = { exec, caller, roomId:args.roomId, taskId:task.id, revision:args.expectedRevision, action:'comment' }
       const result = scope.run(context, () => store.command(command))
@@ -403,7 +408,7 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
         if (!change.value || !id(change.value.releaseId)) throw refused()
         command = { type:'release-assign', value:{ releaseId:change.value.releaseId } }
       }
-      if (args.note !== undefined && (typeof args.note !== 'string' || args.note.length > 2000)) throw refused()
+      if (args.note !== undefined && (typeof args.note !== 'string' || Buffer.byteLength(args.note, 'utf8') > 2000)) throw invalid('A proposal note must be text of up to 2000 UTF-8 bytes.')
       const proposalId = args.operationId ? `proposal:${args.operationId}` : `proposal:${randomUUID()}`
       const before = Object.fromEntries(previewFields.filter(field => Object.hasOwn(task, field)).map(field => [field, task[field]]))
       const proposal = {

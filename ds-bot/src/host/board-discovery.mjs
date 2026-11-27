@@ -1,6 +1,7 @@
 // Results are summaries of already-authorized projections. A shared card keeps
 // exactly its granted fields, including when searching by text.
 const kinds = ['card','item','group_goal','proposal','shared','release']
+const assigned = (task, actor) => [task.owner, task.reviewer, task.acceptor].includes(actor)
 
 export function boardReleaseId(task, parent, caller, direct) {
   if (!task.parentTaskId) return task.releaseId
@@ -19,7 +20,7 @@ export function discoverWork({ caller, args, store, direct, sharedProjection, go
   const entries = []
   const add = (kind, row, search = []) => {
     if (args.kind && kind !== args.kind) return
-    if (args.mine && row.owner !== caller.actor && row.reviewer !== caller.actor) return
+    if (args.mine && !assigned(row, caller.actor)) return
     if (args.releaseId && (kind === 'release' ? row.id : row.releaseId) !== args.releaseId) return
     if (needle && ![row.id, row.title, ...search].some(value => typeof value === 'string' && value.toLowerCase().includes(needle))) return
     if (args.parentTaskId !== undefined && row.parentTaskId !== args.parentTaskId) return
@@ -42,7 +43,7 @@ export function discoverWork({ caller, args, store, direct, sharedProjection, go
       if (shared) add('shared', shared)
       continue
     }
-    if (!caller.roomId && task.owner !== caller.actor && task.reviewer !== caller.actor
+    if (!caller.roomId && !assigned(task, caller.actor)
       && !(isMain && (task.scope === 'personal:user' || task.owner === 'user' || task.reviewer === 'user'))
       && !(task.participants ?? []).includes(caller.actor)) continue
     if (!needle && !args.parentTaskId && !args.releaseId && (task.archivedAt || ['done', 'cancelled'].includes(task.status))) continue
@@ -51,6 +52,7 @@ export function discoverWork({ caller, args, store, direct, sharedProjection, go
     add(task.parentTaskId ? 'item' : 'card', {
       id:task.id, title:task.title, revision:task.revision, status:task.status, scope:task.scope,
       owner:task.owner, reviewer:task.reviewer,
+      ...(task.acceptor !== undefined ? {acceptor:task.acceptor} : {}),
       ...(task.parentTaskId ? {parentTaskId:task.parentTaskId} : {}),
       ...(releaseId ? {releaseId} : {}),
       ...(task.progress ? {progress:task.progress} : {}),

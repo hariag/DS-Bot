@@ -8,12 +8,27 @@ import { isPrivateDirectory, isPrivateFile } from './private-storage.mjs'
 import { syncDirectorySync } from './directory-sync.mjs'
 import { canConfigureReleaseTeam, invalidReleaseTeam, lifecyclePlan, resolveReleaseTeam } from './release-team.mjs'
 import { isFeatureCard, isManualBoardTask, isUnassignedItemDraft } from './board-intake.mjs'
+import { isCurrentReviewReceipt, recordReviewReceipt, requireReviewReceipts, reviewReceiptError } from './board-review-receipts.mjs'
 
 // The caller must authenticate actors and authorize every command and query.
 // This module is an isolated task journal: it does not send messages or prove
 // that a DSH inbox or an external side effect has been durably committed.
 const validId = x => typeof x === 'string' && x.length > 0 && x.length <= 256 && !/[\x00-\x1f]/.test(x)
 const requireId = (x, field) => { if (!validId(x)) throw new Error(`invalid ${field}`); return x }
+const checkAcceptor = (acceptor, owner, reviewer) => {
+  if (acceptor === undefined) return
+  requireId(acceptor, 'acceptor')
+  if (['user', 'scheduler', owner, reviewer].includes(acceptor)) {
+    throw reviewReceiptError('The business acceptor must be a Bot distinct from the owner and reviewer')
+  }
+}
+const requireNewReport = (task) => {
+  task.status = 'waiting'
+  task.actionRevision = null
+  task.evidence = null
+  delete task.review
+  delete task.reviewReceipts
+}
 const string = (x, field) => { if (typeof x !== 'string' || !x.trim() || Buffer.byteLength(x) > 8192) throw new Error(`invalid ${field}`); return x }
 export const taskDefinitionFields = ['title', 'acceptance']
 export function assertTaskDefinitionEdit(task, value) {
@@ -514,6 +529,12 @@ const releaseIsDone = release => {
     if (!task || !task.blocked || task.stale !== true || task.blocked.reason !== 'item acceptance changed') return task
     if (!['reported', 'done'].includes(task.status) || unfinishedItems.get(task.id)) return task
     const next = { ...task, revision: task.revision + 1, status: 'reported', actionRevision: task.revision + 1, blocked: null, stale: false }
+    if (task.acceptor !== undefined) {
+      if (unresolved(task.id)) return task
+      requireNewReport(next)
+      save(task, next)
+      return ready(next)
+    }
     save(task, next)
     action(next, 'review', next.reviewer)
     return next
@@ -547,7 +568,7 @@ const releaseIsDone = release => {
       next.actionRevision = next.revision
       save(parent, next)
       action(next, 'review', next.reviewer)
-    } else if (next.status === 'working' && !unfinishedItems.get(parent.id)) {
+    } else if (next.status === 'working' && parent.acceptor === undefined && !unfinishedItems.get(parent.id)) {
       reportParentForItems(next)
     } else {
       save(parent, next)
@@ -567,7 +588,7 @@ const releaseIsDone = release => {
       evidence:`All ${items.length} item(s) are done: ${items.map(task => `${task.id} (revision ${task.revision})`).join(', ')}` }
   }
   const reportParentForItems = parent => {
-    if (!parent || parent.archivedAt || parent.stale || parent.blocked) return parent
+    if (!parent || parent.archivedAt || parent.stale || parent.blocked || parent.acceptor !== undefined) return parent
     const reportable = parent.status === 'working'
       || ((parent.status === 'ready' || (parent.status === 'waiting' && (parent.authority || isManualBoardTask(parent)))) && !unresolved(parent.id) && dependenciesDone(parent))
     if (!reportable || !hasItems.get(parent.id) || unfinishedItems.get(parent.id)) return parent
@@ -1220,17 +1241,18 @@ const releaseIsDone = release => {
     },
     create({ operationId, actor, task, intake }) {
       if (!task || typeof task !== 'object') throw new Error('invalid task')
-      requireId(actor, 'actor'); stable(task); keysOnly(task, ['id','title','owner','reviewer','scope','acceptance','dependencies','dependencyGrants','personalProgress','description','stage','dueDate','dueComplete','labels','checklist','coverImageId','type','draft','parentTaskId'])
+      requireId(actor, 'actor'); stable(task); keysOnly(task, ['id','title','owner','reviewer','acceptor','scope','acceptance','dependencies','dependencyGrants','personalProgress','description','stage','dueDate','dueComplete','labels','checklist','coverImageId','type','draft','parentTaskId'])
       const payload = { type: 'create', actor, task }
       if (intake !== undefined) {
         stable(intake); keysOnly(intake, ['parentTaskId','releaseId'])
         if (actor === 'user' || actor === 'scheduler' || !task.scope?.startsWith('room:') || task.scope.length <= 5) throw new Error('invalid task intake')
-        keysOnly(task, ['id','title','owner','reviewer','scope','acceptance','description','type'])
+        keysOnly(task, ['id','title','owner','reviewer','acceptor','scope','acceptance','description','type'])
         if (Object.hasOwn(intake, 'parentTaskId')) requireId(intake.parentTaskId, 'parent task id')
         else if (!isFeatureCard(task)) throw new Error('top-level card must be a feature or bugfix')
         payload.type = 'intake-create'
         payload.intake = intake
       }
+      if (task.acceptor !== undefined && !intake) throw new Error('Choose a business acceptor when registering a group card')
       if (task.parentTaskId !== undefined && actor !== 'user') throw new Error('invalid parent task')
       const parentTaskId = intake?.parentTaskId ?? task.parentTaskId
       const releaseId = intake?.releaseId
@@ -1242,6 +1264,7 @@ const releaseIsDone = release => {
           requireId(owner, 'owner'); requireId(reviewer, 'reviewer')
           if (owner === reviewer) throw new Error('reviewer must be independent')
         }
+        checkAcceptor(task.acceptor, owner, reviewer)
         if (task.personalProgress !== undefined && (actor !== 'user' || task.scope !== 'personal:user' || owner !== 'user' || !['todo','doing','finished'].includes(task.personalProgress))) throw new Error('invalid personal progress')
         string(task.title, 'title'); string(task.acceptance, 'acceptance'); requireId(task.scope, 'scope')
         if (getTask(id) || db.prepare('SELECT 1 FROM tasks WHERE lower(id) = lower(?) LIMIT 1').get(id)) throw new Error('task id exists')
@@ -1262,7 +1285,8 @@ const releaseIsDone = release => {
           .filter(key => Object.hasOwn(task, key)).map(key => [key, task[key]])))
         if (task.draft !== undefined && typeof task.draft !== 'boolean') throw new Error('invalid draft state')
         const record = { id, title: task.title, owner, reviewer, scope: task.scope, acceptance: task.acceptance, dependencies, dependencyGrants, attachments: [], shares: [], revision: 1, actionRevision: null, status: task.draft === true ? 'draft' : 'proposed', type: 'other', authority: null, evidence: null, blocked: null, stale: false, position: appendPosition(task.scope),
-          ...card, ...(task.personalProgress !== undefined ? {personalProgress:task.personalProgress} : {}),
+          ...card, ...(task.acceptor === undefined ? {} : { acceptor:task.acceptor }),
+          ...(task.personalProgress !== undefined ? {personalProgress:task.personalProgress} : {}),
           ...(intake !== undefined ? { intake:{ kind:'chat', actor, at:Date.now() } } : {}), ...(parentTaskId ? { parentTaskId } : {}),
           ...(releaseId && !parentTaskId ? { releaseId, releasePosition:releasePositionAfter(releaseId, null, id) } : {}) }
         db.prepare('INSERT INTO tasks(id,revision,body) VALUES(?,?,?)').run(id, 1, JSON.stringify(record)); insertEdges(record)
@@ -1291,6 +1315,7 @@ const releaseIsDone = release => {
         if (typeof after.description !== 'string' || Buffer.byteLength(after.description) > 8192) throw new Error('invalid card details')
         requireId(after.owner, 'owner'); requireId(after.reviewer, 'reviewer')
         if (after.owner === after.reviewer) throw new Error('reviewer must be independent')
+        checkAcceptor(old.acceptor, after.owner, after.reviewer)
         if (!Array.isArray(after.dependencies)) throw new Error('invalid dependencies')
         if (stable(before) === stable(after)) throw new Error('empty edit')
         const dependencies = [...new Set([taskId, ...after.dependencies])], grants = value.dependencyGrants ?? []
@@ -1306,7 +1331,7 @@ const releaseIsDone = release => {
         const record = { id, ...(attachToParent ? {parentTaskId:parent.id} : {}), title:after.title, owner:after.owner, reviewer:after.reviewer, scope:old.scope,
           acceptance:after.acceptance, description:after.description, dependencies, dependencyGrants:grants, attachments:[], shares:[], revision:1,
           actionRevision:null, status:'waiting', type:parent && !attachToParent ? parent.type : after.type ?? old.type ?? 'other', authority:{kind:'personal',reference:boardRegistrationReference({id,revision:1})}, evidence:null, blocked:null, stale:false,
-          position:appendPosition(old.scope), change }
+          position:appendPosition(old.scope), change, ...(old.acceptor === undefined ? {} : { acceptor:old.acceptor }) }
         db.prepare('INSERT INTO tasks(id,revision,body) VALUES(?,?,?)').run(id, 1, JSON.stringify(record)); insertEdges(record)
         addHistory.run(operationId, actor, id, null, JSON.stringify(record)); coordination.taskChanged(null,record,{operationId,actor}); return ready(record)
       })
@@ -1374,10 +1399,13 @@ const releaseIsDone = release => {
             if(!actor||actor==='scheduler'||typeof value.text!=='string'||!value.text.trim()||Buffer.byteLength(value.text)>2048)throw new Error('invalid card comment')
             // The instance user writes from the board UI; a Bot participates from
             // the card it owns, reviews, or was explicitly added to.
-            if(actor!=='user'&&actor!==old.owner&&actor!==old.reviewer&&!(old.participants??[]).includes(actor)&&old.scope!=='personal:user')throw new Error('not a card participant')
+            if(actor!=='user'&&actor!==old.owner&&actor!==old.reviewer&&actor!==old.acceptor&&!(old.participants??[]).includes(actor)&&old.scope!=='personal:user')throw new Error('not a card participant')
             const comments=Array.isArray(old.comments)?old.comments:[]
             if(comments.filter(comment => !comment.workflowAction).length>=100)throw new Error('card comment limit reached')
-            next.comments=[...comments,{id:operationId,author:actor,text:value.text.trim(),at:Date.now()}]
+            const comment = { id:operationId, author:actor, text:value.text.trim(), at:Date.now() }
+            const receipts = recordReviewReceipt(old, comment)
+            if (receipts !== undefined) next.reviewReceipts = receipts
+            next.comments = [...comments, comment]
             break
           }
           case 'participants': {
@@ -1396,6 +1424,7 @@ const releaseIsDone = release => {
             keysOnly(value, ['commentId', 'text'])
             if (actor !== 'user' || typeof value.text !== 'string' || !value.text.trim() || Buffer.byteLength(value.text) > 2048) throw new Error('invalid card comment')
             requireId(value.commentId, 'comment id')
+            if (isCurrentReviewReceipt(old, value.commentId)) throw reviewReceiptError('The original review or acceptance receipt is retained for audit')
             const comments = Array.isArray(old.comments) ? old.comments : []
             const index = comments.findIndex(comment => comment?.id === value.commentId && !comment.workflowAction)
             if (index === -1) throw new Error('unknown card comment')
@@ -1406,6 +1435,7 @@ const releaseIsDone = release => {
             keysOnly(value, ['commentId'])
             if (actor !== 'user') throw new Error('invalid card comment')
             requireId(value.commentId, 'comment id')
+            if (isCurrentReviewReceipt(old, value.commentId)) throw reviewReceiptError('The original review or acceptance receipt is retained for audit')
             const comments = Array.isArray(old.comments) ? old.comments : []
             if (!comments.some(comment => comment?.id === value.commentId && !comment.workflowAction)) throw new Error('unknown card comment')
             next.comments = comments.filter(comment => comment?.id !== value.commentId)
@@ -1542,6 +1572,10 @@ const releaseIsDone = release => {
             } else throw new Error('invalid evidence kind')
             next.evidence = JSON.parse(JSON.stringify(value))
             if (verifyEvidence(old, value, actor, 'report') !== true) throw new Error('report evidence unverified')
+            if (old.acceptor !== undefined) {
+              if (/\s/.test(operationId)) throw reviewReceiptError('Use a report operation ID without whitespace')
+              next.reviewReceipts = { reportOperationId:operationId, reportRevision:next.revision }
+            }
             if (!manual) { finishAction(old.id, 'execute'); next.actionRevision = next.revision }
             next.status = 'reported'
             reply = { text:value.evidence, environment:value.environment }; break
@@ -1565,6 +1599,7 @@ const releaseIsDone = release => {
             if (old.status !== 'reported' || old.stale || old.blocked || actor !== old.reviewer || actor === old.owner || !dependenciesDone(old)) throw new Error('cannot review')
             keysOnly(value, ['evidence','result']); string(value.evidence, 'review evidence'); if (!['pass', 'rework'].includes(value.result)) throw new Error('invalid review')
             if (verifyEvidence(old, value, actor, 'review') !== true) throw new Error('review evidence unverified')
+            if (value.result === 'pass') requireReviewReceipts(old, value.evidence)
             if (!manual) {
               if (reviewRecovery) {
                 const held = restartHeldAdmission(old, actor, reviewRecovery.sessionId)
@@ -1612,11 +1647,19 @@ const releaseIsDone = release => {
           case 'invalidate':
             keysOnly(value, ['reason','evidence']); string(value.reason, 'reason'); string(value.evidence, 'invalidation evidence')
             if (old.stale || !old.evidence || verifyInvalidation(old, value, actor) !== true) throw new Error('invalidation unverified')
-            next.stale = true; next.blocked = { reason: value.reason, condition: 'independent evidence revalidation', owner: old.reviewer }; break
+            next.stale = true; next.blocked = { reason: value.reason, condition: 'independent evidence revalidation', owner: old.reviewer }
+            if (old.status === 'reported' && old.reviewReceipts) {
+              const { reportOperationId, reportRevision } = old.reviewReceipts
+              next.reviewReceipts = { reportOperationId, reportRevision }
+            }
+            break
           case 'revalidate':
             keysOnly(value, ['evidence']); string(value.evidence, 'revalidation evidence')
             if (!old.stale || actor !== old.reviewer || unresolved(old.id) || !dependenciesDone(old) || unfinishedItems.get(old.id) || verifyEvidence(old, value, actor, 'revalidate') !== true) throw new Error('cannot revalidate')
-            next.stale = false; next.blocked = null; if (!manual && old.status === 'reported') next.actionRevision = next.revision; break
+            next.stale = false; next.blocked = null
+            if (old.acceptor !== undefined && ['reported','done'].includes(old.status)) requireNewReport(next)
+            else if (!manual && old.status === 'reported') next.actionRevision = next.revision
+            break
           case 'edit': {
             keysOnly(value, ['title','owner','reviewer','acceptance','dependencies','dependencyGrants'])
             const fields = Object.keys(value)
@@ -1629,6 +1672,7 @@ const releaseIsDone = release => {
               if (Object.hasOwn(value, 'reviewer')) next.reviewer = requireId(value.reviewer, 'reviewer')
               if (next.owner === next.reviewer) throw new Error('reviewer must be independent')
             } else { next.owner = null; next.reviewer = null }
+            checkAcceptor(next.acceptor, next.owner, next.reviewer)
             if (Object.hasOwn(value, 'acceptance')) next.acceptance = string(value.acceptance, 'acceptance')
             if (Object.hasOwn(value, 'dependencies') || Object.hasOwn(value, 'dependencyGrants')) {
               const dependencies = value.dependencies ?? old.dependencies, grants = value.dependencyGrants ?? old.dependencyGrants ?? []
@@ -1703,6 +1747,7 @@ const releaseIsDone = release => {
         const parentBlockedBefore = !!(old.parentTaskId && getTask(old.parentTaskId)?.blocked)
         save(old, next)
         if (type === 'report') action(next, 'review', next.reviewer)
+        if (type === 'revalidate' && old.acceptor !== undefined && next.status === 'waiting') next = ready(next)
         if (type === 'register' || type === 'schedule' || type === 'review' && value.result === 'rework' || type === 'unblock' || type === 'dependencies') next = ready(next)
         if (type === 'unblock' && next.status === 'reported') action(next, 'review', next.reviewer)
         if (type === 'review' && value.result === 'pass') for (const id of dependents(taskId)) { const task = getTask(id); if (task) ready(task) }

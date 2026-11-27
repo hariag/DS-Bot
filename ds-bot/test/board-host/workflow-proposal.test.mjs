@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { openTaskStore } from '../../src/host/task-store.mjs'
 import { createBotWorkflow } from '../../src/host/workflow.mjs'
 import { installTaskTool } from '../../src/host/task-tool.mjs'
+import { boardList } from '../../src/host/board-query.js'
 import { privateTempDir } from '../private-temp.mjs'
 
 function fixture(t) {
@@ -275,6 +276,87 @@ test('A mentioned participant can comment on a blocked room card; outsiders cann
   await assert.rejects(call({action:'comment',task_id:'c1',room_id:'g',operation_id:'cm2',expected_revision:store.get('c1').revision,note:'x'}, 'g-four'), /authorized/)
   await assert.rejects(call({action:'comment',task_id:'c1',room_id:'g',operation_id:'cm3',expected_revision:store.get('c1').revision,note:'x'.repeat(3000)}, 'g-three'), /2048 bytes/)
   assert.ok(sent.task)
+})
+
+test('board_task guides exact register, report, review and UTF-8 note fields', async t => {
+  const {store, rt, workflow} = fixture(t)
+  const room = {id:'g', members:['one','two']}
+  rt.roomOf = id => id === room.id ? room : undefined
+  rt.teamTools = []
+  const tool = installTaskTool(rt, workflow, value => value)
+  const call = async (args, actor = 'one') => JSON.parse(await tool.execute({room_id:'g', ...args}, {agent:{id:`chat-${actor}`}}))
+  const cardFields = {title:'Input test', owner:'one', reviewer:'two', acceptance:'Verify the UTF-8 limit'}
+  const request = {action:'register', task_id:'T-TEST-0001', operation_id:'new'}
+
+  assert.match(tool.parameters.operation_id.description, /comment/)
+  assert.match(tool.parameters.note.description, /2048 UTF-8 bytes/)
+  await assert.rejects(call({...request, change:{value:{...cardFields, acceptance:'证'.repeat(2731)}}}), /acceptance exceeds 8192 UTF-8 bytes/)
+  await assert.rejects(call({...request, change:{value:{...cardFields, reviewer:undefined}}}), /change.value.reviewer/)
+  await assert.rejects(call({...request, change:{value:{...cardFields, type:'test'}}}), /feature or bugfix.*parent_task_id/)
+  await assert.rejects(call({...request, change:{value:{...cardFields, status:'working'}}}), /invalid task fields/)
+  assert.equal(store.get(request.task_id), undefined)
+
+  const {task:registered} = await call({...request, change:{value:cardFields}})
+  const operation = {task_id:registered.id, expected_revision:registered.revision}
+  await assert.rejects(call({action:'comment', operation_id:'note-no-task', expected_revision:registered.revision, note:'测试'}), /comment requires the original task_id/)
+  await assert.rejects(call({...operation, action:'comment', operation_id:'large-note', note:'证'.repeat(683)}), /2049 UTF-8 bytes.*2048 bytes/)
+  const {task:working} = await call({...operation, action:'start', operation_id:'start'})
+  const report = {...operation, action:'report', expected_revision:working.revision, operation_id:'report'}
+  const oid = 'a'.repeat(40)
+  await assert.rejects(call({...report, value:{kind:'git', targetCommit:oid, targetBlob:oid, evidence:'proof'}}), error => {
+    assert.match(error.message, /Missing value fields environment, acceptanceBlob/)
+    assert.doesNotMatch(error.message, /Unexpected value fields/)
+    return true
+  })
+  const {task:reported} = await call({...report, operation_id:'report-valid', value:{kind:'personal', environment:'fixture', evidence:'Observed the expected behavior'}})
+  await assert.rejects(call({...operation, action:'review', expected_revision:reported.revision, operation_id:'review',
+    value:{result:'pass', evidence:'证'.repeat(2731)}}, 'two'), /value.evidence is 8193 UTF-8 bytes/)
+})
+
+test('an explicit, distinct room acceptor discovers and signs the current report on the original card', async t => {
+  const {rt, store, workflow} = fixture(t)
+  const room = {id:'g',members:['one','two','customer','ambiguous-a','ambiguous-b']}
+  const display = {customer:'客户', 'ambiguous-a':'重复', 'ambiguous-b':'重复'}
+  rt.botOf = id => room.members.includes(id) ? {id, name:display[id] ?? id} : undefined
+  rt.roomOf = id => id === room.id ? room : undefined
+  rt.selfOf = session => session?.startsWith('chat-') ? session.slice(5) : undefined
+  rt.teamTools = []
+  const tool = installTaskTool(rt, workflow, value => value)
+  const call = async (args, actor = 'one') => JSON.parse(await tool.execute({room_id:'g', ...args}, {agent:{id:`chat-${actor}`}}))
+  const value = {title:'Piloted card', owner:'one', reviewer:'two', acceptance:'Verify independent approval'}
+  const register = {action:'register', task_id:'T-PILOT-0007', operation_id:'pilot-register'}
+  for (const acceptor of ['one', 'two', 'user', '重复', 'unknown']) {
+    await assert.rejects(call({...register, change:{value:{...value, acceptor}}}), /acceptor/)
+  }
+  const {task:registered} = await call({...register, change:{value:{...value, acceptor:'客户'}}})
+  assert.equal(registered.acceptor, 'customer')
+  const {items} = await call({action:'list', mine:true, room_id:undefined}, 'customer')
+  const shown = (await call({action:'show',task_id:registered.id,room_id:undefined}, 'customer')).task
+  assert.deepEqual(items.map(row => [row.id, row.acceptor]), [[shown.id, 'customer']])
+  assert.equal(shown.acceptor, 'customer')
+  const comment = {action:'comment', task_id:registered.id, expected_revision:shown.revision, operation_id:'customer-note', note:'Scope is understood'}
+  const {task:discussed} = await call(comment, 'customer')
+  assert.equal(discussed.replies.at(-1).author, 'customer')
+  const start = {action:'start',task_id:registered.id,operation_id:'start',expected_revision:discussed.revision}
+  await assert.rejects(call(start, 'customer'), /not authorized/)
+  const {task:working} = await call(start)
+  const {task:reported} = await call({action:'report',task_id:registered.id,operation_id:'owner-proof',expected_revision:working.revision,
+    value:{kind:'personal',environment:'fixture',evidence:'Passed the business test checklist'}})
+  assert.equal(reported.reviewReceipts.reportOperationId, 'owner-proof')
+  const business = {...comment, expected_revision:reported.revision, operation_id:'customer-receipt', note:'BUSINESS_ACCEPTANCE PASS report_operation_id=owner-proof'}
+  await assert.rejects(call(business,'customer'), /technical PASS/)
+  const tech = {...comment, expected_revision:reported.revision, operation_id:'reviewer-receipt', note:'TECH_REVIEW PASS report_operation_id=owner-proof'}
+  await assert.rejects(call(tech), /assigned reviewer/)
+  const {task:reviewed} = await call({...tech, operation_id:'real-reviewer-receipt'}, 'two')
+  assert.equal(reviewed.reviewReceipts.technical.actor, 'two')
+  const {task:accepted} = await call({...business, expected_revision:reviewed.revision, operation_id:'accepted-receipt'}, 'customer')
+  assert.equal(accepted.reviewReceipts.business.actor, 'customer')
+  const {task:done} = await call({action:'review',task_id:registered.id,operation_id:'done',expected_revision:accepted.revision,
+    value:{result:'pass',evidence:'All criteria verified\nreport_operation_id=owner-proof'}}, 'two')
+  assert.equal(done.status, 'done')
+  const board = boardList({scope:{kind:'room',id:room.id},principal:{kind:'user'},rooms:{[room.id]:room},tasks:store.list()})
+  assert.equal(board.tasks[0].acceptor, 'customer')
+  assert.deepEqual(board.tasks[0].reviewReceipts, done.reviewReceipts)
 })
 
 test('child updates report current parent status and Main Bot can list and comment on personal:user cards', async t => {

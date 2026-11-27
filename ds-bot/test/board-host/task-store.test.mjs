@@ -34,6 +34,68 @@ const command = (s, id, type, actor, value, op = `${type}-${id}`) => s.command({
 const register = (s, id) => command(s, id, 'register', 'user', { kind: 'personal', reference: 'owner approval' })
 const evidence = { kind: 'git', evidence: 'artifact', targetCommit: hex, targetBlob: hex, acceptanceBlob: hex, environment: 'test' }
 
+function createDualAcceptanceTask(store) {
+  return store.create({ operationId:'create-pilot', actor:'owner', intake:{}, task:{ id:'pilot', title:'Pilot',
+    owner:'owner', reviewer:'reviewer', acceptor:'customer', acceptance:'Independent findings', scope:'room:project', type:'feature' } })
+}
+
+test('an explicitly assigned acceptor requires ordered, durable decisions for the same report', t => {
+  const { store, path, trackStore } = fixture(t)
+  const comment = (actor, text, id) => command(store, 'pilot', 'card-comment', actor, { text }, id)
+  const formalReview = { result:'pass', evidence:'Technical review of the current report.\nreport_operation_id=pilot-report' }
+  assert.equal(createDualAcceptanceTask(store).acceptor, 'customer')
+  command(store, 'pilot', 'start', 'owner')
+  const reported = command(store, 'pilot', 'report', 'owner', evidence, 'pilot-report')
+  const technical = 'TECH_REVIEW PASS report_operation_id=pilot-report'
+  const business = 'BUSINESS_ACCEPTANCE PASS report_operation_id=pilot-report'
+
+  assert.throws(() => comment('customer', business, 'premature'), /must follow the technical PASS/)
+  assert.throws(() => comment('owner', technical, 'wrong-actor'), /assigned reviewer/)
+  assert.throws(() => comment('reviewer', technical.replace('pilot-report', 'old-report'), 'stale-report'), /current owner report/)
+  assert.throws(() => command(store, 'pilot', 'review', 'reviewer', formalReview), /independent technical PASS/)
+  assert.equal(store.get('pilot').revision, reported.revision)
+
+  comment('reviewer', technical, 'technical-1')
+  assert.throws(() => command(store, 'pilot', 'review', 'reviewer', formalReview), /assigned acceptor/)
+  comment('customer', business, 'business-1')
+  assert.throws(() => command(store, 'pilot', 'card-comment-edit', 'user', { commentId:'business-1', text:'different proof' }), /retained for audit/)
+  comment('reviewer', technical, 'technical-2')
+  assert.throws(() => command(store, 'pilot', 'review', 'reviewer', formalReview), /assigned acceptor/)
+  comment('customer', business, 'business-2')
+  assert.throws(() => command(store, 'pilot', 'review', 'reviewer', { ...formalReview, evidence:'report_operation_id=old-report' }), /current report/)
+
+  store.close()
+  const live = trackStore(openTaskStore(path, opts))
+  const done = command(live, 'pilot', 'review', 'reviewer', formalReview)
+  assert.equal(done.status, 'done')
+  assert.equal(done.reviewReceipts.reportOperationId, 'pilot-report')
+  assert.equal(done.reviewReceipts.technical.operationId, 'technical-2')
+  assert.equal(done.reviewReceipts.business.operationId, 'business-2')
+  assert.deepEqual([done.reviewReceipts.reportRevision, done.reviewReceipts.technical.revision, done.reviewReceipts.business.revision, done.revision], [3, 6, 7, 8])
+
+  command(live, 'pilot', 'invalidate', 'user', { reason:'Evidence superseded', evidence:'The target changed.' })
+  const reopened = command(live, 'pilot', 'revalidate', 'reviewer', { evidence:'The changed target can be reported again.' })
+  assert.equal(reopened.status, 'waiting')
+  assert.equal(reopened.evidence, null)
+  assert.equal(reopened.reviewReceipts, undefined)
+  assert.deepEqual(live.operation('review-pilot').result.reviewReceipts, done.reviewReceipts)
+})
+
+test('rework is available before acceptance and a new report does not inherit earlier decisions', t => {
+  const { store } = fixture(t)
+  createDualAcceptanceTask(store)
+  command(store, 'pilot', 'start', 'owner')
+  command(store, 'pilot', 'report', 'owner', evidence, 'first-report')
+  command(store, 'pilot', 'card-comment', 'reviewer', { text:'TECH_REVIEW PASS report_operation_id=first-report' }, 'first-tech')
+  command(store, 'pilot', 'card-comment', 'customer', { text:'BUSINESS_ACCEPTANCE REJECT report_operation_id=first-report\nNeeds another measurement.' }, 'first-business')
+  const decision = command(store, 'pilot', 'review', 'reviewer', { result:'rework', evidence:'Reproduce the business failure.' }, 'rework')
+  assert.equal(decision.status, 'waiting')
+  command(store, 'pilot', 'start', 'owner', undefined, 'restart')
+  const report = command(store, 'pilot', 'report', 'owner', evidence, 'second-report')
+  assert.deepEqual(report.reviewReceipts, { reportOperationId:'second-report', reportRevision:report.revision })
+  assert.throws(() => command(store, 'pilot', 'review', 'reviewer', { result:'pass', evidence:'report_operation_id=second-report' }, 'early-pass'), /independent technical PASS/)
+})
+
 test('version history preserves before and after across restart without exposing unrelated metadata', t => {
   const {store, path, trackStore} = fixture(t)
   create(store, 'history')
