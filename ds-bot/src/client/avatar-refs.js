@@ -1,161 +1,150 @@
-// Client-side cache for avatar photos returned by reference (`avatars: 'ref'`).
-// State polls carry a short content hash (`imageRef`) instead of multi-MB data URLs;
-// missing refs are fetched once via `avatar`, cached by ref, restored onto each entry's
-// `avatar.image` with `imageRef` stripped, and evicted once no Bot or group uses them.
+// Photos are fetched by content reference after the roster is ready. Only the
+// current roster's references are queued, with a bounded number of requests.
+export const AVATAR_RETRY_MS = 1_000
 
-function stripRef(avatar, image) {
-  const { imageRef: _drop, ...rest } = avatar
-  return typeof image === 'string' ? { ...rest, image } : rest
-}
+export function createAvatarRefCache(call, onChange, { concurrency = 3, timeoutMs = 4_500, retryMs = AVATAR_RETRY_MS } = {}) {
+  const jobs = new Map()
+  const shown = new Map()
+  const overrides = new Map()
+  let ownerRefs = new Map()
+  let active = 0
+  let notifyQueued = false
+  let disposed = false
 
-/**
- * Create a per-window avatar reference cache.
- * @param {(endpoint: string, payload: object) => Promise<any>} call
- */
-export function createAvatarRefCache(call) {
-  const cache = new Map()
-  const inflight = new Map()
-  const ownerImage = new Map()
-  let latestGen = 0
-  let latestLiveRefs = new Set()
-
-  const fetchRef = (ref, payload) => {
-    let job = inflight.get(ref)
-    if (job === undefined) {
-      job = Promise.resolve()
-        .then(() => call('avatar', payload))
-        .then((reply) => {
-          if (typeof reply?.image === 'string') {
-            const actual = typeof reply?.ref === 'string' && reply.ref !== '' ? reply.ref : ref
-            if (latestLiveRefs.has(actual) || latestLiveRefs.has(ref)) {
-              cache.set(actual, reply.image)
-            }
-            return { status: 'ok', ref: actual, image: reply.image }
-          }
-          if (reply !== null && typeof reply === 'object' && reply.image === null) {
-            return { status: 'empty' }
-          }
-          return { status: 'error' }
-        })
-        .catch(() => ({ status: 'error' }))
-        .finally(() => { inflight.delete(ref) })
-      inflight.set(ref, job)
-    }
-    return job
+  const collections = [['bots', 'botId'], ['rooms', 'roomId']]
+  const ownerOf = (kind, entry) => kind + ':' + entry.id
+  const notify = () => {
+    if (notifyQueued) return
+    notifyQueued = true
+    void Promise.resolve().then(() => {
+      notifyQueued = false
+      if (!disposed && jobs.size) onChange()
+    })
   }
 
-  /**
-   * Resolve all `imageRef` entries on a full `state` payload in place-free fashion.
-   * Entries that already carry inline `avatar.image` without `imageRef` stay untouched.
-   * Returns `{ state, incomplete, resolved }` so callers can retry transient fetch failures
-   * without losing previously displayed photos or misinterpreting authoritative empties.
-   */
-  async function hydrate(value) {
-    if (value === null || typeof value !== 'object') return { state: value, incomplete: false, resolved: false }
-    const bots = Array.isArray(value.bots) ? value.bots : null
-    const rooms = Array.isArray(value.rooms) ? value.rooms : null
-    if (bots === null && rooms === null) return { state: value, incomplete: false, resolved: false }
+  // If the owner's photo changed before the fetch, the host returns its current
+  // ref (or null). Apply that result only to the owner we looked up.
+  const load = (job, owner, payload) => {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), timeoutMs)
+    const aborted = new Promise(resolve => controller.signal.addEventListener('abort', () => resolve(undefined), { once: true }))
+    job.controller = controller
+    active++
+    const request = Promise.resolve().then(() => {
+      if (!controller.signal.aborted) return call('avatar', payload, controller.signal)
+    }).catch(() => undefined)
 
-    const gen = ++latestGen
-    const liveRefs = new Set()
-    const liveOwners = new Set()
-    const missing = new Map()
-    const collect = (entries, key, kind) => {
-      if (entries === null) return
-      for (const entry of entries) {
-        if (entry?.id !== undefined) liveOwners.add(`${kind}:${entry.id}`)
-        const ref = entry?.avatar?.imageRef
-        if (typeof ref !== 'string' || ref === '') continue
-        liveRefs.add(ref)
-        if (!cache.has(ref) && !missing.has(ref)) {
-          missing.set(ref, { [key]: entry.id, ref })
+    void Promise.race([request, aborted]).then(reply => {
+      if (jobs.get(job.ref) !== job) return
+      if (typeof reply?.image === 'string' && reply.ref === job.ref) {
+        job.image = reply.image
+        job.failures = 0
+        notify()
+      } else if (job.owners.has(owner)) {
+        if ((reply?.image === null && reply.ref === null) || (typeof reply?.image === 'string' && typeof reply.ref === 'string')) {
+          overrides.set(owner, { ref: job.ref, image: reply.image ?? undefined })
+          job.failures = 0
+          notify()
+        } else {
+          const delay = retryMs * 2 ** Math.min(job.failures++, 5)
+          job.retry = setTimeout(() => { job.retry = undefined; pump() }, delay)
         }
       }
-    }
-    collect(bots, 'botId', 'bot')
-    collect(rooms, 'roomId', 'room')
-    latestLiveRefs = liveRefs
+    }).finally(() => {
+      clearTimeout(timeout)
+      job.controller = undefined
+      active--
+      pump()
+    })
+  }
 
-    const fetched = new Set()
-    const results = new Map()
-    let resolved = false
-    if (missing.size > 0) {
-      await Promise.all([...missing.entries()].map(async ([ref, payload]) => {
-        const result = await fetchRef(ref, payload)
-        results.set(ref, result)
-        if (result.status === 'ok') {
-          resolved = true
-          if (result.ref) fetched.add(result.ref)
+  function pump() {
+    for (const job of jobs.values()) {
+      if (active >= concurrency) return
+      if (job.controller || job.retry !== undefined || job.image !== undefined) continue
+      for (const [owner, payload] of job.owners) {
+        if (overrides.has(owner)) continue
+        load(job, owner, payload)
+        break
+      }
+    }
+  }
+
+  function withPhotos(value) {
+    const updated = {}
+    for (const [kind] of collections) {
+      let changed = false
+      const entries = value[kind].map(entry => {
+        const owner = ownerOf(kind, entry)
+        const ref = ownerRefs.get(owner)
+        if (ref === undefined) return entry
+        const override = overrides.get(owner)
+        const image = override ? override.image : jobs.get(ref)?.image ?? shown.get(owner)
+        if (image === undefined) shown.delete(owner)
+        else shown.set(owner, image)
+        if (entry.avatar.imageRef === undefined && entry.avatar.image === image) return entry
+        const { imageRef: _ref, image: _image, ...avatar } = entry.avatar
+        changed = true
+        return { ...entry, avatar: image === undefined ? avatar : { ...avatar, image } }
+      })
+      if (changed) updated[kind] = entries
+    }
+    return Object.keys(updated).length ? { ...value, ...updated } : value
+  }
+
+  function track(value) {
+    if (disposed) return value
+    const next = new Map()
+    const owners = new Map()
+    const nextJobs = new Map()
+    for (const [kind, key] of collections) {
+      for (const entry of value[kind]) {
+        const owner = ownerOf(kind, entry)
+        const ref = entry.avatar?.imageRef
+        owners.set(owner, entry.avatar?.image)
+        if (typeof ref !== 'string' || !ref || typeof entry.avatar?.image === 'string') continue
+        next.set(owner, ref)
+        let job = nextJobs.get(ref)
+        if (!job) {
+          job = jobs.get(ref) ?? { ref, owners: new Map(), failures: 0 }
+          job.owners.clear()
+          nextJobs.set(ref, job)
         }
-      }))
-    }
-
-    const isLatest = gen === latestGen
-    if (isLatest) {
-      // Only the latest hydrate may evict unused refs so an out-of-order slow pull
-      // never drops live refs cached by a newer pull.
-      for (const ref of cache.keys()) {
-        if (!liveRefs.has(ref) && !fetched.has(ref)) cache.delete(ref)
-      }
-      for (const key of ownerImage.keys()) {
-        if (!liveOwners.has(key)) ownerImage.delete(key)
+        job.owners.set(owner, { [key]: entry.id, ref })
       }
     }
-
-    let incomplete = false
-    const restore = (kind) => (entry) => {
-      const ownerKey = `${kind}:${entry?.id ?? ''}`
-      const avatar = entry?.avatar
-      if (avatar === null || typeof avatar !== 'object' || typeof avatar.imageRef !== 'string' || avatar.imageRef === '') {
-        if (isLatest) {
-          if (typeof avatar?.image === 'string') ownerImage.set(ownerKey, avatar.image)
-          else ownerImage.delete(ownerKey)
-        }
-        return entry
-      }
-      if (typeof avatar.image === 'string') {
-        if (isLatest) ownerImage.set(ownerKey, avatar.image)
-        return { ...entry, avatar: stripRef(avatar, avatar.image) }
-      }
-      const cached = cache.get(avatar.imageRef)
-      if (typeof cached === 'string') {
-        if (isLatest) ownerImage.set(ownerKey, cached)
-        return { ...entry, avatar: stripRef(avatar, cached) }
-      }
-      const outcome = results.get(avatar.imageRef)
-      if (outcome?.status === 'ok') {
-        if (isLatest) ownerImage.set(ownerKey, outcome.image)
-        return { ...entry, avatar: stripRef(avatar, outcome.image) }
-      }
-      if (outcome?.status === 'empty') {
-        if (isLatest) ownerImage.delete(ownerKey)
-        return { ...entry, avatar: stripRef(avatar, undefined) }
-      }
-      incomplete = true
-      return { ...entry, avatar: stripRef(avatar, ownerImage.get(ownerKey)) }
+    for (const [owner, image] of owners) {
+      if (typeof image === 'string') shown.set(owner, image)
+      else if (!next.has(owner)) shown.delete(owner)
     }
-
-    return {
-      state: {
-        ...value,
-        ...(bots !== null ? { bots: bots.map(restore('bot')) } : {}),
-        ...(rooms !== null ? { rooms: rooms.map(restore('room')) } : {}),
-      },
-      incomplete,
-      resolved,
+    for (const owner of shown.keys()) if (!owners.has(owner)) shown.delete(owner)
+    for (const [owner, override] of overrides) if (next.get(owner) !== override.ref) overrides.delete(owner)
+    for (const [ref, job] of jobs) {
+      if (nextJobs.has(ref)) continue
+      jobs.delete(ref)
+      clearTimeout(job.retry)
+      job.controller?.abort()
     }
+    for (const [ref, job] of nextJobs) jobs.set(ref, job)
+    ownerRefs = next
+    const projected = withPhotos(value)
+    pump()
+    return projected
   }
 
   return {
-    hydrate,
-    size: () => cache.size,
-    has: ref => cache.has(ref),
-    clear: () => {
-      latestGen += 1
-      latestLiveRefs = new Set()
-      cache.clear()
-      inflight.clear()
-      ownerImage.clear()
+    track,
+    withPhotos,
+    clear() {
+      disposed = true
+      for (const job of jobs.values()) {
+        clearTimeout(job.retry)
+        job.controller?.abort()
+      }
+      jobs.clear()
+      shown.clear()
+      overrides.clear()
+      ownerRefs.clear()
     },
   }
 }

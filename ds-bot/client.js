@@ -82856,136 +82856,144 @@ function installAgentForks({ sessions, ownerOf, hasAgent, pending, adopt, refres
 }
 
 // src/client/avatar-refs.js
-function stripRef(avatar, image) {
-  const { imageRef: _drop, ...rest } = avatar;
-  return typeof image === "string" ? { ...rest, image } : rest;
-}
-function createAvatarRefCache(call2) {
-  const cache = /* @__PURE__ */ new Map();
-  const inflight = /* @__PURE__ */ new Map();
-  const ownerImage = /* @__PURE__ */ new Map();
-  let latestGen = 0;
-  let latestLiveRefs = /* @__PURE__ */ new Set();
-  const fetchRef = (ref, payload) => {
-    let job = inflight.get(ref);
-    if (job === void 0) {
-      job = Promise.resolve().then(() => call2("avatar", payload)).then((reply) => {
-        if (typeof reply?.image === "string") {
-          const actual = typeof reply?.ref === "string" && reply.ref !== "" ? reply.ref : ref;
-          if (latestLiveRefs.has(actual) || latestLiveRefs.has(ref)) {
-            cache.set(actual, reply.image);
-          }
-          return { status: "ok", ref: actual, image: reply.image };
-        }
-        if (reply !== null && typeof reply === "object" && reply.image === null) {
-          return { status: "empty" };
-        }
-        return { status: "error" };
-      }).catch(() => ({ status: "error" })).finally(() => {
-        inflight.delete(ref);
-      });
-      inflight.set(ref, job);
-    }
-    return job;
+var AVATAR_RETRY_MS = 1e3;
+function createAvatarRefCache(call2, onChange, { concurrency = 3, timeoutMs = 4500, retryMs = AVATAR_RETRY_MS } = {}) {
+  const jobs2 = /* @__PURE__ */ new Map();
+  const shown = /* @__PURE__ */ new Map();
+  const overrides = /* @__PURE__ */ new Map();
+  let ownerRefs = /* @__PURE__ */ new Map();
+  let active = 0;
+  let notifyQueued = false;
+  let disposed = false;
+  const collections = [["bots", "botId"], ["rooms", "roomId"]];
+  const ownerOf = (kind, entry) => kind + ":" + entry.id;
+  const notify = () => {
+    if (notifyQueued) return;
+    notifyQueued = true;
+    void Promise.resolve().then(() => {
+      notifyQueued = false;
+      if (!disposed && jobs2.size) onChange();
+    });
   };
-  async function hydrate(value) {
-    if (value === null || typeof value !== "object") return { state: value, incomplete: false, resolved: false };
-    const bots = Array.isArray(value.bots) ? value.bots : null;
-    const rooms = Array.isArray(value.rooms) ? value.rooms : null;
-    if (bots === null && rooms === null) return { state: value, incomplete: false, resolved: false };
-    const gen = ++latestGen;
-    const liveRefs = /* @__PURE__ */ new Set();
-    const liveOwners = /* @__PURE__ */ new Set();
-    const missing = /* @__PURE__ */ new Map();
-    const collect = (entries2, key, kind) => {
-      if (entries2 === null) return;
-      for (const entry of entries2) {
-        if (entry?.id !== void 0) liveOwners.add(`${kind}:${entry.id}`);
-        const ref = entry?.avatar?.imageRef;
-        if (typeof ref !== "string" || ref === "") continue;
-        liveRefs.add(ref);
-        if (!cache.has(ref) && !missing.has(ref)) {
-          missing.set(ref, { [key]: entry.id, ref });
+  const load = (job, owner, payload) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const aborted = new Promise((resolve2) => controller.signal.addEventListener("abort", () => resolve2(void 0), { once: true }));
+    job.controller = controller;
+    active++;
+    const request = Promise.resolve().then(() => {
+      if (!controller.signal.aborted) return call2("avatar", payload, controller.signal);
+    }).catch(() => void 0);
+    void Promise.race([request, aborted]).then((reply) => {
+      if (jobs2.get(job.ref) !== job) return;
+      if (typeof reply?.image === "string" && reply.ref === job.ref) {
+        job.image = reply.image;
+        job.failures = 0;
+        notify();
+      } else if (job.owners.has(owner)) {
+        if (reply?.image === null && reply.ref === null || typeof reply?.image === "string" && typeof reply.ref === "string") {
+          overrides.set(owner, { ref: job.ref, image: reply.image ?? void 0 });
+          job.failures = 0;
+          notify();
+        } else {
+          const delay = retryMs * 2 ** Math.min(job.failures++, 5);
+          job.retry = setTimeout(() => {
+            job.retry = void 0;
+            pump();
+          }, delay);
         }
       }
-    };
-    collect(bots, "botId", "bot");
-    collect(rooms, "roomId", "room");
-    latestLiveRefs = liveRefs;
-    const fetched = /* @__PURE__ */ new Set();
-    const results = /* @__PURE__ */ new Map();
-    let resolved = false;
-    if (missing.size > 0) {
-      await Promise.all([...missing.entries()].map(async ([ref, payload]) => {
-        const result = await fetchRef(ref, payload);
-        results.set(ref, result);
-        if (result.status === "ok") {
-          resolved = true;
-          if (result.ref) fetched.add(result.ref);
-        }
-      }));
+    }).finally(() => {
+      clearTimeout(timeout);
+      job.controller = void 0;
+      active--;
+      pump();
+    });
+  };
+  function pump() {
+    for (const job of jobs2.values()) {
+      if (active >= concurrency) return;
+      if (job.controller || job.retry !== void 0 || job.image !== void 0) continue;
+      for (const [owner, payload] of job.owners) {
+        if (overrides.has(owner)) continue;
+        load(job, owner, payload);
+        break;
+      }
     }
-    const isLatest = gen === latestGen;
-    if (isLatest) {
-      for (const ref of cache.keys()) {
-        if (!liveRefs.has(ref) && !fetched.has(ref)) cache.delete(ref);
-      }
-      for (const key of ownerImage.keys()) {
-        if (!liveOwners.has(key)) ownerImage.delete(key);
+  }
+  function withPhotos(value) {
+    const updated = {};
+    for (const [kind] of collections) {
+      let changed = false;
+      const entries2 = value[kind].map((entry) => {
+        const owner = ownerOf(kind, entry);
+        const ref = ownerRefs.get(owner);
+        if (ref === void 0) return entry;
+        const override = overrides.get(owner);
+        const image = override ? override.image : jobs2.get(ref)?.image ?? shown.get(owner);
+        if (image === void 0) shown.delete(owner);
+        else shown.set(owner, image);
+        if (entry.avatar.imageRef === void 0 && entry.avatar.image === image) return entry;
+        const { imageRef: _ref, image: _image, ...avatar } = entry.avatar;
+        changed = true;
+        return { ...entry, avatar: image === void 0 ? avatar : { ...avatar, image } };
+      });
+      if (changed) updated[kind] = entries2;
+    }
+    return Object.keys(updated).length ? { ...value, ...updated } : value;
+  }
+  function track(value) {
+    if (disposed) return value;
+    const next = /* @__PURE__ */ new Map();
+    const owners2 = /* @__PURE__ */ new Map();
+    const nextJobs = /* @__PURE__ */ new Map();
+    for (const [kind, key] of collections) {
+      for (const entry of value[kind]) {
+        const owner = ownerOf(kind, entry);
+        const ref = entry.avatar?.imageRef;
+        owners2.set(owner, entry.avatar?.image);
+        if (typeof ref !== "string" || !ref || typeof entry.avatar?.image === "string") continue;
+        next.set(owner, ref);
+        let job = nextJobs.get(ref);
+        if (!job) {
+          job = jobs2.get(ref) ?? { ref, owners: /* @__PURE__ */ new Map(), failures: 0 };
+          job.owners.clear();
+          nextJobs.set(ref, job);
+        }
+        job.owners.set(owner, { [key]: entry.id, ref });
       }
     }
-    let incomplete = false;
-    const restore = (kind) => (entry) => {
-      const ownerKey = `${kind}:${entry?.id ?? ""}`;
-      const avatar = entry?.avatar;
-      if (avatar === null || typeof avatar !== "object" || typeof avatar.imageRef !== "string" || avatar.imageRef === "") {
-        if (isLatest) {
-          if (typeof avatar?.image === "string") ownerImage.set(ownerKey, avatar.image);
-          else ownerImage.delete(ownerKey);
-        }
-        return entry;
-      }
-      if (typeof avatar.image === "string") {
-        if (isLatest) ownerImage.set(ownerKey, avatar.image);
-        return { ...entry, avatar: stripRef(avatar, avatar.image) };
-      }
-      const cached = cache.get(avatar.imageRef);
-      if (typeof cached === "string") {
-        if (isLatest) ownerImage.set(ownerKey, cached);
-        return { ...entry, avatar: stripRef(avatar, cached) };
-      }
-      const outcome = results.get(avatar.imageRef);
-      if (outcome?.status === "ok") {
-        if (isLatest) ownerImage.set(ownerKey, outcome.image);
-        return { ...entry, avatar: stripRef(avatar, outcome.image) };
-      }
-      if (outcome?.status === "empty") {
-        if (isLatest) ownerImage.delete(ownerKey);
-        return { ...entry, avatar: stripRef(avatar, void 0) };
-      }
-      incomplete = true;
-      return { ...entry, avatar: stripRef(avatar, ownerImage.get(ownerKey)) };
-    };
-    return {
-      state: {
-        ...value,
-        ...bots !== null ? { bots: bots.map(restore("bot")) } : {},
-        ...rooms !== null ? { rooms: rooms.map(restore("room")) } : {}
-      },
-      incomplete,
-      resolved
-    };
+    for (const [owner, image] of owners2) {
+      if (typeof image === "string") shown.set(owner, image);
+      else if (!next.has(owner)) shown.delete(owner);
+    }
+    for (const owner of shown.keys()) if (!owners2.has(owner)) shown.delete(owner);
+    for (const [owner, override] of overrides) if (next.get(owner) !== override.ref) overrides.delete(owner);
+    for (const [ref, job] of jobs2) {
+      if (nextJobs.has(ref)) continue;
+      jobs2.delete(ref);
+      clearTimeout(job.retry);
+      job.controller?.abort();
+    }
+    for (const [ref, job] of nextJobs) jobs2.set(ref, job);
+    ownerRefs = next;
+    const projected = withPhotos(value);
+    pump();
+    return projected;
   }
   return {
-    hydrate,
-    size: () => cache.size,
-    has: (ref) => cache.has(ref),
-    clear: () => {
-      latestGen += 1;
-      latestLiveRefs = /* @__PURE__ */ new Set();
-      cache.clear();
-      inflight.clear();
-      ownerImage.clear();
+    track,
+    withPhotos,
+    clear() {
+      disposed = true;
+      for (const job of jobs2.values()) {
+        clearTimeout(job.retry);
+        job.controller?.abort();
+      }
+      jobs2.clear();
+      shown.clear();
+      overrides.clear();
+      ownerRefs.clear();
     }
   };
 }
@@ -83153,17 +83161,19 @@ function apply(ctx) {
     const unread = unreadStore.update((marks2) => setUnread(marks2, id, value), ui.getSnapshot().unread);
     ui.set((state) => JSON.stringify(state.unread) === JSON.stringify(unread) ? state : { ...state, unread });
   };
-  const refreshed = /* @__PURE__ */ new Set();
-  const avatarRefs = createAvatarRefCache(call);
+  const avatarRefs = createAvatarRefCache(call, () => {
+    roster.set((current2) => {
+      const withPhotos = avatarRefs.withPhotos(current2);
+      return withPhotos === current2 ? current2 : indexRoster(withPhotos);
+    });
+  });
   let pulls = 0;
   let applied = 0;
   const foldWrites = sectionFoldWrites();
-  let avatarIncomplete = false;
   const pull = async () => {
     const order = ++pulls;
     const known = roster.getSnapshot();
-    const since = avatarIncomplete ? -1 : known.revision;
-    const value = await call("state", { since, rosterKey: known.rosterKey ?? "", models: known.modelsKey ?? "", live: liveKey, instructionsKey: known.instructionsKey ?? "", locale: language(), avatars: "ref" });
+    const value = await call("state", { since: known.revision, rosterKey: known.rosterKey ?? "", models: known.modelsKey ?? "", live: liveKey, instructionsKey: known.instructionsKey ?? "", locale: language(), avatars: "ref" });
     if (order < applied) return false;
     applied = order;
     const prevLiveKey = liveKey;
@@ -83212,24 +83222,20 @@ function apply(ctx) {
     if (value.telemetryPrompt !== void 0 && Boolean(value.telemetryPrompt) !== Boolean(current2.telemetryPrompt)) live2.telemetryPrompt = Boolean(value.telemetryPrompt);
     if (value.releaseNotes !== void 0 && JSON.stringify(value.releaseNotes) !== JSON.stringify(current2.releaseNotes ?? null)) live2.releaseNotes = value.releaseNotes;
     if (value.readOnly !== void 0 && (value.readOnly ?? null) !== (current2.readOnly ?? null)) live2.readOnly = value.readOnly;
-    if (value.unchanged || !avatarIncomplete && value.revision === current2.revision && value.modelsKey === current2.modelsKey) {
+    if (value.unchanged || value.revision === current2.revision && value.modelsKey === current2.modelsKey) {
+      if (value.unchanged) {
+        for (const cursor of ["revision", "rosterKey", "instructionsKey", "modelsKey"]) {
+          if (value[cursor] !== void 0 && value[cursor] !== current2[cursor]) live2[cursor] = value[cursor];
+        }
+      }
       if (Object.keys(live2).length > 0 && current2.ready) roster.set({ ...current2, ...live2 });
       return value.liveKey !== void 0 && value.liveKey !== prevLiveKey;
     }
-    const { state: hydrated, incomplete } = await avatarRefs.hydrate(value);
-    if (order < applied) return false;
-    avatarIncomplete = incomplete;
-    const latest = roster.getSnapshot();
-    const sameState = hydrated.revision === latest.revision && hydrated.modelsKey === latest.modelsKey && latest.ready;
-    const avatarsChanged = sameState && ((hydrated.bots ?? []).some((bot) => bot?.avatar?.image !== latest.byId?.[bot.id]?.avatar?.image) || (hydrated.rooms ?? []).some((room2) => room2?.avatar?.image !== latest.roomsById?.[room2.id]?.avatar?.image));
-    if (sameState && !avatarsChanged) {
-      if (Object.keys(live2).length > 0) roster.set({ ...latest, ...live2 });
-      return value.liveKey !== void 0 && value.liveKey !== prevLiveKey;
-    }
-    if (Object.keys(seenAt).length === 0) leaveVisits([...hydrated.bots, ...hydrated.rooms].map((entry) => entry.id));
-    roster.set(indexRoster({ ...hydrated, sections: foldWrites.reconcile(hydrated.sections, hydrated.revision) }, latest));
+    const snapshot = avatarRefs.track(value);
+    if (Object.keys(seenAt).length === 0) leaveVisits([...snapshot.bots, ...snapshot.rooms].map((entry) => entry.id));
+    roster.set(indexRoster({ ...snapshot, sections: foldWrites.reconcile(snapshot.sections, snapshot.revision) }, current2));
     try {
-      const ids = (hydrated.agents ?? []).flatMap((agent) => agent.sessions ?? []);
+      const ids = (snapshot.agents ?? []).flatMap((agent) => agent.sessions ?? []);
       localStorage.setItem(STORAGE.agentSessions, JSON.stringify(ids));
       agentSessionCache = new Set(ids);
     } catch {
@@ -83240,15 +83246,6 @@ function apply(ctx) {
     }
     for (const [agentId, sessionId] of pendingAgentSession) {
       if (listed[sessionId] !== void 0 || roster.getSnapshot().agentOf[sessionId] !== agentId) pendingAgentSession.delete(agentId);
-    }
-    const activeIds = /* @__PURE__ */ new Set([...hydrated.bots.map(currentPart), ...hydrated.rooms.map((room2) => room2.sessionId ?? room2.id)]);
-    for (const id of refreshed) {
-      if (!activeIds.has(id)) refreshed.delete(id);
-    }
-    for (const id of activeIds) {
-      if (refreshed.has(id)) continue;
-      refreshed.add(id);
-      void Promise.resolve(ctx.sessions.refreshProjections?.(id)).catch(quietly("refresh projections"));
     }
     return true;
   };
@@ -83382,7 +83379,6 @@ function apply(ctx) {
   ctx.effect(() => () => {
     markupCache.clear();
     avatarRefs.clear();
-    avatarIncomplete = false;
   }, "ds-bot: character markup");
   ctx.effect(() => installMotionRest(), "ds-bot: motion rest");
   const installMentions = () => {

@@ -5,7 +5,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { runInNewContext } from 'node:vm'
 import { build } from 'esbuild'
-import { createAvatarRefCache } from '../src/client/avatar-refs.js'
+import { AVATAR_RETRY_MS, createAvatarRefCache } from '../src/client/avatar-refs.js'
 import { lruGet, lruSet } from '../src/client/memo.js'
 import { installFrameWatch } from '../src/client/frame-watch.js'
 import { installMotionRest } from '../src/client/motion-rest.js'
@@ -207,6 +207,7 @@ async function bootClientIndex({ rpc, dsBotApp, storage = makeStorage(), initial
   }
 
   const sessionsList = createSource({ byId: initialSessions })
+  const projectionRefreshes = []
   const effectDisposers = []
   const slotsMap = new Map()
   const ctx = {
@@ -244,7 +245,7 @@ async function bootClientIndex({ rpc, dsBotApp, storage = makeStorage(), initial
       list: sessionsList,
       fork: async () => 'forked-session',
       refresh: async () => {},
-      refreshProjections: async () => {},
+      refreshProjections: async (id) => { projectionRefreshes.push(id) },
       binding: () => undefined,
     },
   }
@@ -293,118 +294,87 @@ async function bootClientIndex({ rpc, dsBotApp, storage = makeStorage(), initial
     }
   }
 
-  return { window, document, storage, sessionsList, timers, intervals, dispose, disposeEffect }
+  return { window, document, storage, sessionsList, projectionRefreshes, timers, intervals, dispose, disposeEffect }
 }
 
 // -------------------------------------------------------------------------
 // #1967 avatar-refs against REAL mobile.js slimAvatars + avatar contract
 
-test('#1967 avatar-refs works against real host mobile.js slimAvatars/avatar, handles transient failure retry, authoritative empty, and out-of-order GC', async () => {
-  const bots = new Map([
-    ['b1', { id: 'b1', name: 'A', avatar: { shape: 'whale', image: 'data:image/png;base64,imgA1' } }],
-    ['b2', { id: 'b2', name: 'B', avatar: { shape: 'star', image: 'data:image/png;base64,imgA1' } }],
-    ['b3', { id: 'b3', name: 'Inline', avatar: { shape: 'moon', image: 'data:image/png;base64,inline' } }],
-  ])
-  const rooms = new Map([
-    ['r1', { id: 'r1', name: 'Room', avatar: { image: 'data:image/png;base64,imgRoom' } }],
-  ])
+test('avatar cache scopes obsolete replies to their owners and shares matching refs', async () => {
+  const photo = 'data:image/png;base64,shared'
+  const newer = 'data:image/png;base64,newer'
+  const bots = new Map(['a', 'b', 'c', 'd'].map(id => [id, { id, avatar: { shape: 'whale', image: photo } }]))
+  const room = { id:'room', avatar:{ image:'data:image/png;base64,room' } }
+  const inline = { id:'inline', avatar:{ image:'data:image/png;base64,inline' } }
   const rt = {
     ctx: { sessionController: {}, on: () => () => {}, effect: () => () => {} },
     state: {},
     botOf: id => bots.get(id),
-    roomOf: id => rooms.get(id),
+    roomOf: () => room,
   }
   installMobile(rt)
-
+  let shown
   const calls = []
-  let failRefs = new Set()
-  const gates = new Map()
-  const cache = createAvatarRefCache(async (endpoint, payload) => {
-    calls.push([endpoint, payload])
-    if (gates.has(payload.ref)) await gates.get(payload.ref)
-    if (failRefs.has(payload.ref)) throw Object.assign(new Error('network blip'), { code: 'NETWORK' })
+  const cache = createAvatarRefCache((endpoint, payload) => {
+    calls.push(payload.botId ?? payload.roomId)
     return rt.mobileEndpoint(endpoint, payload)
-  })
+  }, () => { shown = cache.withPhotos(shown) })
+  const snapshot = rt.slimAvatars({ bots: [...bots.values()], rooms: [room] })
+  snapshot.bots.push(inline)
+  bots.set('a', { id: 'a' })
+  bots.set('b', { id: 'b', avatar: { image: newer } })
+  shown = cache.track(snapshot)
+  shown = cache.track(snapshot)
+  assert.deepEqual(shown.bots.map(bot => bot.avatar.image), [undefined, undefined, undefined, undefined, inline.avatar.image])
+  assert.equal(shown.bots[0].avatar.imageRef, undefined)
+  await tick()
+  assert.deepEqual(calls, ['a', 'room', 'b', 'c'])
+  assert.deepEqual(shown.bots.map(bot => bot.avatar.image), [undefined, newer, photo, photo, inline.avatar.image])
+  assert.equal(shown.rooms[0].avatar.image, room.avatar.image)
+  shown = cache.track(snapshot)
+  await tick()
+  assert.equal(calls.length, 4, 'repeated roster snapshots share active and cached answers')
+  cache.clear()
+})
 
-  // 1) Initial hydration using real rt.slimAvatars (keeping b3 inline to test mixed payloads).
-  const slim1 = rt.slimAvatars({
-    bots: [bots.get('b1'), bots.get('b2')],
-    rooms: [rooms.get('r1')],
-  })
-  slim1.bots.push(bots.get('b3'))
+test('avatar cache bounds concurrency, retries timeouts and ignores superseded requests', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const requests = []
+  let shown
+  const cache = createAvatarRefCache((_endpoint, payload, signal) =>
+    new Promise(resolve => { requests.push({ ref: payload.ref, signal, resolve }) }),
+  () => { shown = cache.withPhotos(shown) }, { concurrency: 2, timeoutMs: 20, retryMs: 5 })
+  const snapshot = refs => ({ bots: refs.map(([id, ref]) => ({ id, avatar: { imageRef: ref } })), rooms: [] })
 
-  let releaseSlow
-  const refA1 = slim1.bots[0].avatar.imageRef
-  gates.set(refA1, new Promise(resolve => { releaseSlow = resolve }))
-  const p1 = cache.hydrate(slim1)
-  const p2 = cache.hydrate(slim1)
-  releaseSlow()
-  const [r1, r2] = await Promise.all([p1, p2])
-  gates.clear()
-
-  assert.equal(calls.length, 2, 'shared ref and concurrent hydrate must fetch each unique ref once')
-  assert.equal(r1.incomplete, false)
-  assert.equal(r1.state.bots[0].avatar.image, 'data:image/png;base64,imgA1')
-  assert.equal(r1.state.bots[0].avatar.imageRef, undefined)
-  assert.equal(r1.state.bots[1].avatar.image, 'data:image/png;base64,imgA1')
-  assert.equal(r1.state.bots[2].avatar.image, 'data:image/png;base64,inline')
-  assert.equal(r1.state.rooms[0].avatar.image, 'data:image/png;base64,imgRoom')
-  assert.equal(r2.state.bots[0].avatar.image, 'data:image/png;base64,imgA1')
-
-  // Cache hit makes zero calls.
-  const r3 = await cache.hydrate(slim1)
-  assert.equal(calls.length, 2)
-  assert.equal(r3.incomplete, false)
-
-  // 2) Transient failure when b1 switches to a new photo:
-  //    preserves b1's previous cached photo, reports incomplete=true, and self-heals on retry.
-  bots.set('b1', { id: 'b1', name: 'A', avatar: { shape: 'whale', image: 'data:image/png;base64,imgA2' } })
-  const slim2 = rt.slimAvatars({ bots: [bots.get('b1')], rooms: [] })
-  const refA2 = slim2.bots[0].avatar.imageRef
-  failRefs = new Set([refA2])
-
-  const failed = await cache.hydrate(slim2)
-  assert.equal(failed.incomplete, true, 'transient fetch failure must report incomplete=true')
-  assert.equal(failed.state.bots[0].avatar.image, 'data:image/png;base64,imgA1', 'must preserve prior cached photo during transient error')
-  assert.equal(failed.state.bots[0].avatar.imageRef, undefined)
-
-  // Clear network failure: retry hydrates cleanly and updates photo.
-  failRefs.clear()
-  const healed = await cache.hydrate(slim2)
-  assert.equal(healed.incomplete, false)
-  assert.equal(healed.resolved, true)
-  assert.equal(healed.state.bots[0].avatar.image, 'data:image/png;base64,imgA2')
-
-  // 3) Authoritative empty: host removes b1's photo before client fetches a stale ref.
-  //    mobile.js returns { botId: 'b1', ref: null, image: null } -> NOT incomplete, clears photo!
-  bots.set('b1', { id: 'b1', name: 'A', avatar: { shape: 'whale' } })
-  const emptyReply = await rt.mobileEndpoint('avatar', { botId: 'b1', ref: 'stale-ref' })
-  assert.deepEqual(emptyReply, { botId: 'b1', ref: null, image: null })
-  const authEmpty = await cache.hydrate({ bots: [{ id: 'b1', avatar: { shape: 'whale', imageRef: 'stale-ref' } }], rooms: [] })
-  assert.equal(authEmpty.incomplete, false, 'authoritative { ref: null, image: null } must NOT set incomplete')
-  assert.equal(authEmpty.state.bots[0].avatar.image, undefined, 'authoritative empty must clear stale fallback image')
-
-  // 4) Out-of-order concurrent hydrate: slow pull #1 (refSlow) finishes AFTER fast pull #2 (refFast).
-  //    Pull #1 must NOT evict refFast cached by pull #2!
-  bots.set('b1', { id: 'b1', name: 'A', avatar: { shape: 'whale', image: 'data:image/png;base64,slowPhoto' } })
-  const slimSlow = rt.slimAvatars({ bots: [bots.get('b1')], rooms: [] })
-  const refSlow = slimSlow.bots[0].avatar.imageRef
-  let releaseOld
-  gates.set(refSlow, new Promise(resolve => { releaseOld = resolve }))
-  const slowJob = cache.hydrate(slimSlow)
-
-  bots.set('b1', { id: 'b1', name: 'A', avatar: { shape: 'whale', image: 'data:image/png;base64,fastPhoto' } })
-  const slimFast = rt.slimAvatars({ bots: [bots.get('b1')], rooms: [] })
-  const refFast = slimFast.bots[0].avatar.imageRef
-  const fastResult = await cache.hydrate(slimFast)
-  assert.equal(fastResult.state.bots[0].avatar.image, 'data:image/png;base64,fastPhoto')
-  assert.equal(cache.has(refFast), true)
-
-  releaseOld()
-  await slowJob
-  gates.clear()
-  assert.equal(cache.has(refFast), true, 'stale slow pull #1 must NEVER evict refFast cached by newer pull #2')
-  assert.equal(cache.has(refSlow), false, 'stale slow pull #1 must not leave dead refSlow in cache')
+  shown = cache.track(snapshot([['a', 'old'], ['b', 'b'], ['c', 'c']]))
+  await tick()
+  assert.deepEqual(requests.map(request => request.ref), ['old', 'b'])
+  requests[1].resolve({ ref: 'b', image: 'photo-b' })
+  await tick()
+  assert.equal(shown.bots[1].avatar.image, 'photo-b')
+  assert.equal(requests[2].ref, 'c')
+  requests[2].resolve({ ref: 'c', image: 'photo-c' })
+  await tick()
+  t.mock.timers.tick(20)
+  await tick()
+  assert.equal(requests[0].signal.aborted, true)
+  assert.equal(requests.length, 3)
+  t.mock.timers.tick(5)
+  await tick()
+  assert.equal(requests[3].ref, 'old')
+  shown = cache.track(snapshot([['a', 'new'], ['b', 'b']]))
+  await tick()
+  assert.equal(requests[3].signal.aborted, true)
+  assert.equal(requests[4].ref, 'new')
+  requests[0].resolve({ ref: 'old', image: 'obsolete-photo' })
+  requests[3].resolve({ ref: 'old', image: 'obsolete-photo' })
+  requests[4].resolve({ ref: 'new', image: 'photo-new' })
+  await tick()
+  assert.deepEqual(shown.bots.map(bot => bot.avatar.image), ['photo-new', 'photo-b'])
+  cache.clear()
+  cache.track(snapshot([['d', 'd']]))
+  await tick()
+  assert.equal(requests.length, 5, 'a late roster after disposal cannot restart image work')
 })
 
 // -------------------------------------------------------------------------
@@ -1109,7 +1079,7 @@ test('bot-browsers handles change.live=false without overwriting live or calling
 // index.js real apply(ctx) integration tests:
 // - computer-cursor-wait 2s backoff isolation
 // - agent-fork cleanup (no orphan interval) & cross-tab storage polling activation
-// - #1967 avatar-refs pull loop does not advance `since` on transient error
+// - Avatar photos hydrate in the background while state advances
 // - installMentions identical-length PNG IEND trailer update
 
 test('index.js computer-cursor-wait 2s error backoff is NOT broken by unrelated roster updates and cancels cleanly on dispose', async () => {
@@ -1256,175 +1226,128 @@ test('index.js agent-fork prevents orphan 5s setInterval on dispose and activate
   await appB.dispose()
 })
 
-test('index.js pull loop keeps retrying avatar on transient failure without advancing since, and installMentions detects same-length PNG IEND changes', async () => {
-  // Two valid PNG-like data URLs with IDENTICAL length and IDENTICAL last 24 characters (IEND trailer).
+test('index.js publishes roster before photos and retries photos without restarting state reads', async () => {
   const trailer = 'AAAAAElFTkSuQmCC12345678'
-  const img1 = `data:image/png;base64,FIRST_IMAGE_BODY_${trailer}`
-  const img2 = `data:image/png;base64,OTHER_IMAGE_BODY_${trailer}`
-  assert.equal(img1.length, img2.length)
-  assert.equal(img1.slice(-24), img2.slice(-24))
-
+  const img1 = 'data:image/png;base64,FIRST_IMAGE_BODY_' + trailer
+  const img2 = 'data:image/png;base64,OTHER_IMAGE_BODY_' + trailer
   let currentImg = img1
   let revision = 5
+  const bot = () => ({ id: 'b1', name: 'Ava', color: 'blue', avatar: { shape: 'whale', image: currentImg } })
   const rt = {
     ctx: { sessionController: {}, on: () => () => {}, effect: () => () => {} },
     state: {},
-    botOf: id => (id === 'b1' ? { id: 'b1', name: 'Ava', color: 'blue', avatar: { shape: 'whale', image: currentImg } } : undefined),
-    roomOf: () => undefined,
+    botOf: bot,
   }
   installMobile(rt)
-
-  const stateSinceCalls = []
-  let failFirstAvatar = true
+  const cursors = []
+  const stateBodies = []
+  let advanceUnchanged = false
+  let rejectAvatar
+  let avatarCalls = 0
+  let failNextAvatar = false
   const app = await bootClientIndex({
     rpc: async (endpoint, payload) => {
       if (endpoint === 'state') {
-        stateSinceCalls.push(payload.since)
+        cursors.push(payload.since)
+        stateBodies.push(payload)
+        if (advanceUnchanged) {
+          advanceUnchanged = false
+          revision++
+          return { unchanged: true, revision, rosterKey: 'roster-next', instructionsKey: 'instructions-next', modelsKey: 'm2' }
+        }
         if (payload.since === revision) return { unchanged: true, revision }
-        return rt.slimAvatars({
-          revision,
-          modelsKey: 'm1',
-          bots: [{ id: 'b1', name: 'Ava', color: 'blue', avatar: { shape: 'whale', image: currentImg } }],
-          rooms: [],
-        })
+        return rt.slimAvatars({ revision, modelsKey: 'm1', bots: [bot()],
+          rooms: [{ id: 'r1', sessionId: 'room-part' }], agents: [{ id: 'a1', sessions: ['agent-part'] }] })
       }
       if (endpoint === 'avatar') {
-        if (failFirstAvatar) {
-          failFirstAvatar = false
-          throw Object.assign(new Error('temporary avatar failure'), { code: 'NETWORK' })
-        }
+        avatarCalls++
+        if (avatarCalls === 1) return new Promise((_, reject) => { rejectAvatar = reject })
+        if (failNextAvatar) { failNextAvatar = false; throw new Error('temporary avatar failure') }
         return rt.mobileEndpoint('avatar', payload)
       }
       return {}
     },
   })
-
-  await tick()
-  await tick()
-  assert.deepEqual(stateSinceCalls, [-1])
-  const mentionStyle = () => [...app.document.querySelectorAll('style')].find(s => s.dataset.dshBot === 'mentions')?.textContent ?? ''
-  assert.equal(mentionStyle().includes(img1), false, 'first avatar fetch failed transiently')
-
-  // Next poll must NOT advance `since` to 5 (must pass -1) so avatar self-heals!
-  const runNextPoll = async () => {
-    const entry = [...app.timers.entries()].find(([, t]) => t.ms === 1500 || t.ms === 3000 || t.ms === 5000)
-    assert.ok(entry)
-    app.timers.delete(entry[0])
-    entry[1].fn()
+  try {
     await tick()
+    const mentionStyle = () => [...app.document.querySelectorAll('style')].find(s => s.dataset.dshBot === 'mentions')?.textContent ?? ''
+    const runTimer = async delays => {
+      const entry = [...app.timers.entries()].find(([, timer]) => delays.includes(timer.ms))
+      assert.ok(entry)
+      app.timers.delete(entry[0])
+      entry[1].fn()
+      await tick()
+    }
+    assert.equal(typeof rejectAvatar, 'function')
+    assert.equal(app.storage.getItem(STORAGE.agentSessions), '["agent-part"]', 'roster published while photo is pending')
+    assert.deepEqual(app.projectionRefreshes, [], 'initial roster does not warm every session')
+    assert.equal(mentionStyle().includes(img1), false)
+    await runTimer([VISIBLE_POLL_MS, 5000])
+    assert.deepEqual(cursors, [-1, 5])
+    rejectAvatar(Object.assign(new Error('temporary avatar failure'), { code: 'NETWORK' }))
     await tick()
+    await runTimer([AVATAR_RETRY_MS])
+    assert.equal(avatarCalls, 2)
+    assert.deepEqual(cursors, [-1, 5], 'retry issued no state request')
+    assert.ok(mentionStyle().includes(img1))
+    advanceUnchanged = true
+    await runTimer([VISIBLE_POLL_MS, 5000])
+    currentImg = img2
+    failNextAvatar = true
+    revision++
+    await runTimer([VISIBLE_POLL_MS, 5000])
+    assert.equal(stateBodies.at(-1).since, 6)
+    assert.equal(stateBodies.at(-1).rosterKey, 'roster-next')
+    assert.equal(stateBodies.at(-1).instructionsKey, 'instructions-next')
+    assert.equal(stateBodies.at(-1).models, 'm2')
+    assert.ok(mentionStyle().includes(img1), 'transient photo failure preserves the preceding photo')
+    await runTimer([AVATAR_RETRY_MS])
+    assert.ok(mentionStyle().includes(img2), 'same-length photo change reaches mentions')
+    assert.equal(mentionStyle().includes(img1), false)
+    // A ref backed by a removed photo can return an authoritative empty before the next state revision.
+    currentImg = img1
+    failNextAvatar = true
+    revision++
+    await runTimer([VISIBLE_POLL_MS, 5000])
+    assert.ok(mentionStyle().includes(img2))
+    currentImg = undefined
+    await runTimer([AVATAR_RETRY_MS])
+    assert.equal(mentionStyle().includes(img2), false)
+  } finally {
+    await app.dispose()
   }
+})
 
-  await runNextPoll()
-  assert.deepEqual(stateSinceCalls, [-1, -1], 'must not advance since while avatar hydration is incomplete')
-  assert.ok(mentionStyle().includes(img1), 'avatar must self-heal on retry and render in mentions style')
-
-  // Subsequent poll now advances `since` to 5.
-  await runNextPoll()
-  assert.deepEqual(stateSinceCalls, [-1, -1, 5], 'must advance since once hydration succeeds')
-
-  // Now update avatar to img2 (same length, same last 24 chars) at revision 6 -> mentions CSS must update!
-  currentImg = img2
-  revision = 6
-  await runNextPoll()
-  assert.ok(mentionStyle().includes(img2), 'installMentions must update when same-length PNG with identical trailer changes')
-  assert.equal(mentionStyle().includes(img1), false)
-
-  // Authoritative empty at the SAME revision after a transient failure must clear the stale fallback photo.
-  revision = 7
-  currentImg = img1
-  failFirstAvatar = true
-  await runNextPoll()
-  assert.ok(mentionStyle().includes(img2), 'transient error preserves previous fallback photo')
-  // Before retry succeeds, host clears the bot avatar authoritatively while staying at revision 7!
-  currentImg = undefined
-  await runNextPoll()
-  assert.equal(mentionStyle().includes(img2), false, 'authoritative empty at same revision must clear stale fallback photo')
-  assert.equal(mentionStyle().includes(img1), false)
-
-  await app.dispose()
-
-  // Dedicated clean harness for deterministic overlapping pull #1 (fills cache, superseded by order < applied)
-  // + pull #2 (wins order & hits cache with resolved=false -> must still update roster via avatarsChanged!).
-  currentImg = img1
-  let avatarFails = true
-  let releaseAvatar1
-  let releaseState2
-  let stateCalls = 0
-  let avatarCalls = 0
-  const app2 = await bootClientIndex({
-    initialSessions: {
-      's-agent-1': { id: 's-agent-1', retainedBy: { mainView: 1 } },
-    },
-    rpc: async (endpoint, payload) => {
-      if (endpoint === 'state') {
-        stateCalls += 1
-        if (payload.since === 8) return { unchanged: true, revision: 8 }
-        const snap = rt.slimAvatars({
-          revision: 8,
-          modelsKey: 'm1',
-          bots: [{ id: 'b1', name: 'Ava', color: 'blue', avatar: { shape: 'whale', image: img1 } }],
-          rooms: [],
-          agents: [{ id: 'a1', sessions: ['s-agent-1'] }],
-        })
-        if (stateCalls === 3) {
-          return new Promise((resolve) => { releaseState2 = () => resolve(snap) })
-        }
-        return snap
-      }
-      if (endpoint === 'avatar') {
-        avatarCalls += 1
-        if (avatarFails) {
-          avatarFails = false
-          throw new Error('transient')
-        }
-        return new Promise((resolve) => {
-          releaseAvatar1 = () => resolve(rt.mobileEndpoint('avatar', payload))
-        })
-      }
-      if (endpoint === 'agent-adopt') return { ok: true }
-      return {}
+test('index.js ignores a slow state response after an overlapping Agent navigation publishes a newer roster', async () => {
+  let releaseOldPoll
+  let stateReads = 0
+  const state = (revision, sessions) => ({ revision, modelsKey:'m1', bots:[], rooms:[], agents:[{ id:'agent', sessions }] })
+  const app = await bootClientIndex({
+    initialSessions: { first:{ id:'first', retainedBy:{ mainView:1 } } },
+    rpc: async (endpoint) => {
+      if (endpoint !== 'state') return {}
+      stateReads++
+      if (stateReads === 1) return state(8, ['first'])
+      if (stateReads === 2) return new Promise(resolve => { releaseOldPoll = () => resolve(state(9, ['first'])) })
+      return state(10, ['first', 'next'])
     },
   })
-  await tick()
-  await tick()
-  // Switch back to Bot surface 'b1' to inspect mentions style cleanly.
-  const showBot = () => app2.sessionsList.set({
-    byId: {
-      b1: { id: 'b1', retainedBy: { mainView: 1 } },
-      's-agent-1': { id: 's-agent-1', retainedBy: { mainView: 0 } },
-    },
-  })
-  const style2 = () => [...app2.document.querySelectorAll('style')].find(s => s.dataset.dshBot === 'mentions')?.textContent ?? ''
-  assert.equal(style2().includes(img1), false, 'initial rev 8 avatar fetch failed')
-  // Pull #1 (order = 2) starts via timer and pauses inside call('avatar').
-  const pollEntry = [...app2.timers.entries()].find(([, t]) => t.ms === 1500 || t.ms === 3000 || t.ms === 5000)
-  assert.ok(pollEntry)
-  app2.timers.delete(pollEntry[0])
-  pollEntry[1].fn()
-  await tick()
-  assert.equal(typeof releaseAvatar1, 'function', 'pull #1 is in-flight inside avatar fetch')
-  // Trigger concurrent pull #2 (order = 3) via agent-adopt; it reaches call('state') and waits.
-  app2.sessionsList.set({
-    byId: {
-      's-agent-1': { id: 's-agent-1', retainedBy: { mainView: 0 } },
-      's-agent-2': { id: 's-agent-2', blank: true, retainedBy: { mainView: 1 } },
-    },
-  })
-  await tick()
-  assert.equal(typeof releaseState2, 'function', 'pull #2 is in-flight overlapping pull #1')
-  // Release pull #2's state (sets applied = 3 > pull #1's order = 2) right as pull #1 writes cache!
-  releaseAvatar1()
-  releaseState2()
-  await tick()
-  await tick()
-  await tick()
-  showBot()
-  await tick()
-  assert.equal(stateCalls, 3)
-  assert.equal(avatarCalls, 2, 'pull #2 hit the cache populated by superseded pull #1 without issuing a 3rd avatar fetch')
-  assert.ok(style2().includes(img1), 'pull #2 hitting cache written by superseded pull #1 must still update roster')
-  await app2.dispose()
+  try {
+    await tick()
+    const poll = [...app.timers.entries()].find(([, timer]) => timer.ms === VISIBLE_POLL_MS)
+    assert.ok(poll)
+    app.timers.delete(poll[0])
+    poll[1].fn()
+    await tick()
+    assert.equal(typeof releaseOldPoll, 'function')
+    app.sessionsList.set({ byId:{ first:{ id:'first' }, next:{ id:'next', blank:true, retainedBy:{ mainView:1 } } } })
+    await tick()
+    assert.equal(stateReads, 3)
+    assert.equal(app.storage.getItem(STORAGE.agentSessions), '["first","next"]')
+    releaseOldPoll()
+    await tick()
+    assert.equal(app.storage.getItem(STORAGE.agentSessions), '["first","next"]')
+  } finally { await app.dispose() }
 })
 
 // -------------------------------------------------------------------------

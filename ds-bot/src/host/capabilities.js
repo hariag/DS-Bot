@@ -367,7 +367,7 @@ export function install(rt) {
     if (attached) bot[mode === 'catalog' ? 'packs' : 'capabilities'].push(name)
     await rt.save()
     if (wasEmpty && bot.capabilities.length > 0) {
-      await trackBotAgents(bot)
+      trackBotAgents(bot)
       void scheduleReconcile()
     }
     return bot.capabilities
@@ -714,7 +714,7 @@ export function install(rt) {
       mounts.delete(agent)
     }, `ds-bot: capabilities ${sessionId}`)
   }
-  const trackBotAgents = async bot => {
+  const trackBotAgents = bot => {
     const sessionIds = new Set()
     try {
       const sessionId = rt.chatOf(bot.id)
@@ -729,13 +729,10 @@ export function install(rt) {
     } catch (error) {
       rt.warn('ds-bot: capability group sessions for %s could not be read: %s', bot.id, error)
     }
-    for (const sessionId of sessionIds) {
-      try {
-        trackAgent(await rt.resolveAgent(sessionId))
-      } catch (error) {
-        rt.warn('ds-bot: capability Agent for %s could not be resolved: %s', sessionId, error)
-      }
-    }
+    // Reconcile existing Agents here. The creation hook prepares a cold Session when
+    // it is actually opened, without restoring its full transcript during host startup.
+    const registry = ctx.get?.('agents') ?? ctx.agents
+    for (const sessionId of sessionIds) trackAgent(registry?.get?.(sessionId))
   }
 
   async function capabilityEndpoint(endpoint, body = {}) {
@@ -883,7 +880,7 @@ export function install(rt) {
   ctx.effect(() => {
     void rt.load().then(async () => {
       for (const bot of Object.values(state.bots)) {
-        if ((bot.capabilities ?? []).length > 0) await trackBotAgents(bot)
+        if ((bot.capabilities ?? []).length > 0) trackBotAgents(bot)
       }
       await scheduleReconcile()
     }).catch(error => rt.warn('ds-bot: capability startup failed: %s', error))

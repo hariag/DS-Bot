@@ -880,6 +880,7 @@ test('memory-review.js does not cancel pending review timer on agent/disposed', 
 test('parts.js and turns.js preserve active session state on cold-unload agent/disposed and clean up archived sessions', async (t) => {
   const home = tempDir(t, 'ds-bot-perf-parts-turns-')
   const { ctx } = minimalCtx()
+  ctx.sessionPersistence = { stat: async id => ({ header:{ id }, formatStatus:'current', sizeBytes:512 }) }
   let tailPageCalls = 0
   ctx.sessionController.page = async ({ address }) => {
     tailPageCalls += 1

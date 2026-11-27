@@ -58,6 +58,7 @@ function start(config = {}) {
     },
     sessionTitle: { rename: async () => {} },
     sessions: { flush: async () => {} },
+    sessionPersistence: { stat: async id => ({ header: { id }, formatStatus: 'current', sizeBytes: 512 }) },
   })
   const routes = {}
   const register = ctx.connection.fetch.register
@@ -304,6 +305,49 @@ test('state can send photos by reference, and avatar sends each one', async (t) 
   const chief = (await call('state', {})).value.mainBotId
   assert.deepEqual((await call('avatar', { botId: chief })).value, { botId: chief, ref: null, image: null })
   assert.equal((await call('avatar', { botId: 'nobody' })).error.code, 'bot/not-found')
+})
+
+test('web roster keeps avatar references and reuses unchanged instructions on a roster update', async t => {
+  const { call, stop } = start()
+  t.after(stop)
+  await call('state', {})
+  const instructions = 'Preserve the conversation context. '.repeat(100)
+  const bot = (await call('create-bot', { name:'Painter', instructions, avatar:{ image:photo([0, 0, 255, 255]) } })).value
+  const web = { avatars:'ref', rosterKey:'', instructionsKey:'' }
+  const first = (await call('state', web)).value
+  assert.ok(first.rosterKey && first.instructionsKey)
+  const original = first.bots.find(row => row.id === bot.id)
+  assert.equal(original.instructions.trim(), instructions.trim())
+  assert.match(original.avatar.imageRef, /^[0-9a-f]{16}$/)
+  assert.equal(original.avatar.image, undefined)
+  await call('update-bot', { id:bot.id, name:'Painter after update' })
+  const next = (await call('state', { ...web, since:first.revision, rosterKey:first.rosterKey, instructionsKey:first.instructionsKey, live:first.liveKey, models:first.modelsKey })).value
+  const updated = next.bots.find(row => row.id === bot.id)
+  assert.equal(updated.name, 'Painter after update')
+  assert.equal(updated.instructions, undefined)
+  assert.equal(updated.avatar.imageRef, original.avatar.imageRef)
+  assert.equal(next.instructionsKey, first.instructionsKey)
+  assert.notEqual(next.rosterKey, first.rosterKey)
+})
+
+test('an existing web roster loads while model discovery is pending', async t => {
+  const { call, rt, stop } = start()
+  t.after(stop)
+  await call('state', {})
+  const discover = Promise.withResolvers()
+  let calls = 0
+  rt.catalog = () => { calls++; return discover.promise }
+  try {
+    const state = await Promise.race([
+      call('state', { rosterKey:'', instructionsKey:'', avatars:'ref' }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('model discovery held the roster')), 1500).unref()),
+    ])
+    assert.equal(state.ok, true)
+    assert.equal(state.value.bots.length, 1)
+    assert.equal(calls, 1)
+  } finally {
+    discover.resolve([])
+  }
 })
 
 test('group avatars can be set at creation, replaced, kept on other edits, and cleared', async (t) => {
@@ -820,6 +864,47 @@ test('cold chatTail reads latestTurn from sessionController.projections when ava
   await stop()
 })
 
+test('state warms one small cold Bot preview at a time and leaves large chats available for interactive reads', async t => {
+  const { call, ctx, emit, history, rt, stop } = start()
+  t.after(stop)
+  const create = async name => (await call('create-bot', { name })).value.id
+  const first = await create('First preview')
+  const second = await create('Second preview')
+  const large = await create('Large log')
+  const unknown = await create('Unknown log')
+  const [firstSession, secondSession, largeSession, unknownSession] = [first, second, large, unknown].map(id => rt.chatOf(id))
+  for (const id of [firstSession, secondSession, largeSession, unknownSession]) history[id] = [user(1, id, 1000)]
+  ctx.sessionPersistence.stat = async id => id === unknownSession ? undefined : {
+    header:{ id }, formatStatus:'current', sizeBytes:id === largeSession ? 10 * 1024 * 1024 : 512,
+  }
+  const page = ctx.sessionController.page
+  const gate = Promise.withResolvers()
+  const reads = []
+  ctx.sessionController.page = async (request, signal) => {
+    const id = request.address.sessionId
+    reads.push(id)
+    if (id === firstSession) await gate.promise
+    return page(request, signal)
+  }
+
+  try {
+    assert.equal((await call('state', {})).ok, true)
+    await waitFor(() => reads.includes(firstSession))
+    assert.ok(!reads.includes(secondSession), 'only one background preview reads history at a time')
+    assert.ok(!reads.includes(largeSession))
+    const opened = await call('chat', { botId:large })
+    assert.equal(opened.value.items[0].text, largeSession)
+  } finally { gate.resolve() }
+
+  await waitFor(() => rt.chatTail(secondSession)?.preview === secondSession)
+  await settle()
+  assert.equal(reads.filter(id => id === largeSession).length, 1, 'the large log was read only by navigation')
+  assert.ok(!reads.includes(unknownSession))
+  assert.equal(rt.chatTail(largeSession), undefined)
+  await emit(largeSession, user(2, 'Live user update', 2000))
+  assert.equal(rt.chatTail(largeSession)?.preview, 'Live user update')
+})
+
 test('room-chat reads the current part after a group chat moves to a fresh part, and pages back to earlier parts', async (t) => {
   const { call, emit, history, routes, rt, stop } = start()
   t.after(stop)
@@ -1216,7 +1301,10 @@ test('file attachment ranges read each byte once and locate history once', async
   history[sessionId] = [{ seq: 1, type: 'user/message', data: { content: [{ type: 'file', attachment: ref }] } }]
   let pages = 0
   const page = ctx.sessionController.page
-  ctx.sessionController.page = (...args) => { pages++; return page(...args) }
+  ctx.sessionController.page = (...args) => {
+    if (args[0].address.sessionId === sessionId && args[0].maxMessages === 500) pages++
+    return page(...args)
+  }
   const chunks = []
   for await (const part of fileChunks(async (endpoint, payload) => {
     const result = await call(endpoint, payload)

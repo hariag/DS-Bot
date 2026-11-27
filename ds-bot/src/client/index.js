@@ -213,18 +213,20 @@ export function apply(ctx) {
     const unread = unreadStore.update(marks => setUnread(marks, id, value), ui.getSnapshot().unread)
     ui.set(state => (JSON.stringify(state.unread) === JSON.stringify(unread) ? state : { ...state, unread }))
   }
-  const refreshed = new Set()
-  const avatarRefs = createAvatarRefCache(call)
+  const avatarRefs = createAvatarRefCache(call, () => {
+    roster.set(current => {
+      const withPhotos = avatarRefs.withPhotos(current)
+      return withPhotos === current ? current : indexRoster(withPhotos)
+    })
+  })
   // Pulls can overlap (the poll and a navigation); an older answer never wins.
   let pulls = 0
   let applied = 0
   const foldWrites = sectionFoldWrites()
-  let avatarIncomplete = false
   const pull = async () => {
     const order = ++pulls
     const known = roster.getSnapshot()
-    const since = avatarIncomplete ? -1 : known.revision
-    const value = await call('state', { since, rosterKey: known.rosterKey ?? '', models: known.modelsKey ?? '', live: liveKey, instructionsKey: known.instructionsKey ?? '', locale: language(), avatars: 'ref' })
+    const value = await call('state', { since: known.revision, rosterKey: known.rosterKey ?? '', models: known.modelsKey ?? '', live: liveKey, instructionsKey: known.instructionsKey ?? '', locale: language(), avatars: 'ref' })
     if (order < applied) return false
     applied = order
     const prevLiveKey = liveKey
@@ -268,28 +270,21 @@ export function apply(ctx) {
     // The read-only notice goes once this host takes the team over from a dsh that
     // closed, without a reload: the window holds the answer's live fields until then.
     if (value.readOnly !== undefined && (value.readOnly ?? null) !== (current.readOnly ?? null)) live.readOnly = value.readOnly
-    if (value.unchanged || (!avatarIncomplete && value.revision === current.revision && value.modelsKey === current.modelsKey)) {
+    if (value.unchanged || (value.revision === current.revision && value.modelsKey === current.modelsKey)) {
+      if (value.unchanged) {
+        for (const cursor of ['revision', 'rosterKey', 'instructionsKey', 'modelsKey']) {
+          if (value[cursor] !== undefined && value[cursor] !== current[cursor]) live[cursor] = value[cursor]
+        }
+      }
       if (Object.keys(live).length > 0 && current.ready) roster.set({ ...current, ...live })
       return value.liveKey !== undefined && value.liveKey !== prevLiveKey
     }
-    const { state: hydrated, incomplete } = await avatarRefs.hydrate(value)
-    if (order < applied) return false
-    avatarIncomplete = incomplete
-    const latest = roster.getSnapshot()
-    const sameState = hydrated.revision === latest.revision && hydrated.modelsKey === latest.modelsKey && latest.ready
-    const avatarsChanged = sameState && (
-      (hydrated.bots ?? []).some(bot => bot?.avatar?.image !== latest.byId?.[bot.id]?.avatar?.image)
-      || (hydrated.rooms ?? []).some(room => room?.avatar?.image !== latest.roomsById?.[room.id]?.avatar?.image)
-    )
-    if (sameState && !avatarsChanged) {
-      if (Object.keys(live).length > 0) roster.set({ ...latest, ...live })
-      return value.liveKey !== undefined && value.liveKey !== prevLiveKey
-    }
+    const snapshot = avatarRefs.track(value)
     // On a browser with no visit record yet, everything already there counts as seen.
-    if (Object.keys(seenAt).length === 0) leaveVisits([...hydrated.bots, ...hydrated.rooms].map(entry => entry.id))
-    roster.set(indexRoster({ ...hydrated, sections: foldWrites.reconcile(hydrated.sections, hydrated.revision) }, latest))
+    if (Object.keys(seenAt).length === 0) leaveVisits([...snapshot.bots, ...snapshot.rooms].map(entry => entry.id))
+    roster.set(indexRoster({ ...snapshot, sections: foldWrites.reconcile(snapshot.sections, snapshot.revision) }, current))
     try {
-      const ids = (hydrated.agents ?? []).flatMap(agent => agent.sessions ?? [])
+      const ids = (snapshot.agents ?? []).flatMap(agent => agent.sessions ?? [])
       localStorage.setItem(STORAGE.agentSessions, JSON.stringify(ids))
       agentSessionCache = new Set(ids)
     } catch { /* storage unavailable */ }
@@ -300,15 +295,6 @@ export function apply(ctx) {
     }
     for (const [agentId, sessionId] of pendingAgentSession) {
       if (listed[sessionId] !== undefined || roster.getSnapshot().agentOf[sessionId] !== agentId) pendingAgentSession.delete(agentId)
-    }
-    const activeIds = new Set([...hydrated.bots.map(currentPart), ...hydrated.rooms.map(room => room.sessionId ?? room.id)])
-    for (const id of refreshed) {
-      if (!activeIds.has(id)) refreshed.delete(id)
-    }
-    for (const id of activeIds) {
-      if (refreshed.has(id)) continue
-      refreshed.add(id)
-      void Promise.resolve(ctx.sessions.refreshProjections?.(id)).catch(quietly('refresh projections'))
     }
     return true
   }
@@ -431,7 +417,7 @@ export function apply(ctx) {
     }, 'ds-bot: Bot browsers')
   }
 
-  ctx.effect(() => () => { markupCache.clear(); avatarRefs.clear(); avatarIncomplete = false }, 'ds-bot: character markup')
+  ctx.effect(() => () => { markupCache.clear(); avatarRefs.clear() }, 'ds-bot: character markup')
   ctx.effect(() => installMotionRest(), 'ds-bot: motion rest')
 
   // Mentions wear each Bot's color and character silhouette (or its photo). User text

@@ -709,8 +709,12 @@ export function install(rt) {
           return ok(versionInfo(state, rt.home))
         case 'state': {
           if (typeof body.locale === 'string' && /^[a-z]{2,3}(-[\w-]+)?$/i.test(body.locale)) uiLocale = body.locale
+          const existingWebRoster = remote === false && typeof body.rosterKey === 'string'
+            && state.mainBotIds.some(id => rt.botOf(id))
           if (readOnly === undefined) await rt.bootstrap()
-          await rt.catalog()
+          if (existingWebRoster) {
+            void rt.catalog().catch(error => rt.warn('ds-bot: refreshing the model catalog failed: %s', error))
+          } else await rt.catalog()
           await rt.loadSecrets()
           const answer = liveAnswer()
           const reusable = body.live === answer.key || (liveHistory.has(body.live) && liveHistory.get(body.live) === answer.scope)
@@ -733,8 +737,8 @@ export function install(rt) {
             return ok({ revision: state.revision, unchanged: true, liveKey: answer.key, ...liveValue })
           }
           // A phone asks for photos by reference and fetches each once (`avatar`).
-          const out = { ...view(), liveKey: answer.key, ...liveValue }
-          if (body.avatars === 'ref') return ok(rt.slimAvatars(out))
+          const viewState = { ...view(), liveKey: answer.key, ...liveValue }
+          const out = body.avatars === 'ref' ? rt.slimAvatars(viewState) : viewState
           if (typeof body.instructionsKey !== 'string') return ok(out)
           const web = withInstructionsKey(out, body.instructionsKey)
           if (typeof body.rosterKey !== 'string') return ok(web)

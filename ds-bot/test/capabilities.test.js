@@ -414,17 +414,17 @@ test('removed catalog entries and library items stay mounted until turn end', as
   assert.equal(skills.get('chief').size, 0)
 })
 
-test('only the first always-on attachment resolves Bot sessions, never catalog edits', async t => {
+test('only the first always-on attachment looks up existing Bot Agents, never catalog edits', async t => {
   const env = await setup()
   t.after(() => env.dispose())
-  const { rt, mounts, skills } = env
+  const { rt, ctx, mounts, skills } = env
   const resolved = []
   const agents = new Map()
-  rt.resolveAgent = async id => {
+  ctx.agents = { get(id) {
     resolved.push(id)
     if (!agents.has(id)) agents.set(id, testAgent(id, mounts, skills))
     return agents.get(id)
-  }
+  } }
   for (const name of ['first', 'second', 'catalog']) await rt.capabilitySave({ name, kind: 'skill', content: name }, { ui: true })
   const editCatalog = async () => {
     await rt.changeCapabilityAttachment('attach', { name: 'catalog', mode: 'catalog' }, 'chief')
@@ -517,12 +517,9 @@ test('packs expand only to MCP and skill items', () => {
 })
 
 test('status cache follows install, approval, config edits, detach and removal', async t => {
-  const env = await setup({ beforeLoad({ rt, mounts, skills }) {
-    const agents = new Map()
-    rt.resolveAgent = async id => {
-      if (!agents.has(id)) agents.set(id, testAgent(id, mounts, skills))
-      return agents.get(id)
-    }
+  const env = await setup({ beforeLoad({ ctx, mounts, skills }) {
+    const agents = new Map(['chief','room-chief'].map(id => [id, testAgent(id, mounts, skills)]))
+    ctx.agents = { get: id => agents.get(id) }
   } })
   t.after(() => env.dispose())
   const { rt } = env
@@ -749,14 +746,16 @@ test('startup and empty-to-nonempty attachments track existing Bot Agents', asyn
   const resolved = []
   const env = await setup({
     state,
-    beforeLoad: ({ rt, mounts, skills }) => {
-      const existing = Object.fromEntries(['chief', 'room-chief', 'worker', 'helper'].map(id => [id, testAgent(id, mounts, skills)]))
+    beforeLoad: ({ ctx, rt, mounts, skills }) => {
+      const existing = Object.fromEntries(['chief', 'room-chief', 'worker'].map(id => [id, testAgent(id, mounts, skills)]))
       rt.chatOf = botId => botId
       rt.groupSessionsOf = botId => botId === 'chief' ? ['room-chief', 'room-chief'] : []
-      rt.resolveAgent = async sessionId => {
-        if (Object.hasOwn(existing, sessionId)) resolved.push(sessionId)
+      ctx.agents = { get(sessionId) {
+        resolved.push(sessionId)
         return existing[sessionId]
-      }
+      } }
+      rt.retitleRoom = async () => {}
+      rt.resolveAgent = async () => assert.fail('preparing capability attachments should not resume a cold session')
     },
   })
   t.after(() => env.dispose())
@@ -769,6 +768,8 @@ test('startup and empty-to-nonempty attachments track existing Bot Agents', asyn
   await env.rt.capabilityEndpoint('bot-capability', { botId: 'helper', name: 'echo', attached: true })
   await env.rt.scheduleCapabilitiesReconcile()
   assert.deepEqual(resolved, ['chief', 'room-chief', 'worker', 'helper'])
+  assert.deepEqual(env.mounts.filter(mount => !mount.disposed).map(mount => mount.sessionId), ['chief', 'room-chief', 'worker'])
+  await created(env)({ agent:testAgent('helper', env.mounts, env.skills) })
   assert.deepEqual(env.mounts.filter(mount => !mount.disposed).map(mount => mount.sessionId), ['chief', 'room-chief', 'worker', 'helper'])
 })
 

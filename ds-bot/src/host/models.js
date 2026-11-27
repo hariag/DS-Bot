@@ -179,6 +179,8 @@ export function install(rt) {
   const readOnly = () => rt.readOnly?.() !== undefined
   const storeLoaded = () => rt.hasLoaded === undefined || rt.hasLoaded() === true
   let catalogCache = { at: 0, value: [] }
+  let catalogLoad
+  let catalogGeneration = 0
   // Routes DSH serves that cannot answer a request at all — a hosted loop engine
   // publishes one so its Sessions can be prompted. Once one refuses with
   // HOSTED_ENGINE_ROUTE it is remembered with the models its provider served then,
@@ -204,7 +206,10 @@ export function install(rt) {
   // only with the provider, which also drops the catalog cache.
   const reasoningCache = new Map()
   let syncedKey
-  const dropCatalog = () => { catalogCache = { at: 0, value: [] } }
+  const dropCatalog = () => {
+    catalogGeneration += 1
+    catalogCache = { at: 0, value: [] }
+  }
   // A key set or a sign-in may be the user's fix for a Bot's failed turn (turns.js); a
   // key removed or a sign-out is not. A provider added or removed changes whether a
   // Session's selection names a real adapter, so the team's models are applied again:
@@ -277,6 +282,15 @@ export function install(rt) {
   // also carry their `reasoning`, so the picker can offer thinking levels.
   async function catalog({ fresh = false } = {}) {
     if (!fresh && Date.now() - catalogCache.at < CATALOG_TTL_MS && catalogCache.value.length > 0) return answerable(catalogCache.value)
+    const generation = catalogGeneration
+    if (catalogLoad?.generation === generation) return catalogLoad.promise
+    const load = { generation, promise:readCatalog(generation) }
+    catalogLoad = load
+    try { return await load.promise } finally {
+      if (catalogLoad === load) catalogLoad = undefined
+    }
+  }
+  async function readCatalog(generation) {
     // The host is gone: the last answer stands, and no service is read again.
     const service = llm()
     if (service === undefined) return answerable(catalogCache.value)
@@ -306,13 +320,13 @@ export function install(rt) {
     for (const entry of entries) if (missing.has(entry.provider)) entry.needsKey = true
     // A key can arrive without an event (an environment variable at the next start), so
     // a provider listed with its key again lifts what its missing key blocked.
-    rt.unblockBots?.({ keyed: new Set(entries.filter(entry => !entry.needsKey).map(entry => entry.provider)) })
+    if (generation === catalogGeneration) rt.unblockBots?.({ keyed: new Set(entries.filter(entry => !entry.needsKey).map(entry => entry.provider)) })
     const used = new Set(Object.values(state.bots ?? {}).flatMap(bot => [bot.model, bot.appliedModel].filter(Boolean)))
     await Promise.all(entries.filter(entry => used.has(entry.ref)).map(async (entry) => {
       const reasoning = await reasoningOf(entry.ref)
       if (reasoning !== undefined) entry.reasoning = reasoning
     }))
-    catalogCache = { at: Date.now(), value: entries }
+    if (generation === catalogGeneration) catalogCache = { at: Date.now(), value: entries }
     return answerable(entries)
   }
 
@@ -822,7 +836,7 @@ export function install(rt) {
     const deadline = Date.now() + ms
     for (;;) {
       if (!bot.model) return undefined
-      catalogCache = { at: 0, value: [] }
+      dropCatalog()
       const served = new Set((await catalog()).map(entry => entry.ref))
       if (llm() === undefined) return undefined
       if (served.has(bot.model) || Date.now() >= deadline) return desiredModel(bot)

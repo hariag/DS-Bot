@@ -4374,14 +4374,21 @@ export function install(rt) {
   // The newest line of a Bot's own-chat part, for the list row's order and
   // preview. Read once per part, then kept by session/event.
   const PREVIEWABLE = new Set(['bot', 'user', 'answer', 'post', 'view'])
+  const TAIL_READ_TIMEOUT_MS = 2500
+  const COLD_TAIL_MAX_BYTES = 1024 * 1024
   const tails = new Map()
+  const queuedTails = new Set()
+  const deferredColdTails = new Set()
+  let tailWarmup = false, activeTail, tailsDisposed = false
+  const attachedTailSession = sessionId => ctx.get?.('agents')?.get?.(sessionId)?.session
+    ?? (ctx.get?.('sessions') ?? ctx.sessions)?.get?.(sessionId)
   const previewText = item => String(item.text || item.title || item.texts?.join(' ') || (Array.isArray(item.presented) ? item.presented.map(file => presentedFileName(file.path)).join(', ') : '')).replace(/\s+/g, ' ').trim()
   const isBotReplyItem = item => item.kind === 'bot' || (item.kind === 'view' && item.pending !== true)
   const positiveTurn = value => (typeof value === 'number' && Number.isInteger(value) && value >= 1 ? value : undefined)
   const maxTurn = (a, b) => (a !== undefined && b !== undefined ? Math.max(a, b) : (a ?? b))
-  const projectionLatestTurn = async (sessionId) => {
+  const projectionLatestTurn = async (sessionId, signal) => {
     let latest
-    const liveSession = ctx.get?.('agents')?.get?.(sessionId)?.session ?? ctx.get?.('sessions')?.get?.(sessionId)
+    const liveSession = attachedTailSession(sessionId)
     if (liveSession !== undefined) {
       const projections = ctx.get?.('sessionProjections')
       try {
@@ -4391,7 +4398,7 @@ export function install(rt) {
     }
     if (typeof ctx.sessionController?.projections === 'function') {
       try {
-        const res = await ctx.sessionController.projections({ sessionId }, AbortSignal.timeout(HISTORY_TIMEOUT_MS))
+        const res = await ctx.sessionController.projections({ sessionId }, signal)
         const values = res?.values ?? res
         const outline = values?.turnOutline
         if (Array.isArray(outline) && outline.length > 0) latest = maxTurn(latest, positiveTurn(outline.at(-1)?.turn))
@@ -4411,7 +4418,7 @@ export function install(rt) {
       ...(latestTurn !== undefined ? { latestTurn } : {}),
     })
   }
-  const fillTail = async sessionId => {
+  const fillTail = async (sessionId, signal) => {
     // Newest page back until both a previewable row and the latest turn number are known;
     // chats almost always find both on page one, and a long tool turn that splits across
     // the 60-event boundary keeps walking until it recovers its turn number.
@@ -4419,13 +4426,14 @@ export function install(rt) {
       let beforeSeq
       let latest
       let lastBotAt
-      let latestTurn = await projectionLatestTurn(sessionId)
+      let latestTurn = rt.latestTurnOf?.(sessionId)
       for (let pages = 0; pages < 10; pages += 1) {
+        signal.throwIfAborted()
         const page = await ctx.sessionController.page({
           address: { kind: 'session', sessionId },
           ...(beforeSeq !== undefined ? { beforeSeq } : {}),
           maxMessages: EARLIER_PAGE,
-        }, AbortSignal.timeout(HISTORY_TIMEOUT_MS))
+        }, signal)
         const events = page.records.map(record => record.event)
         for (const event of events) {
           latestTurn = maxTurn(latestTurn, positiveTurn(event?.data?.turn))
@@ -4443,6 +4451,8 @@ export function install(rt) {
         if (!page.hasMore || events.length === 0) break
         beforeSeq = events[0]?.seq
       }
+      if (latest !== undefined && latestTurn === undefined) latestTurn = await projectionLatestTurn(sessionId, signal)
+      signal.throwIfAborted()
       const prev = tails.get(sessionId)
       const mergedTurn = maxTurn(prev?.latestTurn, latestTurn)
       const usePrev = prev !== null && prev !== undefined && (latest === undefined || prev.lastAt > latest.lastAt)
@@ -4455,10 +4465,56 @@ export function install(rt) {
         ...(mergedBotAt !== undefined ? { lastBotAt: mergedBotAt } : {}),
         ...(mergedTurn !== undefined ? { latestTurn: mergedTurn } : {}),
       })
-    } catch { tails.set(sessionId, { lastAt: 0, preview: '' }) }
+    } catch { /* A speculative read must not replace a tail already filled by live events. */ }
   }
+  async function warmTails() {
+    while (queuedTails.size > 0 && !tailsDisposed && !rt.stopping) {
+      const sessionId = queuedTails.values().next().value
+      queuedTails.delete(sessionId)
+      if (tails.get(sessionId) !== null) continue
+      const controller = new AbortController()
+      activeTail = { sessionId, controller }
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(TAIL_READ_TIMEOUT_MS)])
+      try {
+        if (!attachedTailSession(sessionId)) {
+          // Native page and projection reads decode the whole cold log before
+          // returning a short preview. Leave large or unverified logs to the
+          // interactive history reader. Live events can still populate this tail.
+          const persistence = ctx.get?.('sessionPersistence') ?? ctx.sessionPersistence
+          const stored = await persistence?.stat?.(sessionId, { signal })
+          signal.throwIfAborted()
+          if (!attachedTailSession(sessionId) && (stored?.header?.id !== sessionId || stored.formatStatus !== 'current'
+            || !Number.isSafeInteger(stored.sizeBytes) || stored.sizeBytes < 0 || stored.sizeBytes > COLD_TAIL_MAX_BYTES)) {
+            deferredColdTails.add(sessionId)
+            continue
+          }
+        }
+        await fillTail(sessionId, signal)
+      } catch { /* A missing or unreadable archive is an optional preview. */ }
+      finally {
+        activeTail = undefined
+        await new Promise(resolve => setImmediate(resolve))
+      }
+    }
+    tailWarmup = false
+  }
+  ctx.effect(() => () => {
+    tailsDisposed = true
+    queuedTails.clear()
+    activeTail?.controller.abort()
+  }, 'ds-bot: chat previews')
   rt.chatTail = sessionId => {
-    if (!tails.has(sessionId)) { tails.set(sessionId, null); void fillTail(sessionId); return undefined }
+    if (!tails.has(sessionId) || (deferredColdTails.has(sessionId) && attachedTailSession(sessionId))) {
+      if (!tails.has(sessionId)) tails.set(sessionId, null)
+      if (tails.get(sessionId) === null && !tailsDisposed && !rt.stopping) {
+        deferredColdTails.delete(sessionId)
+        queuedTails.add(sessionId)
+        if (!tailWarmup) {
+          tailWarmup = true
+          setImmediate(() => { void warmTails() })
+        }
+      }
+    }
     return tails.get(sessionId) ?? undefined
   }
   ctx.on('session/event', (session, event) => {
@@ -4803,6 +4859,9 @@ export function install(rt) {
     rescued.delete(sessionId)
     freshParts.delete(sessionId)
     tails.delete(sessionId)
+    queuedTails.delete(sessionId)
+    deferredColdTails.delete(sessionId)
+    if (activeTail?.sessionId === sessionId) activeTail.controller.abort()
     noteFailures.delete(sessionId)
     roomRetry.delete(sessionId)
     midTurnCondensed.delete(sessionId)
