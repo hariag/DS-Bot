@@ -6,6 +6,7 @@ export const heldDeliveryNotStopped = 'The original delivery could not be shown 
 const providerOf = service => service?.[symbols.original] ?? service
 const maxEvents = 50_000
 const maxBytes = 96 * 1024 * 1024
+const proofTimeoutMs = 90_000
 
 export function closedInput(events, intent) {
   const audit = createInboxAudit(intent.targetSessionId)
@@ -55,7 +56,7 @@ export function createHeldDeliveryProof(rt) {
       || typeof ctx.waterfall !== 'function') return
     inspecting = true
     let handle, evidence
-    const signal = AbortSignal.timeout(15000)
+    const signal = AbortSignal.timeout(proofTimeoutMs)
     const current = () => !signal.aborted && !rt.stopping && available(sid)
       && providerOf(ctx.sessions) === sessions && providerOf(persistenceOf()) === provider
     const idle = async () => {
@@ -84,6 +85,7 @@ export function createHeldDeliveryProof(rt) {
     } finally {
       await handle?.close().catch(() => {})
       inspecting = false
+      if (signal.aborted) rt.warn?.('ds-bot: archived task delivery proof exceeded %d ms', proofTimeoutMs)
     }
   } }
 }
