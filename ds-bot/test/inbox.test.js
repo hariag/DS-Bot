@@ -220,3 +220,25 @@ test('computer handoff stays in the inbox after Take over until settled, while a
   await rt.save()
   assert.equal(changes, beforeSave)
 })
+
+test('connector-health, linear-sync, and remote-watch alert items sort under fix group after decide items', async (t) => {
+  const { rt } = openHost(t)
+  await rt.load()
+  const off = rt.addInboxSource(() => [
+    { kind: 'connector-health', ref: 'slack', group: 'fix', botId: 'chief', at: 10, text: 'Slack needs sign-in again' },
+    { kind: 'linear-sync', ref: 'proj:outbound-conflict', group: 'fix', botId: 'chief', at: 20, text: 'Linear outbound sync conflict (1)' },
+    { kind: 'remote-watch', ref: 'hariag/aios:master', group: 'fix', botId: 'chief', at: 30, text: 'GitHub hariag/aios@master: unavailable' },
+  ])
+  t.after(off)
+  const view = rt.inboxView()
+  const fixIds = view.items.filter(item => item.group === 'fix').map(item => item.id)
+  assert.deepEqual(fixIds.slice(0, 3), [
+    'connector-health:slack',
+    'linear-sync:proj:outbound-conflict',
+    'remote-watch:hariag/aios:master',
+  ])
+  assert.ok(view.counts.fix >= 3)
+  const lastDecideIdx = view.items.map(item => item.group).lastIndexOf('decide')
+  const firstFixIdx = view.items.findIndex(item => item.group === 'fix')
+  if (lastDecideIdx !== -1) assert.ok(lastDecideIdx < firstFixIdx)
+})

@@ -180,3 +180,64 @@ test('invalid explicit monitor configuration is visible and does not schedule',(
   const rt={config:{remoteChangeWatch:{repository:'../x',branch:'main',ownerBotId:'pm'}},ctx:{effect:()=>{throw Error('must not schedule')}}}
   install(rt);assert.equal(rt.remoteChangeView().status,'invalid configuration')
 })
+
+test('3000-file relevant commit advances cursor cleanly instead of deadlocking at file cap',async()=>{
+  const f=fixture(),s=openRemoteChangeStore(':memory:',spec,f.assertOwner)
+  const files=[{filename:'Ground/web/app.tsx'},...Array.from({length:2999},(_,i)=>({filename:`team/patrol/${i}` }))]
+  const request=async(url,opts)=>url.includes(`/commits/${c}?`)
+    ? response({sha:c,files},{link:'<https://api.github.com/next>; rel="next"'})
+    : f.request(url,opts)
+  try{
+    const out=await createRemoteChangePoller({spec,store:s,authorize:f.authorize,request})()
+    assert.equal(out.status,'ok');assert.equal(out.recorded,1);assert.equal(s.state().cursor,c);assert.equal(s.rows()[0].kind,'relevant')
+  }finally{s.close()}
+})
+
+test('store prunes oldest change rows beyond MAX_EVENTS (5000) instead of wedging',()=>{
+  const s=openRemoteChangeStore(':memory:',spec,()=>{})
+  try{
+    const events=Array.from({length:5010},(_,i)=>({
+      sha:i.toString(16).padStart(40,'0'),title:`commit ${i}`,author:'A',committedAt:'2026-01-01T00:00:00Z',kind:'relevant',paths:['src/a.js'],totalFiles:1,
+    }))
+    s.commit(a,b,events,'2026-01-01T00:00:00Z')
+    assert.equal(s.totalEvents(),5000)
+    assert.equal(s.state().cursor,b)
+    assert.equal(s.rows()[0].sha,events.at(-1).sha)
+  }finally{s.close()}
+})
+
+test('degraded watcher surfaces remote-watch inbox alert and clears after recovery',async t=>{
+  const home=mkdtempSync(join(tmpdir(),'remote-watch-inbox-'))
+  t.after(()=>rmSync(home,{recursive:true,force:true}))
+  t.mock.timers.enable({apis:['setTimeout'],now:Date.parse('2026-11-27T08:00:00Z')})
+  let allowed=false,inboxChangedCalls=0,dispose
+  const sources=[]
+  const rt={
+    home,config:{remoteChangeWatch:spec},state:{bots:{pm:{id:'pm'}}},
+    ctx:{effect:fn=>{dispose=fn()}},load:async()=>{},loadSecrets:async()=>{},
+    canUseSecret:()=>allowed,secretValue:()=> 'test-token',requireHomeLock(){},stopping:false,warn(){},
+    addInboxSource:fn=>{sources.push(fn);return()=>{}},
+    inboxChanged:()=>{inboxChangedCalls++},
+  }
+  const f=fixture()
+  t.mock.method(globalThis,'fetch',f.request)
+  install(rt)
+  const readAlert=()=>sources.flatMap(fn=>fn())
+  async function flush(){for(let i=0;i<20;i++)await new Promise(r=>setImmediate(r))}
+  try{
+    assert.deepEqual(readAlert(),[])
+    t.mock.timers.tick(15_000)
+    await flush()
+    const alerts=readAlert()
+    assert.equal(alerts.length,1)
+    assert.equal(alerts[0].kind,'remote-watch')
+    assert.equal(alerts[0].group,'fix')
+    assert.match(alerts[0].text,/authorization unavailable/)
+    assert.ok(inboxChangedCalls>=1)
+
+    allowed=true
+    t.mock.timers.tick(15*60_000)
+    await flush()
+    assert.deepEqual(readAlert(),[])
+  }finally{await dispose()}
+})

@@ -58,6 +58,8 @@ export function install(rt) {
   const statuses = new Map()
   const pendings = new Map()
   const refreshes = new Map()
+  const alertSince = new Map()
+  let lastConnectorInboxSig = ''
   const gateways = { gw: null }
   let mcpClient
 
@@ -254,6 +256,7 @@ export function install(rt) {
       mount.state = { state: 'ready', tools: status.toolCount }
       mount.failures = 0
       if (statuses.get(id)?.transientRefreshFailure) statuses.delete(id)
+      notifyConnectorInbox()
       if (!statuses.has(id)) void settleRequests(id).catch(error => rt.warn('ds-bot: connector %s request settlement: %s', id, reason(error)))
       return
     }
@@ -262,6 +265,7 @@ export function install(rt) {
     else if (status.state === 'connecting' || status.state === 'reconnecting') mount.state = { state: 'connecting', error }
     else mount.state = { state: 'error', error }
     if (status.state === 'failed' && status.reason === 'gave-up') retryMount(id, mount)
+    notifyConnectorInbox()
   }
 
   async function mountOne(id, force) {
@@ -297,6 +301,7 @@ export function install(rt) {
       mount.state = { state: 'error', error: reason(error) }
       rt.warn('ds-bot: connector %s failed: %s', id, mount.state.error)
       retryMount(id, mount)
+      notifyConnectorInbox()
     }
   }
 
@@ -348,6 +353,7 @@ export function install(rt) {
     await writeSecret(tokenSecretOf(id), tokens.access_token, `${entry.name} connector`)
     const account = await readAccount(id, entry, tokens.access_token).catch(() => undefined)
     await saveState(id, { account, connectedAt: Date.now(), tokenExpiresAt: Number.isFinite(tokens.expires_in) ? Date.now() + tokens.expires_in * 1000 : undefined })
+    notifyConnectorInbox()
   }
 
   async function readAccount(id, entry, token) {
@@ -578,6 +584,7 @@ export function install(rt) {
       if (refresh === undefined || saved?.oauth === undefined) {
         statuses.set(id, { state: 'needs-sign-in' })
         rt.warn('ds-bot: connector %s token refresh failed (client: %s; missing refresh token or OAuth metadata)', id, path)
+        notifyConnectorInbox()
         return false
       }
       try {
@@ -595,6 +602,7 @@ export function install(rt) {
         if (clientId === undefined) {
           statuses.set(id, { state: 'needs-sign-in' })
           rt.warn('ds-bot: connector %s token refresh failed (client: %s; no OAuth client)', id, path)
+          notifyConnectorInbox()
           return false
         }
         const secret = rt.secretValue(clientSecretOf(id))
@@ -616,6 +624,7 @@ export function install(rt) {
         })
         statuses.delete(id)
         rt.warn('ds-bot: connector %s token refresh succeeded (client: %s)', id, path)
+        notifyConnectorInbox()
         return true
       } catch (error) {
         if (stopped || upstreamOf(id)?.headers.Authorization !== authorization) return false
@@ -623,6 +632,7 @@ export function install(rt) {
         if (invalid) statuses.set(id, { state: 'needs-sign-in', error: 'Sign in again' })
         else statuses.set(id, { state: 'error', error: reason(error), transientRefreshFailure: true })
         rt.warn('ds-bot: connector %s token refresh failed (client: %s; %s)', id, path, invalid ? 'invalid_grant' : error?.code === 'REFRESH_TOKEN_PERSISTENCE' ? error.message : 'refresh error')
+        notifyConnectorInbox()
         return false
       }
     })().finally(() => refreshes.delete(id))
@@ -840,6 +850,49 @@ export function install(rt) {
     }
   }
 
+  function connectorHealthItems() {
+    const primaryBotId = state.mainBotIds?.[0] ?? Object.keys(state.bots ?? {})[0]
+    if (!primaryBotId) return []
+    const items = []
+    const activeIds = new Set()
+    for (const entry of entries()) {
+      if (entry.id === 'mail' || state.connectors?.[entry.id] === undefined) continue
+      const row = rowFor(entry)
+      const status = statuses.get(entry.id)
+      const isAlert = row.state === 'needs-sign-in'
+        || (row.state === 'error' && status?.transientRefreshFailure !== true
+          && ((mounts.get(entry.id)?.failures ?? 0) >= 3 || status?.state === 'error'))
+      if (!isAlert) {
+        alertSince.delete(entry.id)
+        continue
+      }
+      activeIds.add(entry.id)
+      if (!alertSince.has(entry.id)) alertSince.set(entry.id, Date.now())
+      items.push({
+        kind: 'connector-health',
+        group: 'fix',
+        ref: entry.id,
+        at: alertSince.get(entry.id),
+        botId: primaryBotId,
+        text: row.state === 'needs-sign-in'
+          ? `${entry.name} needs sign-in again (Settings → Connectors)`
+          : `${entry.name} connector error: ${row.error ?? 'unavailable'}`,
+      })
+    }
+    for (const id of [...alertSince.keys()]) {
+      if (!activeIds.has(id)) alertSince.delete(id)
+    }
+    return items
+  }
+
+  function notifyConnectorInbox() {
+    const sig = JSON.stringify(connectorHealthItems().map(({ ref, text }) => [ref, text]))
+    if (sig !== lastConnectorInboxSig) {
+      lastConnectorInboxSig = sig
+      rt.inboxChanged?.()
+    }
+  }
+
   const connectorsView = () => ({
     connectors: entries().filter(entry => entry.id !== 'mail').map(rowFor),
     mail: rt.mailView?.() ?? { accounts: [], google: false },
@@ -904,7 +957,10 @@ export function install(rt) {
         await rt.save()
       }
       gateways.gw?.forget(entry.id)
+      statuses.delete(entry.id)
+      alertSince.delete(entry.id)
       await sync()
+      notifyConnectorInbox()
       return connectorsView()
     },
     async 'connector-retry'(body) {
@@ -912,6 +968,7 @@ export function install(rt) {
       statuses.delete(entry.id)
       await rt.loadSecrets()
       await sync(entry.id)
+      notifyConnectorInbox()
       return connectorsView()
     },
     async 'connector-cancel'(body) {
@@ -1069,9 +1126,11 @@ export function install(rt) {
 
   ctx.effect(() => {
     stopped = false
+    const offInbox = rt.addInboxSource?.(connectorHealthItems)
     void rt.load().then(() => rt.loadSecrets()).then(() => sync()).catch(error => rt.warn('ds-bot: connector startup: %s', reason(error)))
     return async () => {
       stopped = true
+      offInbox?.()
       const released = [...pendings.values()].map(pending => {
         if (pending.timer !== undefined) clearTimeout(pending.timer)
         return closeListener(pending.listener)

@@ -9,6 +9,7 @@ const TAGS = {
   approval: 'Approval', question: 'Question', view: 'Form', secret: 'Secret', connector: 'Connector', mail: 'Email',
   computer: 'Computer', handoff: 'Hand-off', goal: 'Goal', blocked: 'Stopped', model: 'No model', paused: 'Paused',
   'room-paused': 'Paused', learning: 'Proposal',
+  'connector-health': 'Connector', 'linear-sync': 'Linear', 'linear-watch': 'Linear', 'remote-watch': 'GitHub',
 }
 
 /** The item's tag key, before `t`: what kind of thing waits. */

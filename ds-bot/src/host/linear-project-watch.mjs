@@ -139,9 +139,11 @@ export function install(rt) {
   }))
 
   rt.ctx.effect(() => {
+    const offInbox = rt.addInboxSource?.(() => watchers.flatMap(watcher => watcher.inboxItems()))
     for (const watcher of watchers) watcher.start()
     return async () => {
       unsubscribeCommit?.()
+      offInbox?.()
       await Promise.all(watchers.map(watcher => watcher.stop()))
     }
   }, 'ds-bot: Linear project watch')
@@ -155,6 +157,49 @@ function createProjectWatcher(rt, spec) {
   const stop = new AbortController()
   let store, sync, timer, running, lastPoll, readReason, handoffState
   let readAfter = 0, failures = 0
+  let readFailedAt = 0, conflictAt = 0, uncertainAt = 0, lastInboxSig = ''
+
+  function inboxItems() {
+    const items = []
+    const conflict = store?.stats?.().outbound?.conflict ?? 0
+    if (conflict > 0) {
+      conflictAt ||= Date.now()
+      items.push({
+        kind: 'linear-sync', group: 'fix', ref: `${projectId}:outbound-conflict`, at: conflictAt,
+        botId: managerId, ...(boardRoomId ? { roomId: boardRoomId } : {}),
+        text: `Linear outbound sync conflict (${conflict}) for project ${projectId.slice(0, 8)}`,
+      })
+    } else conflictAt = 0
+
+    const uncertain = store?.uncertainBatches?.(1)?.length ?? 0
+    if (uncertain > 0) {
+      uncertainAt ||= Date.now()
+      items.push({
+        kind: 'linear-sync', group: 'fix', ref: `${projectId}:uncertain-batch`, at: uncertainAt,
+        botId: managerId, ...(boardRoomId ? { roomId: boardRoomId } : {}),
+        text: `Linear handoff delivery uncertain for project ${projectId.slice(0, 8)}`,
+      })
+    } else uncertainAt = 0
+
+    if (readReason && failures >= 3) {
+      readFailedAt ||= Date.now()
+      items.push({
+        kind: 'linear-watch', group: 'fix', ref: `${projectId}:watch-error`, at: readFailedAt,
+        botId: managerId, ...(boardRoomId ? { roomId: boardRoomId } : {}),
+        text: `Linear watch degraded: ${readReason}`,
+      })
+    } else readFailedAt = 0
+
+    return items
+  }
+
+  function notifyInbox() {
+    const sig = JSON.stringify(inboxItems().map(({ kind, ref, text }) => [kind, ref, text]))
+    if (sig !== lastInboxSig) {
+      lastInboxSig = sig
+      rt.inboxChanged?.()
+    }
+  }
 
   function assertActive() {
     if (stop.signal.aborted || rt.stopping || !rt.botOf(managerId) || (readSecret === undefined
@@ -266,6 +311,7 @@ function createProjectWatcher(rt, spec) {
         return 'Supply 1 to 20 event IDs and a short handling note.'
       }
       const recorded = store.ack(ids, { actorId: managerId, note })
+      notifyInbox()
       return `Handling recorded for ${recorded} events. Read the inbox again for remaining changes.`
     }
     if (args.action === 'bind') {
@@ -292,6 +338,7 @@ function createProjectWatcher(rt, spec) {
       const roomId = boardRoomId ?? (task?.scope?.startsWith('room:') ? task.scope.slice(5) : 'unknown')
       const binding = store.bindIssue({ issueId: known.id, identifier, taskId, roomId, source: 'manual' })
       if (task) ensureSync(store)?.syncTaskNow(task)
+      notifyInbox()
       return JSON.stringify({ bound: binding })
     }
     if (args.action === 'bindings') {
@@ -306,6 +353,7 @@ function createProjectWatcher(rt, spec) {
       if (!opId) return 'Supply operation_id to retry.'
       const retried = store.retryOutbound(opId)
       if (retried) queueMicrotask(() => { void ensureSync(store)?.drain() })
+      notifyInbox()
       return retried ? `Outbound sync ${opId} queued for retry.` : `No conflicted or retryable outbound job found for ${opId}.`
     }
     return 'Unsupported action.'
@@ -344,6 +392,8 @@ function createProjectWatcher(rt, spec) {
     } catch {
       if (!stop.signal.aborted && handoffState !== 'unavailable') rt.warn?.('ds-bot: Linear project handoff unavailable')
       handoffState = 'unavailable'
+    } finally {
+      notifyInbox()
     }
   }
 
@@ -362,6 +412,7 @@ function createProjectWatcher(rt, spec) {
     projectId,
     managerId,
     status,
+    inboxItems,
     executeTool,
     onBoardCommit(events) {
       if (stop.signal.aborted) return

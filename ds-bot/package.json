@@ -1,6 +1,6 @@
 {
   "name": "ds-bot",
-  "version": "0.4.0+aios.20261127.2",
+  "version": "0.4.0+aios.20261127.3",
   "description": "DS Bot: a team of long-lived Bots for DeepSeek Harness, with Main Bots, Bot-to-Bot messages and group chats",
   "keywords": [
     "dsh-plugin",
@@ -120,7 +120,7 @@
     "ds-bot-mcp": "./bin/ds-bot-mcp.mjs"
   },
   "dsBot": {
-    "build": "aios-20261127.2",
+    "build": "aios-20261127.3",
     "fork": "hariag/DS-Bot",
     "forkCommit": "4f71344d3e14d5154e89b9793d1efd3bbf5bf2e3",
     "upstreamCommit": "7963e66a",

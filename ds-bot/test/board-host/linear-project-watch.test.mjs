@@ -124,3 +124,51 @@ test('rate-limit response holds future Linear requests and never reflects extern
   now += 15_000
   assert.deepEqual(await api.listIssues(query), connection([]))
 })
+
+test('degraded Linear project watch surfaces linear-watch inbox alert after consecutive failures and clears on recovery', async t => {
+  const home = await mkdtemp(join(tmpdir(), 'linear-watch-inbox-'))
+  t.after(() => rm(home, { recursive: true, force: true }))
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: initial })
+  let available = false
+  let inboxChanges = 0
+  const sources = []
+  t.mock.method(globalThis, 'fetch', async () => Response.json({
+    data: { project: { id: projectId, issues: connection([]) } },
+  }))
+  let cleanup
+  const rt = {
+    config: { linearProjectWatch: { projectId, managerId, readSecret: 'LINEAR_TEST' } }, home, state: {}, teamTools: [],
+    ctx: { effect: start => { cleanup = start() } },
+    own: (record, key) => Object.hasOwn(record, key) ? record[key] : undefined,
+    botOf: id => id === managerId ? { id } : undefined,
+    chatOf: () => 'manager-chat', chatOwners: new Map([['manager-chat', managerId]]), groupOwners: new Map(),
+    load: async () => {}, save: async () => {}, loadSecrets: async () => {}, requireHomeLock() {},
+    readOnly: () => undefined, canUseSecret: () => available, secretValue: () => 'test-read-credential', warn() {},
+    addInboxSource: fn => { sources.push(fn); return () => {} },
+    inboxChanged: () => { inboxChanges += 1 },
+    async deliver() { return '' },
+  }
+  installRequests(rt)
+  installWatch(rt)
+  const readInbox = () => sources.flatMap(fn => fn())
+  async function flush() {
+    for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve))
+  }
+  try {
+    t.mock.timers.tick(0); await flush()
+    t.mock.timers.tick(10_000); await flush()
+    t.mock.timers.tick(20_000); await flush()
+    const alerts = readInbox()
+    assert.equal(alerts.length, 1)
+    assert.equal(alerts[0].kind, 'linear-watch')
+    assert.equal(alerts[0].group, 'fix')
+    assert.match(alerts[0].text, /Linear watch degraded/)
+    assert.ok(inboxChanges >= 1)
+
+    available = true
+    t.mock.timers.tick(40_000); await flush()
+    assert.deepEqual(readInbox(), [])
+  } finally {
+    await cleanup()
+  }
+})

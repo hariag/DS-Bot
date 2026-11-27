@@ -78,10 +78,9 @@ export function openRemoteChangeStore(path, spec, assertOwner) {
     }) },
     commit(expected, head, events, at) { return tx(() => {
       if (state().cursor !== expected) throw new Error('monitor changed')
-      const count=db.prepare('SELECT count(*) AS n FROM changes').get().n
-      if (count + events.length > MAX_EVENTS) throw new Error('monitor capacity reached')
       const put=db.prepare('INSERT OR IGNORE INTO changes (sha,title,author,committed_at,kind,paths,total_files) VALUES (?,?,?,?,?,?,?)')
       for (const e of events) put.run(e.sha,e.title,e.author,e.committedAt,e.kind,JSON.stringify(e.paths),e.totalFiles)
+      db.prepare('DELETE FROM changes WHERE rowid IN (SELECT rowid FROM changes ORDER BY rowid DESC LIMIT -1 OFFSET ?)').run(MAX_EVENTS)
       db.prepare('UPDATE state SET cursor=?,checked_at=? WHERE id=1').run(head,at)
     }) },
     begin(expected, head, commits) { return tx(() => {
@@ -91,12 +90,11 @@ export function openRemoteChangeStore(path, spec, assertOwner) {
     advance(base, head, index, next, events, at) { return tx(() => {
       const work=pending()
       if (!work || work.base!==base || work.head!==head || work.next_index!==index || state().cursor!==base) throw new Error('monitor changed')
-      const count=db.prepare('SELECT (SELECT count(*) FROM changes)+(SELECT count(*) FROM staged) AS n').get().n
-      if (count+events.length>MAX_EVENTS) throw new Error('monitor capacity reached')
       const put=db.prepare('INSERT OR IGNORE INTO staged (sha,title,author,committed_at,kind,paths,total_files) VALUES (?,?,?,?,?,?,?)')
       for (const e of events) put.run(e.sha,e.title,e.author,e.committedAt,e.kind,JSON.stringify(e.paths),e.totalFiles)
       if (next===work.commits.length) {
         db.exec('INSERT OR IGNORE INTO changes SELECT * FROM staged; DELETE FROM staged; DELETE FROM pending')
+        db.prepare('DELETE FROM changes WHERE rowid IN (SELECT rowid FROM changes ORDER BY rowid DESC LIMIT -1 OFFSET ?)').run(MAX_EVENTS)
         db.prepare('UPDATE state SET cursor=?,checked_at=? WHERE id=1').run(head,at)
       } else db.prepare('UPDATE pending SET next_index=? WHERE id=1').run(next)
     }) },
@@ -153,7 +151,10 @@ export function createRemoteChangePoller({ spec, store, authorize, request = fet
         const detail=await get(`commits/${sha}?per_page=100&page=${page}`,signal)
         if (detail.body?.sha!==sha || !Array.isArray(detail.body?.files)) throw new Error('remote response incomplete')
         files.push(...detail.body.files); more=detail.more; page++
-        if (files.length>=MAX_FILES) throw new Error('history requires reconciliation')
+        if (files.length>=MAX_FILES) {
+          if (classifyFiles(files)==='relevant') break
+          throw new Error('history requires reconciliation')
+        }
       }
       end++
       const kind=classifyFiles(files)
@@ -181,7 +182,12 @@ export function install(rt) {
   if (configured===undefined || configured===false) return
   const spec=configOf(configured)
   if (!spec) { rt.remoteChangeView=()=>({status:'invalid configuration',events:[]}); return }
-  let store, timer, pending, stopped=false, status='waiting'
+  let store, timer, pending, stopped=false, status='waiting', failures=0, lastWarnStatus=null, errorSince=0, alertActive=false, lastAlertText=''
+  const immediateAlertStatuses=new Set(['authorization unavailable','history requires reconciliation','monitor capacity reached'])
+  const syncInboxAlert=()=>{
+    const nextText=alertActive ? `GitHub ${spec.repository}@${spec.branch}: ${status}` : ''
+    if (nextText!==lastAlertText) { lastAlertText=nextText; rt.inboxChanged?.() }
+  }
   const authorize=async()=>{
     if (stopped || rt.stopping) throw new Error('monitor stopped')
     await rt.load(); await rt.loadSecrets()
@@ -210,12 +216,23 @@ export function install(rt) {
   const tick=()=>{
     if (stopped || pending) return
     let delay=INTERVAL
-    pending=(async()=>{ try { await authorize(); const result=await createRemoteChangePoller({spec,store:open(),authorize})();status=result.status;if(status==='catching up')delay=3000 }
-      catch (error) { status=['authorization unavailable','history requires reconciliation','monitor capacity reached','rate limited'].includes(error?.message) ? error.message : 'unavailable' }
-      finally { pending=undefined; if (!stopped) { timer=setTimeout(tick,delay);timer.unref?.() } } })()
+    pending=(async()=>{ try {
+      await authorize(); const result=await createRemoteChangePoller({spec,store:open(),authorize})(); status=result.status
+      failures=0; lastWarnStatus=null; errorSince=0; alertActive=false; syncInboxAlert()
+      if(status==='catching up')delay=3000
+    } catch (error) {
+      status=['authorization unavailable','history requires reconciliation','monitor capacity reached','rate limited'].includes(error?.message) ? error.message : 'unavailable'
+      failures++; if (!errorSince) errorSince=Date.now()
+      if (!stopped && status!==lastWarnStatus) { lastWarnStatus=status; rt.warn?.('ds-bot: GitHub remote change watch (%s@%s): %s', spec.repository, spec.branch, status) }
+      alertActive=immediateAlertStatuses.has(status) || failures>=3
+      syncInboxAlert()
+    } finally { pending=undefined; if (!stopped) { timer=setTimeout(tick,delay);timer.unref?.() } } })()
   }
   rt.ctx.effect(()=>{
+    const offInbox=rt.addInboxSource?.(() => alertActive
+      ? [{ kind: 'remote-watch', group: 'fix', ref: `${spec.repository}:${spec.branch}`, at: errorSince || Date.now(), botId: spec.ownerBotId, text: `GitHub ${spec.repository}@${spec.branch}: ${status}` }]
+      : [])
     timer=setTimeout(tick,15_000);timer.unref?.()
-    return async()=>{stopped=true;clearTimeout(timer);await pending;store?.close();store=undefined}
+    return async()=>{stopped=true;clearTimeout(timer);await pending;offInbox?.();store?.close();store=undefined}
   },'ds-bot: remote change watch')
 }

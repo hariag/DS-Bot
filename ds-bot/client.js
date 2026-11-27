@@ -49614,7 +49614,11 @@ var TAGS = {
   model: "No model",
   paused: "Paused",
   "room-paused": "Paused",
-  learning: "Proposal"
+  learning: "Proposal",
+  "connector-health": "Connector",
+  "linear-sync": "Linear",
+  "linear-watch": "Linear",
+  "remote-watch": "GitHub"
 };
 var inboxTag = (item) => TAGS[item?.kind] ?? "Alert";
 function inboxSummary(item, t2, nameOf2 = () => void 0) {

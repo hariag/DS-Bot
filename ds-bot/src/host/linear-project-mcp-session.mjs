@@ -104,7 +104,10 @@ export function createLinearProjectMcpSession({ getGateway, assertActive, signal
       if (retryOnSessionError && reused && !signal?.aborted) {
         return invokeTool(name, args, { retryOnSessionError: false })
       }
-      throw new LinearProjectReadError('Linear MCP unavailable')
+      const rawMsg = String(error?.message ?? '').replace(/\s+/g, ' ').trim()
+      const hasSecretLike = /(?:Bearer\s+|lin_api_|xox[a-z]-|ghp_|gho_|secret)/i.test(rawMsg)
+      const safeDetail = rawMsg && !hasSecretLike ? rawMsg.slice(0, 100) : ''
+      throw new LinearProjectReadError(safeDetail ? `Linear MCP unavailable (${safeDetail})` : 'Linear MCP unavailable')
     }
   }
 

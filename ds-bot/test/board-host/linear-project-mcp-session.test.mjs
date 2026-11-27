@@ -146,3 +146,17 @@ test('read calls reconnect once on stale session errors while write calls never 
     mock.closeAllConnections()
   }
 })
+
+test('unexpected MCP errors preserve sanitized non-secret details while stripping secret-like strings', async () => {
+  const cleanSession = createLinearProjectMcpSession({
+    getGateway: async () => { throw new Error('connect ECONNREFUSED 127.0.0.1:9999') },
+    assertActive() {},
+  })
+  await assert.rejects(cleanSession.call('list_issues', {}), /Linear MCP unavailable \(connect ECONNREFUSED 127\.0\.0\.1:9999\)/)
+
+  const leakySession = createLinearProjectMcpSession({
+    getGateway: async () => { throw new Error('Authorization: Bearer lin_api_secret_token_value') },
+    assertActive() {},
+  })
+  await assert.rejects(leakySession.call('list_issues', {}), err => err.message === 'Linear MCP unavailable')
+})
