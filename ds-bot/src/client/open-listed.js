@@ -21,10 +21,12 @@ export function listedOpener({ list, open, refresh, current, begin, done, fail, 
     if (waitingTarget === target) return
     drop()
     drop = () => {}
-    if (current?.() === target) return
+    let from = current?.()
+    if (from === target) return
     const listed = () => list.getSnapshot().byId?.[target] !== undefined
     if (listed()) { open(target); return }
-    const from = current?.()
+    let initialList = from === undefined && list.getSnapshot().phase === 'pending'
+    let readyQueued = false
     waitingTarget = target
     begin?.(target)
     let state = 'waiting'
@@ -62,15 +64,31 @@ export function listedOpener({ list, open, refresh, current, begin, done, fail, 
       return true
     }
     drop = () => { settle() }
-    off = list.subscribe(() => {
+    const advance = () => {
+      if (state === 'settled') return
       const now = current?.()
       if (now === target) { settle(); return }
+      if (initialList && state === 'waiting' && list.getSnapshot().phase === 'ready') {
+        if (!readyQueued) {
+          readyQueued = true
+          // The native workspace restores its saved chat on the first ready
+          // list and can publish its retention inside that same notification.
+          // Let that restore finish before the user's Bot selection lands.
+          queueMicrotask(() => {
+            from = current?.()
+            initialList = false
+            advance()
+          })
+        }
+        return
+      }
       // Clearing `from` (e.g. an archived earlier part during a part switch) is not a
       // navigation elsewhere; only landing on another real Session drops the wait.
       if (now !== undefined && now !== from) { settle(); return }
       if (!listed()) return
       if (settle()) open(target)
-    })
+    }
+    off = list.subscribe(advance)
     if (gone?.(target) === true) { failWait('missing'); return }
     timer = schedule(() => {
       if (state !== 'waiting' || listed()) return

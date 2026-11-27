@@ -82401,13 +82401,15 @@ function listedOpener({ list, open, refresh, current: current2, begin, done, fai
     drop();
     drop = () => {
     };
-    if (current2?.() === target) return;
+    let from = current2?.();
+    if (from === target) return;
     const listed = () => list.getSnapshot().byId?.[target] !== void 0;
     if (listed()) {
       open(target);
       return;
     }
-    const from = current2?.();
+    let initialList = from === void 0 && list.getSnapshot().phase === "pending";
+    let readyQueued = false;
     waitingTarget = target;
     begin?.(target);
     let state = "waiting";
@@ -82448,10 +82450,22 @@ function listedOpener({ list, open, refresh, current: current2, begin, done, fai
     drop = () => {
       settle();
     };
-    off = list.subscribe(() => {
+    const advance = () => {
+      if (state === "settled") return;
       const now2 = current2?.();
       if (now2 === target) {
         settle();
+        return;
+      }
+      if (initialList && state === "waiting" && list.getSnapshot().phase === "ready") {
+        if (!readyQueued) {
+          readyQueued = true;
+          queueMicrotask(() => {
+            from = current2?.();
+            initialList = false;
+            advance();
+          });
+        }
         return;
       }
       if (now2 !== void 0 && now2 !== from) {
@@ -82460,7 +82474,8 @@ function listedOpener({ list, open, refresh, current: current2, begin, done, fai
       }
       if (!listed()) return;
       if (settle()) open(target);
-    });
+    };
+    off = list.subscribe(advance);
     if (gone?.(target) === true) {
       failWait("missing");
       return;

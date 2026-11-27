@@ -2,15 +2,16 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { OPENING_FAIL_MS, listedOpener } from '../src/client/open-listed.js'
 
-const store = (ids = []) => {
+const store = (ids = [], phase = 'ready') => {
   const listeners = new Set()
-  const snapshot = { byId: {} }
+  const snapshot = { byId: {}, phase }
   const notify = () => { for (const fn of listeners) fn() }
   const put = (id, main) => { snapshot.byId[id] = main ? { id, retainedBy: { mainView: 1 } } : { id } }
   for (const id of ids) put(id)
   return {
     getSnapshot: () => snapshot,
     subscribe: (fn) => { listeners.add(fn); return () => { listeners.delete(fn) } },
+    ready: (...ids) => { for (const id of ids) put(id); snapshot.phase = 'ready'; notify() },
     set: (id) => { put(id); notify() },
     setMain: (id) => { for (const row of Object.values(snapshot.byId)) delete row.retainedBy; put(id, true); notify() },
   }
@@ -55,6 +56,49 @@ test('an unlisted Session opens when the list reaches it, only once', () => {
   assert.deepEqual(opened, ['a'])
   list.set('b')
   assert.deepEqual(opened, ['a'])
+})
+
+test('the user’s first Bot selection wins over synchronous workspace restoration', async () => {
+  const list = store([], 'pending')
+  const order = []
+  const stopRestore = list.subscribe(() => {
+    if (list.getSnapshot().phase !== 'ready') return
+    stopRestore()
+    order.push('restore-start')
+    list.setMain('saved')
+    order.push('restore-finished')
+  })
+  const show = listedOpener({ list, current: () => mainViewOf(list), open: id => order.push(id) })
+  show('target')
+  list.ready('saved', 'target')
+  assert.deepEqual(order, ['restore-start', 'restore-finished'])
+  await Promise.resolve()
+  assert.deepEqual(order, ['restore-start', 'restore-finished', 'target'])
+})
+
+test('a newer Bot click supersedes a queued first-list open', async () => {
+  const list = store([], 'pending')
+  const { show, opened, finished } = rig(list)
+  show('first')
+  list.ready('first', 'next')
+  show('next')
+  await Promise.resolve()
+  assert.deepEqual(opened, ['next'])
+  assert.deepEqual(finished, ['first'])
+})
+
+test('external navigation after the initial list still cancels the outstanding open', async () => {
+  const list = store([], 'pending')
+  const { show, opened, finished } = rig(list)
+  show('target')
+  list.ready('saved')
+  list.setMain('saved')
+  await Promise.resolve()
+  assert.deepEqual(finished, [])
+  list.setMain('external')
+  list.set('target')
+  assert.deepEqual(opened, [])
+  assert.deepEqual(finished, ['target'])
 })
 
 test('a newer navigation drops the wait for the old one', () => {
