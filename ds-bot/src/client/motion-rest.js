@@ -12,7 +12,6 @@ const INPUTS = ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart']
 const CHANGES = ['animationstart', 'animationcancel', 'animationend']
 
 const isLoop = animation => animation?.effect?.getTiming?.().iterations === Infinity
-const isWorkIndicator = ({ animationName }) => animationName === 'bt-activity-mark' || animationName === 'bt-activity-pulse'
 // A part of an SVG drawing (a mark's eyes inside its mask) may have no box of its own; the
 // drawing it belongs to is what scrolls in and out of view.
 const boxOf = (target) => {
@@ -36,11 +35,49 @@ export function installMotionRest({ doc = document, win = window, restMs = REST_
   const inView = new WeakMap()
   let last = now()
   let resting = doc.hidden === true
+  let cover = null
+  let coverIsModal = false
   let timer = 0
   let queued = false
   let stopped = false
 
-  const runs = animation => !doc.hidden && inView.get(loops.get(animation)) !== false && (!resting || isWorkIndicator(animation))
+  const readCover = () => {
+    if (typeof doc.querySelectorAll !== 'function') return { node: null, modal: false }
+    const modals = doc.querySelectorAll('[aria-modal="true"]')
+    if (modals.length > 0) return { node: modals[modals.length - 1], modal: true }
+    const scrims = doc.querySelectorAll('.bt-scrim')
+    if (scrims.length === 0) return { node: null, modal: false }
+    const scrim = scrims[scrims.length - 1]
+    const parent = scrim.parentElement
+    return { node: parent && parent !== doc.body && parent !== doc.documentElement ? parent : scrim, modal: false }
+  }
+  const isCoverNode = (node) => {
+    if (!node || node.nodeType !== 1) return false
+    if (node.getAttribute?.('aria-modal') === 'true' || node.classList?.contains?.('bt-scrim')) return true
+    return node.firstElementChild !== null && typeof node.querySelector === 'function'
+      && node.querySelector('[aria-modal="true"],.bt-scrim') !== null
+  }
+  const hasCoverMutation = (records) => {
+    if (cover !== null && (cover.isConnected === false || (coverIsModal && cover.getAttribute?.('aria-modal') !== 'true'))) return true
+    if (!Array.isArray(records)) return true
+    for (const record of records) {
+      if (record.type === 'attributes') {
+        if (record.attributeName === 'aria-modal') return true
+        continue
+      }
+      if (record.type === 'childList') {
+        for (const node of record.addedNodes ?? []) if (isCoverNode(node)) return true
+        for (const node of record.removedNodes ?? []) if (isCoverNode(node)) return true
+      }
+    }
+    return false
+  }
+  const runs = (animation) => {
+    if (resting) return false
+    const element = loops.get(animation)
+    if (cover !== null && cover.isConnected !== false && (element === null || (typeof cover.contains === 'function' && !cover.contains(element)))) return false
+    return inView.get(element) !== false
+  }
   const apply = () => {
     for (const animation of loops.keys()) {
       if (runs(animation)) {
@@ -72,6 +109,9 @@ export function installMotionRest({ doc = document, win = window, restMs = REST_
   const sync = () => {
     queued = false
     if (stopped) return
+    const found = readCover()
+    cover = found.node
+    coverIsModal = found.modal
     const current = new Set(doc.getAnimations().filter(isLoop))
     for (const [animation, element] of loops) {
       if (current.has(animation)) continue
@@ -93,6 +133,32 @@ export function installMotionRest({ doc = document, win = window, restMs = REST_
     queued = true
     void Promise.resolve().then(sync)
   }
+  const onAnimationChange = (event) => {
+    const target = event?.target
+    if (target !== undefined && target !== null) {
+      const box = boxOf(target)
+      if (event.type === 'animationstart') {
+        if (!event.pseudoElement && typeof target.getAnimations === 'function') {
+          const own = target.getAnimations()
+          if (!own.some(isLoop) && !watched.has(box)) return
+        }
+      } else if (event.type === 'animationend' || event.type === 'animationcancel') {
+        if (!watched.has(box)) return
+      }
+    }
+    later()
+  }
+  const bodyObserver = typeof win.MutationObserver === 'function' && doc.body
+    ? new win.MutationObserver((records) => {
+      if (!hasCoverMutation(records)) return
+      const next = readCover()
+      if (next.node === cover && next.modal === coverIsModal) return
+      cover = next.node
+      coverIsModal = next.modal
+      apply()
+    })
+    : null
+  bodyObserver?.observe(doc.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-modal'] })
   const check = () => {
     timer = 0
     const left = last + restMs - now()
@@ -119,7 +185,7 @@ export function installMotionRest({ doc = document, win = window, restMs = REST_
   for (const type of INPUTS) win.addEventListener(type, touch, { capture: true, passive: true })
   win.addEventListener('focus', touch)
   doc.addEventListener('visibilitychange', shown)
-  for (const type of CHANGES) doc.addEventListener(type, later, true)
+  for (const type of CHANGES) doc.addEventListener(type, onAnimationChange, true)
   timer = win.setTimeout(check, restMs)
   sync()
 
@@ -128,9 +194,10 @@ export function installMotionRest({ doc = document, win = window, restMs = REST_
     for (const type of INPUTS) win.removeEventListener(type, touch, { capture: true })
     win.removeEventListener('focus', touch)
     doc.removeEventListener('visibilitychange', shown)
-    for (const type of CHANGES) doc.removeEventListener(type, later, true)
+    for (const type of CHANGES) doc.removeEventListener(type, onAnimationChange, true)
     if (timer) win.clearTimeout(timer)
     observer?.disconnect()
+    bodyObserver?.disconnect()
     for (const animation of held) if (animation.playState === 'paused') animation.play()
     held.clear()
     loops.clear()

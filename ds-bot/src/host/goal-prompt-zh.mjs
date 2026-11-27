@@ -16,7 +16,7 @@ export const goalDutiesZh = {
   scope: '遵守用户最新明示要求及仍有效的授权，按动作、对象、环境、条件核对。锁规则仅限原适用范围；异范围证据单列，不能替代门禁。权限或适用范围不明时只暂停受影响的动作，并请目标负责人澄清或更新规则。',
   inspect: '先 group_goal show，再用本群 room_id 查 board_task list/show，必要时 read_group_chat 核对交接。暂停、停止或停止来源不明时只读回查。其余情况下，仅对本轮允许、确缺回执或证据且没有未到期询问的任务，用原编号与指纹调用 review-follow-up 一次。使用准确的纯文本 @姓名，写明缺项和期限，请对方只核查，不重做。逾期后向原复核人升级一次；身份不明则记录疑点、解除条件和下次检查。投递不明时不重派、不恢复、不改卡或通过阶段。',
   inspectionTools: '本轮优先用 list_bots、本群 read_group_chat、board_task list/show 与 group_goal show。按本轮权限使用 review-check 和 review-follow-up；只有核验符合条件的已汇报任务且宿主允许时，才用 read/glob/grep。不得运行 shell、直接群发、写记忆、改计划、改卡或调用连接器。被拒时记录缺项及负责人，勿重试。',
-  inspectOnly: '本回合禁止 message_bot。只报告或通过允许的状态核查工具跟进。用户已暂停、明确停止或停工来源不明时，只读核查，不派工、不催办、不恢复。',
-  inspectScoped: '仅对宿主已隔离出、不受未决投递影响的唯一负责人可例外用 message_bot。先核对授权、依赖、容量并按当前指纹记录 review-check。就绪的 pending 任务在 when="queue" 下给完整任务文字、编号和 request_id="goal-review:<reviewId>:<taskId>:assign"；reported 缺证据时先记未解决的 review-check，再以 when="now" 带任务编号、原 review_next 和 request_id="goal-review:<reviewId>:<taskId>:evidence" 定向索证。不得用新编号重试未知派单。不得借此改卡或通过阶段。',
+  inspectOnly: '本回合禁止 delegate_work。只报告或通过允许的状态核查工具跟进。用户已暂停、明确停止或停工来源不明时，只读核查，不派工、不催办、不恢复。',
+  inspectScoped: '仅对宿主已隔离出、不受未决投递影响的唯一负责人可例外用 delegate_work。先核对授权、依赖、容量并按当前指纹记录 review-check。就绪的 pending 任务在 when="queue" 下给完整任务文字与编号；reported 缺证据时先记未解决的 review-check，再以 when="now" 带任务编号、原 review_next 定向索证。不得借此改卡或通过阶段。',
   resume: '用户已恢复目标，按当前授权推进下一步。',
 }

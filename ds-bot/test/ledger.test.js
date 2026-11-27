@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { install, bookFile, parseBook } from '../src/host/ledger.js'
 import { writeManifestAtomic } from '../src/host/sqlite-shard-store.mjs'
-import { relayRange } from '../src/shared/group-replies.js'
+import { compressedRelayPreview, parseReplies, relayRange } from '../src/shared/group-replies.js'
 
 const host = (t, { home = mkdtempSync(join(tmpdir(), 'ds-bot-ledger-')), readOnly, config } = {}) => {
   const warnings = []
@@ -142,6 +142,22 @@ test("a round's result names its rows; a result from before the ledger does not"
   assert.deepEqual(relayRange('{"from":3,"to":9,"passed":[]}'), { from: 3, to: 9 })
   assert.equal(relayRange('{"replies":[],"passed":[]}'), undefined)
   assert.equal(relayRange('{"replies":[{"botId":"a","text":"cu'), undefined)
+})
+
+test('a §N§ handle prefix on a group_relay result still parses its range, replies, and compressed preview', () => {
+  assert.deepEqual(relayRange('§38§ {"from":80,"anchor":"a1"}'), { from: 80, anchor: 'a1' })
+  assert.deepEqual(relayRange('§1§  {"from":1,"to":9,"anchor":"a2"}'), { from: 1, to: 9, anchor: 'a2' })
+  assert.equal(relayRange('§38§ {"replies":[],"passed":[]}'), undefined)
+  // Arbitrary prose containing JSON must not be treated as a handle prefix.
+  assert.equal(relayRange('Error: {"from":3,"to":9}'), undefined)
+  assert.deepEqual(parseReplies('§7§ {"replies":[{"botId":"a","text":"hi"}],"passed":[]}'), {
+    replies: [{ botId: 'a', text: 'hi' }],
+    broken: false,
+  })
+  assert.equal(
+    compressedRelayPreview('§7§ {"replies":[{"text":"hi"}]}\n\n[save-token #c123 compressed: 1,000 -> 200 bytes. expand: x]'),
+    '{"replies":[{"text":"hi"}]}',
+  )
 })
 
 // A window that only read a book takes over writing when the other host goes: what that
@@ -304,4 +320,31 @@ test('startup auto-compacts legacy oversized jsonl and recovers pendingTrim clea
   assert.deepEqual(recovered.rt.ledger.after('group-legacy', 18).map(r => r.seq), [19, 20, 21])
   assert.equal(JSON.parse(readFileSync(join(shardsDir, 'manifest.json'), 'utf8')).pendingTrim, null)
   assert.equal(parseBook(readFileSync(bookPath, 'utf8')).length, 3)
+})
+
+test('ledger.after uses indexed range and ledger.search applies filter before limit in reverse order', async (t) => {
+  const { rt } = host(t)
+  rt.ledger.append('group-r1', { seq: 1, text: 'alpha real match one' })
+  rt.ledger.append('group-r1', { seq: 2, text: 'alpha real match two' })
+  // Interleave 25 non-member (working) records with matching text AFTER real hits so an
+  // unfiltered search capped at limit=20 would previously miss seq 1 and seq 2.
+  for (let i = 3; i <= 27; i += 1) {
+    rt.ledger.append('group-r1', { seq: i, kind: 'working', text: 'alpha working noise' })
+  }
+  rt.ledger.append('group-r1', { seq: 28, text: 'unrelated line' })
+  await rt.ledger.flush('group-r1')
+
+  // after() returns strictly records with seq > since (flooring float values).
+  assert.deepEqual(rt.ledger.after('group-r1', 26).map(r => r.seq), [27, 28])
+  assert.deepEqual(rt.ledger.after('group-r1', 26.9).map(r => r.seq), [27, 28])
+  assert.deepEqual(rt.ledger.after('group-r1', 0).length, 28)
+
+  // Filtered search skips all 25 working rows BEFORE applying the limit, returning newest first.
+  const memberOnly = record => record.kind !== 'working'
+  const hits = rt.ledger.search('group-r1', 'alpha', { filter: memberOnly, limit: 20 })
+  assert.deepEqual(hits.map(r => r.seq), [2, 1])
+
+  // Limit caps filtered matches early.
+  const topOne = rt.ledger.search('group-r1', 'alpha', { filter: memberOnly, limit: 1 })
+  assert.deepEqual(topOne.map(r => r.seq), [2])
 })

@@ -54,6 +54,7 @@ export function createGateway({ credential, readOnly, onUnauthorized, needsSignI
   let closing = null
   // Tool annotations seen in tools/list answers, per connector, for read-only checks.
   const annotations = new Map()
+  const active = new Set()
 
   const toolReadOnly = (id, name) => {
     const flags = annotations.get(id)
@@ -170,7 +171,11 @@ export function createGateway({ credential, readOnly, onUnauthorized, needsSignI
     }
     // A client that leaves before the upstream answers must not leave its call running.
     const abort = new AbortController()
-    res.on('close', () => { if (!res.writableFinished) abort.abort() })
+    active.add(abort)
+    res.on('close', () => {
+      active.delete(abort)
+      if (!res.writableFinished) abort.abort()
+    })
     const suffix = req.url.slice(`/c/${id}`.length)
     const path = suffix === '' ? '/' : suffix
     const limited = readOnly(id) === true
@@ -234,9 +239,12 @@ export function createGateway({ credential, readOnly, onUnauthorized, needsSignI
       upstream = await sendWithRefresh(id, entry, req, path, body, abort.signal)
       if (upstream.errored) throw upstream.errored
     } catch (error) {
+      upstream?.destroy?.()
       if (!abort.signal.aborted) log('ds-bot: connector gateway %s: %s', id, error?.message ?? error)
-      res.writeHead(502, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ error: 'connector upstream failed' }))
+      if (!res.headersSent) {
+        res.writeHead(502, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: 'connector upstream failed' }))
+      }
       return
     }
     if (upstream.statusCode === 401 && replyToUnauthorized(id, rpc, upstream, res)) return
@@ -247,8 +255,14 @@ export function createGateway({ credential, readOnly, onUnauthorized, needsSignI
     if (!isList || limited) {
       const close = () => { upstream.destroy() }
       res.on('close', close)
-      upstream.on('end', () => res.off('close', close))
+      abort.signal.addEventListener('abort', close, { once: true })
+      upstream.on('end', () => {
+        res.off('close', close)
+        abort.signal.removeEventListener('abort', close)
+      })
       upstream.on('error', () => {
+        res.off('close', close)
+        abort.signal.removeEventListener('abort', close)
         if (!abort.signal.aborted) log('ds-bot: connector %s upstream %s stream failed', id, req.method)
         res.destroy()
       })
@@ -310,13 +324,15 @@ export function createGateway({ credential, readOnly, onUnauthorized, needsSignI
     },
     close() {
       closing ??= (async () => {
+        for (const controller of active) controller.abort()
+        active.clear()
         await listening?.catch(() => {})
         const current = server
         server = null
         port = 0
         if (current !== null) await new Promise((resolve) => {
+          current.closeAllConnections?.()
           current.close(resolve)
-          current.closeAllConnections()
         })
         annotations.clear()
       })()

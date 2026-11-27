@@ -11,7 +11,7 @@ export function readManifest(shardsDir) {
   try {
     return JSON.parse(readFileSync(join(shardsDir, MANIFEST_FILE), 'utf8'))
   } catch (error) {
-    if (error?.code === 'ENOENT') return null
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return null
     throw error
   }
 }

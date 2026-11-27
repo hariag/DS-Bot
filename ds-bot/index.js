@@ -2,13 +2,19 @@
 // Every Bot is one root Session; the roster, rooms, and the bot-to-bot exchange log live
 // in one JSON file under DSH_HOME so they survive restarts without new Session event types.
 import { join } from 'node:path'
+import { installSocketTosGuard } from './src/host/socket-tos-guard.js'
 import * as diagnostics from './src/host/diagnostics.js'
+import * as branding from './src/host/branding.js'
+import * as telemetry from './src/host/telemetry.js'
 import * as store from './src/host/store.js'
+import * as contextRuntime from './src/host/context-runtime.js'
+import * as coordination from './src/host/coordination.js'
 import * as boardService from './src/host/board-service.js'
 import * as legacyReview from './src/host/legacy-review-service.js'
 import * as models from './src/host/models.js'
 import * as fanttecQuotaRetry from './src/host/fanttec-quota-retry.js'
 import * as providers from './src/host/providers.js'
+import * as chatgpt from './src/host/chatgpt.js'
 import * as permissions from './src/host/permissions.js'
 import * as turns from './src/host/turns.js'
 import * as steer from './src/host/steer.js'
@@ -30,6 +36,7 @@ import * as goals from './src/host/goals.js'
 import * as agentCommands from './src/host/agent-commands.js'
 import * as tasks from './src/host/tasks.js'
 import * as approvals from './src/host/approvals.js'
+import * as extraFolders from './src/host/extra-folders.js'
 import * as resume from './src/host/resume.js'
 import { repairQuotaCards } from './src/host/repair-quota-cards.js'
 import * as memory from './src/host/memory.js'
@@ -38,37 +45,51 @@ import * as botTasks from './src/host/bot-tasks.js'
 import * as changes from './src/host/changes.js'
 import * as images from './src/host/images.js'
 import * as avatarLibrary from './src/host/avatar-library.js'
+import * as appearance from './src/host/appearance.js'
 import * as browser from './src/host/browser.js'
 import * as browserPlugins from './src/host/browser-plugins.js'
 import * as computer from './src/host/computer/index.js'
+import * as inbox from './src/host/inbox.js'
 import * as secrets from './src/host/secrets.js'
 import * as connectors from './src/host/connectors/index.js'
 import * as remoteChangeWatch from './src/host/remote-change-watch.mjs'
 import * as linearProjectWatch from './src/host/linear-project-watch.mjs'
 import * as repositorySync from './src/host/repository-sync.mjs'
 import * as capabilities from './src/host/capabilities.js'
+import * as plugins from './src/host/plugins/index.js'
 import * as learning from './src/host/learning.js'
 import * as schedules from './src/host/schedules.js'
 import * as roomScheduleDelivery from './src/host/room-schedule-delivery.js'
 import * as usage from './src/host/usage.js'
 import * as update from './src/host/update.js'
+import * as releaseNotes from './src/host/release-notes.js'
 import * as dshUpdate from './src/host/dsh-update.js'
 import * as thinking from './src/host/thinking.js'
 import * as phone from './src/host/phone.js'
-import * as mcpServer from './src/host/mcp-server.js'
 import * as channel from './src/host/channel.js'
 import * as remote from './src/host/remote.js'
 import * as mobile from './src/host/mobile.js'
 import * as feed from './src/host/feed.js'
+import * as fonts from './src/host/fonts.js'
+import * as sessionFollow from './src/host/session-follow.js'
+import * as sessionControls from './src/host/session-controls.js'
+import * as jobs from './src/host/jobs.js'
+import * as workspacePanel from './src/host/workspace-panel.js'
+import * as engineSettings from './src/host/engine-settings.js'
+import * as messageFeedback from './src/host/message-feedback.js'
 import * as im from './src/host/im/index.js'
+import * as externalApi from './src/host/api/index.js'
 import * as officeSkills from './src/host/office-skills.js'
 import * as goalSkills from './src/host/goal-skills.js'
+import * as maintenanceSkills from './src/host/maintenance-skills.js'
 import * as issueReport from './src/host/issue-report.js'
 import * as manualSkills from './src/host/manual-skills.js'
 import * as localAgents from './src/host/local-agents/index.js'
+import { installBotCodeMode } from './src/host/bot-code-mode.js'
 import * as deepseekServices from './src/host/deepseek-services.js'
 
 export { COLORS } from './src/host/constants.js'
+export { defineBotPlugin, defineBrowserProvider } from './src/host/plugins/sdk.js'
 
 export { name, inject } from './src/host/entry.js'
 
@@ -77,13 +98,15 @@ export { name, inject } from './src/host/entry.js'
 // install. Listeners run and tools are listed in registration order, so this order holds:
 // usage meters model requests after every listener that rewrites them. privacy checks a
 // call before the hooks of tools do, so a closed call never reaches a card they show.
-const MODULES = [diagnostics, store, boardService, legacyReview, ledger, models, fanttecQuotaRetry, providers, userRedoSession, permissions, turns, steer, handoffs, requests, delivery, roster, folders, privacy, agents, prompt, timeContext, tools, issueReport, deepseekServices, chatIndex, groups, goals, agentCommands, tasks, approvals, resume, memory, parts, botTasks, changes, images, avatarLibrary, secrets, connectors, remoteChangeWatch, linearProjectWatch, repositorySync, capabilities, learning, schedules, roomScheduleDelivery, browser, browserPlugins, computer, usage, update, dshUpdate, thinking, mobile, feed, phone, mcpServer, im, channel, remote, officeSkills, goalSkills, manualSkills, localAgents]
+// extraFolders answers an approval ahead of approvals, which would show it to the user.
+const MODULES = [diagnostics, branding, store, boardService, legacyReview, contextRuntime, ledger, coordination, models, fanttecQuotaRetry, providers, userRedoSession, permissions, turns, steer, handoffs, requests, delivery, roster, folders, privacy, agents, prompt, timeContext, tools, issueReport, deepseekServices, chatIndex, groups, goals, agentCommands, tasks, approvals, extraFolders, resume, memory, parts, botTasks, changes, images, avatarLibrary, appearance, secrets, connectors, remoteChangeWatch, linearProjectWatch, repositorySync, capabilities, plugins, learning, schedules, roomScheduleDelivery, browser, browserPlugins, computer, inbox, usage, update, releaseNotes, dshUpdate, telemetry, thinking, mobile, sessionControls, feed, fonts, sessionFollow, jobs, workspacePanel, engineSettings, messageFeedback, phone, im, externalApi, channel, remote, officeSkills, goalSkills, maintenanceSkills, manualSkills, localAgents]
 
 export function apply(ctx, config = {}) {
-  createRuntime(ctx, config)
+  ctx.effect(() => installSocketTosGuard(), 'ds-bot: socket type of service')
+  return createRuntime(ctx, config)
 }
 
-export function createRuntime(ctx, config = {}) {
+export function createRuntime(ctx, config = {}, codeMode) {
   const dshHome = folders.dshHomeOf(process.env.DSH_HOME)
   const home = config.home ?? join(dshHome, 'bot')
   const rt = {
@@ -103,9 +126,10 @@ export function createRuntime(ctx, config = {}) {
       mainRole: config.mainRole ?? 'Chief of Staff',
     },
   }
-  for (const module of MODULES) module.install(rt)
+  for (const module of [...MODULES, chatgpt]) module.install(rt)
   ctx.effect(() => () => { rt.stopping = true }, 'ds-bot: stopping')
-    rt.installed = true
+  if (codeMode !== undefined) installBotCodeMode(rt, codeMode)
+  rt.installed = true
   // A live Agent can be scoped before the last module has added its tools (the memory
   // module starts a load during install): complete the scope now that every tool is in.
   rt.syncScopedTools?.()

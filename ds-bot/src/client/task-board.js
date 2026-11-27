@@ -3821,7 +3821,7 @@ export const TASK_BOARD_CSS = `
 .bt-comment-confirm{display:inline-flex;align-items:center;gap:4px}
 .bt-comment-compose{display:flex;flex-direction:column;gap:8px;margin-top:4px}
 .bt-board-dialog .bt-comment-compose textarea,.bt-card-modal .bt-comment-compose textarea,.bt-board-dialog .bt-mention-input-wrap textarea,.bt-card-modal .bt-mention-input-wrap textarea{width:100%;min-height:64px;resize:vertical}
-.bt-board-mention{display:inline-flex;align-items:center;padding:0 5px;border-radius:5px;background:color-mix(in srgb,var(--bt-accent) 13%,var(--bt-card));color:var(--bt-accent);font-weight:600;vertical-align:baseline}
+.bt-board-mention{display:inline-flex;align-items:center;padding:0 5px;border-radius:4px;background:color-mix(in srgb,var(--bt-accent) 13%,var(--bt-card));color:var(--bt-accent);font-weight:600;vertical-align:baseline}
 .bt-mention-wrap{position:relative;display:flex;flex-direction:column;gap:6px;min-width:0}
 .bt-mention-input-wrap{position:relative;border-radius:10px;background:var(--bt-card)}
 .bt-mention-backdrop,.bt-mention-input-wrap textarea{box-sizing:border-box;width:100%;margin:0;padding:8px 10px;border:1px solid var(--bt-line-2);border-radius:10px;font:inherit;font-size:13px;line-height:20px;letter-spacing:normal;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
