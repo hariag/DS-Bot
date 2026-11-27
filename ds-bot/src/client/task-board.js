@@ -856,6 +856,16 @@ function CardCover({ scope, task, request }) {
   return h('div', { className: 'bt-board-card-cover', 'aria-hidden': true }, h('img', { src: state.url, alt: '' }))
 }
 
+function CardItems({ items, actors, onOpen }) {
+  const [opened, setOpened] = useState(false)
+  return h('details', { className:'bt-board-items', onToggle:event => {
+    if (!opened && event.currentTarget.open) setOpened(true)
+  } },
+  h('summary', { onClick:opened ? undefined : () => setOpened(true) }, t('Task items'), ' · ',
+    items.filter(item => item.status === 'done' || item.legacy?.originalStatus === 'done').length, '/', items.length),
+  opened ? h('div', { className:'bt-board-item-list' }, items.map(item => h(TaskItemLink, { key:item.id, item, actors, onOpen }))) : null)
+}
+
 function TaskCard({ scope, task, items, commands, actors, uncertain, dragging, dragEnabled, request, onOpen, onDragStart, onDragEnd, onDragOverCard, selectionMode = false, selected = false, onSelect }) {
   const owner = actorLabel(task.owner, actors)
   const labels = labelsOf(task)
@@ -877,7 +887,7 @@ function TaskCard({ scope, task, items, commands, actors, uncertain, dragging, d
     className: 'bt-board-card' + (dragging ? ' bt-board-card-dragging' : ''), 'data-task-id': task.id,
     draggable: canDrag, onDragStart: event => onDragStart?.(task, event), onDragEnd, onDragOver: event => onDragOverCard?.(task, event),
   },
-  h(CardCover, { scope, task, request }),
+  images.length ? h(CardCover, { scope, task, request }) : null,
   selectionMode ? h('label', { className: 'bt-board-select', onClick: event => event.stopPropagation() },
     h('input', { type:'checkbox', checked:selected, 'aria-label': t('Select card'), onChange:event => onSelect?.(task.id, event.target.checked) })) : null,
   h('button', { type: 'button', className: 'bt-board-card-summary', onClick: event => onOpen(task.id, event.currentTarget) },
@@ -900,9 +910,7 @@ function TaskCard({ scope, task, items, commands, actors, uncertain, dragging, d
       task.shared ? h('span', { className: 'bt-board-chip' }, t('Shared task · read only')) : null),
     h('span', { className: 'bt-board-card-foot' },
       h('span', { className: 'bt-board-card-owner' }, h(MemberAvatar, { name: owner || t('You'), size: 22, muted: !owner || owner === t('You') }), h('span', null, owner || t('Unknown'))))),
-  items?.length ? h('details', { className:'bt-board-items' },
-    h('summary', null, t('Task items'), ' · ', items.filter(item => item.status === 'done' || item.legacy?.originalStatus === 'done').length, '/', items.length),
-    h('div', {className:'bt-board-item-list'}, items.map(item => h(TaskItemLink, { key:item.id, item, actors, onOpen })))) : null)
+  items?.length ? h(CardItems, { items, actors, onOpen }) : null)
 }
 
 
@@ -3217,9 +3225,8 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
   const textOf = value => textValue(value).toLocaleLowerCase()
   const filtered = allTasks.filter(task => {
     const labels = labelsOf(task)
-    const comments = commentsOf(task)
     const type = taskType(task), typeText = TASK_TYPE_LABELS[type]
-    const matched = !needle || [task.title, task.id, task.description, task.stage, task.acceptance, task.progress?.summary, task.progress?.next, type, typeText, t(typeText), actorLabel(task.owner, actors), actorLabel(task.reviewer, actors), ...labels, ...comments.map(comment => comment.text)]
+    const matched = !needle || [task.title, task.id, task.description, task.stage, task.acceptance, task.progress?.summary, task.progress?.next, type, typeText, t(typeText), actorLabel(task.owner, actors), actorLabel(task.reviewer, actors), ...labels, ...commentsOf(task).map(comment => comment.text)]
       .some(value => textOf(value).includes(needle))
     const memberOk = !memberFilter || asText(task.owner) === memberFilter || asText(task.reviewer) === memberFilter
     const labelOk = !labelFilter || labels.includes(labelFilter)
@@ -3466,24 +3473,24 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
       release.status === 'running' && releaseItemsDone(release) && !releaseGatesPassed(release)
         ? h('span', { className: 'bt-board-release-awaiting', role: 'status' }, t('Awaiting gates')) : null)
   }
-  const releaseBar = releaseSupported && orderedReleases.length ? h('div', { className: 'bt-board-release-bar' },
+  const releaseBar = view === 'status' && !retired && orderedReleases.length ? h('div', { className: 'bt-board-release-bar' },
     h('div', { className: 'bt-board-release-chips', role: 'group', 'aria-label': t('Releases') },
       orderedReleases.map(release => h(ReleaseChip, { key: release.id, release, onOpen: () => openRelease(release.id) })))) : null
-  const typeSection = h('section', { className: 'bt-board-section', 'aria-label': t('Task types') },
+  const typeSection = () => h('section', { className: 'bt-board-section', 'aria-label': t('Task types') },
     h('div', { className: 'bt-board-section-heading' }, h('h3', null, t('By type')), h('p', null, t('Drag a card to another type lane to change its type without changing its status.'))),
     h(ColumnRail, { label: t('Task types') }, TASK_TYPES.map(([id, label]) => renderLane('type', id, t(label), activeFiltered.filter(task => taskType(task) === id), { noCreate: true, laneLabel: t(label) }))))
   const activityItems = Array.isArray(data?.activity) ? data.activity : []
-  const activitySection = h('section', { className: 'bt-board-section', 'aria-label': t('Activity') },
+  const activitySection = () => h('section', { className: 'bt-board-section', 'aria-label': t('Activity') },
     h('div', { className: 'bt-board-section-heading' }, h('h3', null, t('Activity')), h('p', null, t('Recent changes across the board.'))),
     activityItems.length ? h('div', { className:'bt-board-activity' }, activityItems.map(item => h('button', { key:item.id, type:'button', className:'bt-board-activity-row', onClick:() => openCard(item.taskId) },
       h('span', { className:'bt-card-activity-dot', 'aria-hidden':true }),
       h('span', { className:'bt-board-activity-text' }, h('strong', null, t(ACTIVITY_LABELS[item.type] ?? 'Card updated')), h('span', null, textValue(item.taskTitle) || item.taskId)),
       h('span', { className:'bt-board-activity-by' }, actorName(item.actor, actors)),
       h('time', { dateTime:Number.isFinite(item.at) ? new Date(item.at).toISOString() : undefined }, relativeTime(item.at))))) : h('p', { className:'bt-card-muted' }, t('No activity yet.')))
-  const archiveSection = h('section', { className: 'bt-board-section', 'aria-label': t('Archive') },
+  const archiveSection = () => h('section', { className: 'bt-board-section', 'aria-label': t('Archive') },
     h('div', { className: 'bt-board-section-heading' }, h('h3', null, t('Archive')), h('p', null, t('Archived cards are hidden from the workflow and release views. Restore a card to return it to the board.'))),
     h(ColumnRail, { label: t('Archive') }, renderLane('archive', 'archived', t('Archived cards'), archivedTasks, { noCreate: true, laneLabel: t('Archived cards'), emptyLabel:t('No archived cards') })))
-  const releaseSection = releaseSupported ? h('section', { className: 'bt-board-section', 'aria-label': t('Releases') },
+  const releaseSection = () => h('section', { className: 'bt-board-section', 'aria-label': t('Releases') },
     retired ? h('div', { className:'bt-board-section-heading' }, h('h3', null, t('Releases')))
     : scope.kind === 'room' ? h(MajorVersionCard, {name:textValue(title) || textValue(goal?.title) || scope.id,
       releases:orderedReleases, tasks:allTasks, onOpen:openReleaseDetails, onCreate:() => setNewRelease(true), disabled:!canAct}) :
@@ -3500,7 +3507,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
         })
       }),
       renderLane('release', 'unassigned', t('Unassigned'), activeFiltered.filter(task => !task.releaseId), { noCreate: true, laneLabel: t('Unassigned') }),
-    ])) : null
+    ]))
   if (!visible) return null
   return createPortal(h('div', { className: 'bt-board-backdrop' },
     h('section', { ref: dialog, tabIndex: -1, className: 'bt-board-dialog', role: 'dialog', 'aria-modal': selectedCard || createFor ? 'false' : 'true', 'aria-label': title || t('Task board') },
@@ -3587,7 +3594,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
           changesOpen && proposalSupported ? h(ProposalPanel, { proposals, actors, tasks: data.tasks, releases, disabled: !canAct || !!proposalBusy,
             busy: proposalBusy, error: proposalError, onDecide: decideProposal, onClose: () => setChangesOpen(false) }) : null,
           releaseError ? h('div', { className: 'bt-board-release-error', role: 'alert' }, releaseError) : null,
-          view === 'status' && releaseSupported && !retired ? releaseBar : null,
+          releaseBar,
           view === 'status' && personal ? h('section', { className: 'bt-board-section', 'aria-label': t('Personal progress') },
             h('div', { className: 'bt-board-section-heading' }, h('h3', null, t('Personal progress')), h('p', null, t('Drag a card or use its progress menu.'), ' ', t('Your own progress markers do not complete shared work or unblock dependencies.'))),
             h(ColumnRail, { label: t('Personal progress'), personal: true }, PERSONAL_COLUMNS.map(([progress, label]) => renderLane('personal', progress, t(label), personalTasks.filter(task => task.personalProgress === progress),
@@ -3602,10 +3609,10 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
               const followup = personal || ['reported', 'done', 'unknown'].includes(status)
               return renderLane('workflow', status, t(label), columns.get(status), { laneLabel: t(label), scheduleOnCreate, followup, noCreate: status === 'cancelled', defaultDraft: status === 'draft', defaultOwner: personal ? 'user' : scope.kind === 'personal' ? scope.id : '', ownerOnly: scope.kind === 'personal' })
             }))) : null,
-          view === 'type' ? typeSection : null,
-          view === 'release' && releaseSupported ? releaseSection : null,
-          view === 'archive' ? archiveSection : null,
-          view === 'activity' ? activitySection : null,
+          view === 'type' ? typeSection() : null,
+          view === 'release' && releaseSupported ? releaseSection() : null,
+          view === 'archive' ? archiveSection() : null,
+          view === 'activity' ? activitySection() : null,
           view === 'project' && scope.kind === 'room' && !retired ? h(ProjectCoordinationPanel, {
             key, scope, request, tasks:data.tasks, releases, actorName:id => actorName(id, actors), openCard, visitSource,
           }) : null,

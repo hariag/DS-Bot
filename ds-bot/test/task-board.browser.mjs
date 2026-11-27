@@ -443,6 +443,50 @@ async function runBrowserCases() {
     assert.deepEqual(errors,[])
   }
   if(process.env.BOARD_HELD_DELIVERY_ONLY==='1')return
+
+  {
+    await page.evaluate(() => {
+      const state = globalThis.fixture
+      globalThis.initPhase2()
+      const root = state.phase2Tasks[0]
+      for (let i=1; i<288; i++) state.phase2Tasks.push({ ...root,id:'large-card-'+i,title:'Large card '+i,
+        status:'draft',...(i===287 ? { archivedAt:100 } : {}) })
+      for (let i=1; i<=420; i++) state.phase2Tasks.push({ ...root,id:'large-item-'+i,title:'Large item '+i,
+        parentTaskId:root.id,status:i===1?'done':'draft' })
+      globalThis.renderFixture({kind:'room',id:'large-board'},'phase2',true)
+    })
+    const portal = page.getByRole('dialog',{name:'Board',exact:true})
+    const parent = portal.locator('article[data-task-id="T1"]')
+    const items = parent.locator('.bt-board-items')
+    const tabs = portal.getByRole('group',{name:'Board view'})
+    const lastItem = items.locator('[data-item-id="large-item-420"]')
+    await parent.waitFor()
+    assert.equal(await portal.locator('article[data-task-id]').count(),287)
+    assert.match(await items.locator('summary').innerText(),/1\/420/)
+    assert.equal(await items.locator('[data-item-id]').count(),0,'closed task trees keep their count without mounting item buttons')
+    await items.locator('summary').click()
+    await lastItem.waitFor({state:'attached'})
+    assert.equal(await items.locator('[data-item-id]').count(),420)
+    await lastItem.click()
+    const itemDialog = page.getByRole('dialog',{name:'Large item 420',exact:true})
+    await itemDialog.getByRole('button',{name:'Close card'}).click()
+    assert.equal(await lastItem.evaluate(node=>node===document.activeElement),true)
+    const lastNode = await lastItem.elementHandle()
+    await items.locator('summary').click()
+    await items.locator('summary').click()
+    assert.equal(await lastItem.evaluate((current,previous)=>current===previous,lastNode),true,'reopening keeps the mounted item list')
+    await lastNode.dispose()
+
+    for (const [label, content] of [['Type','By type'],['Release','Release one'],['Archive','Large card 287'],['Activity','No activity yet.']]) {
+      await tabs.getByRole('button',{name:label,exact:true}).click()
+      await portal.getByText(content,{exact:true}).first().waitFor()
+    }
+    await tabs.getByRole('button',{name:'Status',exact:true}).click()
+    await parent.waitFor()
+    assert.equal(await items.locator('[data-item-id]').count(),0,'opening a different view does not preconstruct task trees in Status')
+    assert.deepEqual(errors,[])
+  }
+  if(process.env.BOARD_LARGE_ONLY==='1')return
   await page.evaluate(() => { globalThis.fixture.calls=[] })
 
   await page.evaluate(() => globalThis.renderFixture({kind:'room',id:'g1'}, 'normal', true))

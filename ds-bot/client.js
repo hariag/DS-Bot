@@ -68517,6 +68517,25 @@ function CardCover({ scope, task, request }) {
   if (!image || state.failed || !state.url) return null;
   return (0, import_react82.createElement)("div", { className: "bt-board-card-cover", "aria-hidden": true }, (0, import_react82.createElement)("img", { src: state.url, alt: "" }));
 }
+function CardItems({ items, actors, onOpen }) {
+  const [opened, setOpened] = (0, import_react82.useState)(false);
+  return (0, import_react82.createElement)(
+    "details",
+    { className: "bt-board-items", onToggle: (event) => {
+      if (!opened && event.currentTarget.open) setOpened(true);
+    } },
+    (0, import_react82.createElement)(
+      "summary",
+      { onClick: opened ? void 0 : () => setOpened(true) },
+      t("Task items"),
+      " · ",
+      items.filter((item) => item.status === "done" || item.legacy?.originalStatus === "done").length,
+      "/",
+      items.length
+    ),
+    opened ? (0, import_react82.createElement)("div", { className: "bt-board-item-list" }, items.map((item) => (0, import_react82.createElement)(TaskItemLink, { key: item.id, item, actors, onOpen }))) : null
+  );
+}
 function TaskCard({ scope, task, items, commands, actors, uncertain, dragging, dragEnabled, request, onOpen, onDragStart, onDragEnd, onDragOverCard, selectionMode = false, selected = false, onSelect }) {
   const owner = actorLabel(task.owner, actors);
   const labels2 = labelsOf(task);
@@ -68539,7 +68558,7 @@ function TaskCard({ scope, task, items, commands, actors, uncertain, dragging, d
       onDragEnd,
       onDragOver: (event) => onDragOverCard?.(task, event)
     },
-    (0, import_react82.createElement)(CardCover, { scope, task, request }),
+    images.length ? (0, import_react82.createElement)(CardCover, { scope, task, request }) : null,
     selectionMode ? (0, import_react82.createElement)(
       "label",
       { className: "bt-board-select", onClick: (event) => event.stopPropagation() },
@@ -68577,12 +68596,7 @@ function TaskCard({ scope, task, items, commands, actors, uncertain, dragging, d
         (0, import_react82.createElement)("span", { className: "bt-board-card-owner" }, (0, import_react82.createElement)(MemberAvatar, { name: owner || t("You"), size: 22, muted: !owner || owner === t("You") }), (0, import_react82.createElement)("span", null, owner || t("Unknown")))
       )
     ),
-    items?.length ? (0, import_react82.createElement)(
-      "details",
-      { className: "bt-board-items" },
-      (0, import_react82.createElement)("summary", null, t("Task items"), " · ", items.filter((item) => item.status === "done" || item.legacy?.originalStatus === "done").length, "/", items.length),
-      (0, import_react82.createElement)("div", { className: "bt-board-item-list" }, items.map((item) => (0, import_react82.createElement)(TaskItemLink, { key: item.id, item, actors, onOpen })))
-    ) : null
+    items?.length ? (0, import_react82.createElement)(CardItems, { items, actors, onOpen }) : null
   );
 }
 var byteLength = (value) => new TextEncoder().encode(textValue(value)).length;
@@ -72182,9 +72196,8 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
   const textOf2 = (value) => textValue(value).toLocaleLowerCase();
   const filtered = allTasks.filter((task) => {
     const labels2 = labelsOf(task);
-    const comments = commentsOf(task);
     const type = taskType(task), typeText = TASK_TYPE_LABELS[type];
-    const matched = !needle || [task.title, task.id, task.description, task.stage, task.acceptance, task.progress?.summary, task.progress?.next, type, typeText, t(typeText), actorLabel(task.owner, actors), actorLabel(task.reviewer, actors), ...labels2, ...comments.map((comment) => comment.text)].some((value) => textOf2(value).includes(needle));
+    const matched = !needle || [task.title, task.id, task.description, task.stage, task.acceptance, task.progress?.summary, task.progress?.next, type, typeText, t(typeText), actorLabel(task.owner, actors), actorLabel(task.reviewer, actors), ...labels2, ...commentsOf(task).map((comment) => comment.text)].some((value) => textOf2(value).includes(needle));
     const memberOk = !memberFilter || asText2(task.owner) === memberFilter || asText2(task.reviewer) === memberFilter;
     const labelOk = !labelFilter || labels2.includes(labelFilter);
     const dueOk = dueFilterMatch(task, dueFilter);
@@ -72549,7 +72562,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
       release.status === "running" && releaseItemsDone(release) && !releaseGatesPassed(release) ? (0, import_react82.createElement)("span", { className: "bt-board-release-awaiting", role: "status" }, t("Awaiting gates")) : null
     );
   };
-  const releaseBar = releaseSupported && orderedReleases.length ? (0, import_react82.createElement)(
+  const releaseBar = view === "status" && !retired && orderedReleases.length ? (0, import_react82.createElement)(
     "div",
     { className: "bt-board-release-bar" },
     (0, import_react82.createElement)(
@@ -72558,14 +72571,14 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
       orderedReleases.map((release) => (0, import_react82.createElement)(ReleaseChip, { key: release.id, release, onOpen: () => openRelease(release.id) }))
     )
   ) : null;
-  const typeSection = (0, import_react82.createElement)(
+  const typeSection = () => (0, import_react82.createElement)(
     "section",
     { className: "bt-board-section", "aria-label": t("Task types") },
     (0, import_react82.createElement)("div", { className: "bt-board-section-heading" }, (0, import_react82.createElement)("h3", null, t("By type")), (0, import_react82.createElement)("p", null, t("Drag a card to another type lane to change its type without changing its status."))),
     (0, import_react82.createElement)(ColumnRail, { label: t("Task types") }, TASK_TYPES.map(([id, label]) => renderLane("type", id, t(label), activeFiltered.filter((task) => taskType(task) === id), { noCreate: true, laneLabel: t(label) })))
   );
   const activityItems = Array.isArray(data?.activity) ? data.activity : [];
-  const activitySection = (0, import_react82.createElement)(
+  const activitySection = () => (0, import_react82.createElement)(
     "section",
     { className: "bt-board-section", "aria-label": t("Activity") },
     (0, import_react82.createElement)("div", { className: "bt-board-section-heading" }, (0, import_react82.createElement)("h3", null, t("Activity")), (0, import_react82.createElement)("p", null, t("Recent changes across the board."))),
@@ -72578,13 +72591,13 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
       (0, import_react82.createElement)("time", { dateTime: Number.isFinite(item.at) ? new Date(item.at).toISOString() : void 0 }, relativeTime(item.at))
     ))) : (0, import_react82.createElement)("p", { className: "bt-card-muted" }, t("No activity yet."))
   );
-  const archiveSection = (0, import_react82.createElement)(
+  const archiveSection = () => (0, import_react82.createElement)(
     "section",
     { className: "bt-board-section", "aria-label": t("Archive") },
     (0, import_react82.createElement)("div", { className: "bt-board-section-heading" }, (0, import_react82.createElement)("h3", null, t("Archive")), (0, import_react82.createElement)("p", null, t("Archived cards are hidden from the workflow and release views. Restore a card to return it to the board."))),
     (0, import_react82.createElement)(ColumnRail, { label: t("Archive") }, renderLane("archive", "archived", t("Archived cards"), archivedTasks, { noCreate: true, laneLabel: t("Archived cards"), emptyLabel: t("No archived cards") }))
   );
-  const releaseSection = releaseSupported ? (0, import_react82.createElement)(
+  const releaseSection = () => (0, import_react82.createElement)(
     "section",
     { className: "bt-board-section", "aria-label": t("Releases") },
     retired ? (0, import_react82.createElement)("div", { className: "bt-board-section-heading" }, (0, import_react82.createElement)("h3", null, t("Releases"))) : scope.kind === "room" ? (0, import_react82.createElement)(MajorVersionCard, {
@@ -72614,7 +72627,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
       }),
       renderLane("release", "unassigned", t("Unassigned"), activeFiltered.filter((task) => !task.releaseId), { noCreate: true, laneLabel: t("Unassigned") })
     ])
-  ) : null;
+  );
   if (!visible) return null;
   return (0, import_react_dom13.createPortal)((0, import_react82.createElement)(
     "div",
@@ -72861,7 +72874,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
           onClose: () => setChangesOpen(false)
         }) : null,
         releaseError ? (0, import_react82.createElement)("div", { className: "bt-board-release-error", role: "alert" }, releaseError) : null,
-        view === "status" && releaseSupported && !retired ? releaseBar : null,
+        releaseBar,
         view === "status" && personal ? (0, import_react82.createElement)(
           "section",
           { className: "bt-board-section", "aria-label": t("Personal progress") },
@@ -72890,10 +72903,10 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
             return renderLane("workflow", status, t(label), columns2.get(status), { laneLabel: t(label), scheduleOnCreate, followup, noCreate: status === "cancelled", defaultDraft: status === "draft", defaultOwner: personal ? "user" : scope.kind === "personal" ? scope.id : "", ownerOnly: scope.kind === "personal" });
           }))
         ) : null,
-        view === "type" ? typeSection : null,
-        view === "release" && releaseSupported ? releaseSection : null,
-        view === "archive" ? archiveSection : null,
-        view === "activity" ? activitySection : null,
+        view === "type" ? typeSection() : null,
+        view === "release" && releaseSupported ? releaseSection() : null,
+        view === "archive" ? archiveSection() : null,
+        view === "activity" ? activitySection() : null,
         view === "project" && scope.kind === "room" && !retired ? (0, import_react82.createElement)(ProjectCoordinationPanel, {
           key,
           scope,

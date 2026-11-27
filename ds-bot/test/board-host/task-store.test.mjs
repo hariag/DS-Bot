@@ -42,6 +42,31 @@ const oldRoomCard = (store, id, fields = {}) => store.create({
   operationId:`create-${id}`, actor:'user', task:{ ...task(id), scope:'room:removed', ...fields },
 })
 
+test('release memberships use the supplied snapshot and board action batches omit closed receipts', t => {
+  const { store } = fixture(t)
+  const scope = 'personal:user'
+  for (const [id, releaseScope] of [['r1', scope], ['r2', scope], ['outside', 'room:other']]) {
+    store.createRelease({ operationId:`release-${id}`, actor:'user', release:{ id, scope:releaseScope, name:id, version:'1' } })
+  }
+  for (const [id, releaseId, releasePosition] of [['a','r1','b'], ['b','r1','a'], ['c','r2','a']]) {
+    create(store, id)
+    command(store, id, 'release-assign', 'user', { releaseId, releasePosition })
+    register(store, id)
+  }
+  const tasks = store.list()
+  command(store, 'a', 'cancel', 'user')
+
+  const releases = store.listReleases(scope, { tasks })
+  assert.deepEqual(releases.map(({id, items}) => [id, items.map(task => task.id)]), [['r1',['b','a']], ['r2',['c']]])
+  assert.equal(releases[0].items[1].status, tasks.find(task => task.id === 'a').status)
+  assert.equal(store.listReleases(scope)[0].items[1].status, 'cancelled')
+  assert.equal(store.listReleases('room:other')[0].items.length, 0)
+
+  assert.deepEqual([...store.listBoardActions(['a','b','absent'])], [['b',store.listActions('b')]])
+  assert.equal(store.listActions('a')[0].state, 'cancelled', 'terminal delivery history remains queryable on its card')
+  assert.equal(store.listBoardActions([]).size, 0)
+})
+
 test('the user can recover an unstarted card and its dependent item as one operation after deleting a group', t => {
   const team = recoveryTeam(), commits = []
   const { store } = fixture(t, { ...opts, recoveryRoster:() => team, onTaskCommit:events => commits.push(...events) })

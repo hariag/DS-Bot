@@ -11,6 +11,7 @@ const canClearUserBlock = task => task?.blocked?.owner === 'user' && !task.stale
 const string = (value, max) => typeof value === 'string' && value.trim() !== '' && value.length <= max
 const fail = message => Object.assign(new Error(message), { code: 'bot/invalid' })
 const liveAction = action => ['pending','claimed','accepted','uncertain'].includes(action.state)
+const workflowStatuses = new Set(['ready','working','reported'])
 const isRetiredTask = (task, rooms) => task?.scope?.startsWith('room:') && !has(rooms, task.scope.slice(5))
 const openAction = action => ['claimed','accepted','uncertain'].includes(action.state)
 const retiredCommands = new Set(['card-comment', 'card-comment-edit', 'card-comment-delete', 'card-details', 'cancel', 'close-held-delivery', 'archive', 'unarchive', 'restore', 'recover-to-room', 'release-assign'])
@@ -57,16 +58,23 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
     try { assertWritable(); writable = true } catch { /* read-only host still shows its board */ }
     const availableTargets = Object.create(null)
     const recoveryTargets = Object.create(null)
-    const releases = store.listReleases?.(`${scope.kind}:${scope.id}`) ?? []
+    const releases = store.listReleases?.(key, { tasks }) ?? []
+    const releasesInScope = new Map(releases.map(release => [release.id, release]))
     const releaseById = new Map(releases.map(release => [release.id, release]))
+    const editableReleaseExists = releases.some(release => ['draft','queued'].includes(release.status))
+    const actionTaskIds = board.tasks.filter(task => {
+      if (task.shared || task.legacy) return false
+      const status = byId.get(task.id)?.status
+      return workflowStatuses.has(status) || writable && ['proposed','waiting'].includes(status)
+    }).map(task => task.id)
+    const actionsByTask = store.listBoardActions?.(actionTaskIds)
+      ?? new Map(actionTaskIds.map(id => [id, store.listActions?.(id) ?? []]))
     const commands = Object.fromEntries(board.tasks.map(task => {
       const source = byId.get(task.id)
-      const inWorkflow = ['ready','working','reported'].includes(source?.status)
-      const actions = !task.shared && !task.legacy && (inWorkflow || writable && ['proposed','waiting'].includes(source?.status))
-        ? (store.listActions?.(source.id) ?? []) : []
+      const actions = actionsByTask.get(task.id) ?? []
       const hasOpenAction = actions.some(openAction)
       let canVerifyDelivery = false
-      if (!task.shared && !task.legacy && inWorkflow) {
+      if (!task.shared && !task.legacy && workflowStatuses.has(source?.status)) {
         const kind = source.status === 'reported' ? 'review' : 'execute'
         const action = actions.find(item => item.kind === kind && item.revision === source.actionRevision)
         if (action && liveAction(action)) task.dispatchState = action.state
@@ -112,16 +120,15 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
         && !actions.some(action => action.revision === source.actionRevision && liveAction(action))
       const canUnschedule = !hasOpenAction && !source?.change && !source?.blocked && !source?.stale
         && (source?.status === 'ready' || source?.status === 'waiting' && !!source?.authority)
-      const archiveRelease = source?.releaseId ? releases.find(release => release.id === source.releaseId) : undefined
+      const archiveRelease = source?.releaseId ? releasesInScope.get(source.releaseId) : undefined
       const canArchive = !source?.archivedAt && !['ready','working','reported'].includes(source?.status)
         && (!source?.releaseId || !archiveRelease || ['published','cancelled'].includes(archiveRelease.status))
-      const editableReleases = releases.filter(release => ['draft','queued'].includes(release.status))
       return [task.id, [...(!source?.change ? [{ type: 'edit', label: 'Edit' }, { type:'card-details', label:'Edit card details' }, {type:'reorder',label:'Reorder card'}] : []),
         ...(source?.status === 'draft' && !isUnassignedItemDraft(source) ? [{type:'submit',label:'Submit'}] : []),
         ...(source?.status === 'cancelled' ? [{type:'restore',label:'Restore card'}] : cancelCommand), ...closeDelivery,
         ...(source?.archivedAt ? [{type:'unarchive',label:'Restore from archive'}] : canArchive ? [{type:'archive',label:'Archive card'}] : []),
         ...(scope.kind === 'room' && source?.parentTaskId && !source.archivedAt && !source.authority && ['draft','proposed'].includes(source.status) ? [{type:'move-item',label:'Move to card'}] : []),
-        ...(editableReleases.length && !source?.parentTaskId && !source?.change && !['done','cancelled'].includes(source?.status) ? [{type:'release-assign',label:'Assign release'}] : []),
+        ...(editableReleaseExists && !source?.parentTaskId && !source?.change && !['done','cancelled'].includes(source?.status) ? [{type:'release-assign',label:'Assign release'}] : []),
         ...(canSchedule ? [{type:'schedule',label:'Schedule Bot'}] : []),
         ...(canVerifyDelivery ? [{type:'confirm-delivery',label:'Verify original delivery'}] : []),
         ...(canClearUserBlock(source) ? [{type:'unblock',label:'Clear blocker'}] : []),

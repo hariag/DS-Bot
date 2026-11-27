@@ -93,6 +93,35 @@ test('listing a board uses its task snapshot and only checks actions needed by t
   assert.equal(bot.tasks.find(task => task.id === 'working').dispatchState, undefined)
 })
 
+test('the owner board reuses one card snapshot for release counts and batches its visible dispatch rows', () => {
+  const f = fixture()
+  const card = { scope:'room:room', title:'Work', owner:'one', reviewer:'two', actionRevision:2, status:'working' }
+  f.rows.push({ ...card, id:'visible', releaseId:'r' }, { ...card, id:'complete', status:'done', releaseId:'r' },
+    { ...card, id:'outside', scope:'room:other' })
+  let lists = 0
+  f.store.list = () => { lists++; return f.rows }
+  f.store.listReleases = (scope, { tasks }) => {
+    assert.equal(scope, card.scope)
+    assert.equal(tasks, f.rows)
+    return [{ id:'r', status:'running', items:tasks.filter(task => task.releaseId === 'r') }]
+  }
+  const batches = []
+  f.store.listBoardActions = ids => {
+    batches.push(ids)
+    return new Map([['visible', [{ revision:2, kind:'execute', state:'accepted' }]]])
+  }
+  f.store.listActions = () => assert.fail('the board should not reread actions for individual cards')
+
+  const view = f.api.list(room, user)
+  assert.equal(lists, 1)
+  assert.deepEqual(batches, [['visible']])
+  assert.equal(view.tasks.find(row => row.id === 'visible').dispatchState, 'accepted')
+  assert.equal(view.capabilities.commands.visible.some(command => command.type === 'cancel'), false)
+  assert.deepEqual(view.releases.map(({id, itemCount, doneCount}) => ({id, itemCount, doneCount})), [{ id:'r', itemCount:2, doneCount:1 }])
+  f.api.list(room, {kind:'bot', id:'one'})
+  assert.deepEqual(batches, [['visible']], 'Bot views cannot expose or query owner dispatch metadata')
+})
+
 test('pending actions distinguish the release gate from the live dispatch queue', () => {
   const f = fixture()
   const row = { scope:'room:room', title:'Work', owner:'one', reviewer:'two', actionRevision:2, status:'ready' }

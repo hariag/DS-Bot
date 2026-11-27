@@ -262,24 +262,29 @@ export function openTaskStore(path, { conversationKind = () => 'group', onProjec
   } catch { db.close(); throw new Error('unknown or damaged task dependency index') }
   const getRow = db.prepare('SELECT * FROM tasks WHERE id=?')
   const getTask = id => read(getRow.get(id))
-  const getAll = () => db.prepare('SELECT body FROM tasks ORDER BY id').all().map(read)
+  const taskRows = db.prepare('SELECT body FROM tasks ORDER BY id')
+  const getAll = () => taskRows.all().map(read)
+  const boardActionRows = db.prepare(`SELECT id,task_id AS taskId,revision,kind,actor,state,receipt FROM actions
+    WHERE task_id IN (SELECT value FROM json_each(?)) AND state IN ('pending','claimed','accepted','uncertain') ORDER BY rowid`)
   const getReleaseRow = db.prepare('SELECT * FROM releases WHERE id=?')
   const getRelease = id => read(getReleaseRow.get(id))
-  const getAllReleases = () => db.prepare('SELECT body FROM releases ORDER BY id').all().map(read)
+  const releaseRows = db.prepare('SELECT body FROM releases ORDER BY id')
+  const getAllReleases = () => releaseRows.all().map(read)
   const saveRelease = (before, after) => {
     if (before) {
       if (db.prepare('UPDATE releases SET revision=?,body=? WHERE id=? AND revision=?').run(after.revision, JSON.stringify(after), before.id, before.revision).changes !== 1) throw new Error('release revision conflict')
     } else db.prepare('INSERT INTO releases(id,revision,body) VALUES(?,?,?)').run(after.id, after.revision, JSON.stringify(after))
     coordination.releaseChanged(before,after,audit)
   }
-  const releaseItems = id => getAll().filter(task => task.releaseId === id).sort((left, right) => {
+  const compareReleaseItems = (left, right) => {
     const a = typeof left.releasePosition === 'string' ? left.releasePosition : undefined
     const b = typeof right.releasePosition === 'string' ? right.releasePosition : undefined
     if (a === undefined && b !== undefined) return -1
     if (a !== undefined && b === undefined) return 1
     if (a !== undefined && a !== b) return a < b ? -1 : 1
     return compareCards(left, right)
-  })
+  }
+  const releaseItems = id => getAll().filter(task => task.releaseId === id).sort(compareReleaseItems)
   const releaseMembershipEditable = task => !task?.releaseId || ['draft','queued'].includes(getRelease(task.releaseId)?.status)
   const releaseOrder = scope => getAllReleases().filter(release => release.scope === scope).sort((left, right) => left.position < right.position ? -1 : left.position > right.position ? 1 : 0)
   const releasePositionAfter = (releaseId, afterId, exceptId) => {
@@ -970,11 +975,15 @@ const releaseIsDone = release => {
         return compareCards(left, right)
       })
     },
-    listReleases(scope, {summary = false} = {}) {
+    listReleases(scope, {summary = false, tasks} = {}) {
       if (typeof scope !== 'string' || !scope) throw new Error('invalid release scope')
       const releases = releaseOrder(scope)
       if (summary) return releases.map(({id, name, version, status}) => ({id, name, version, status}))
-      return releases.map(release => ({ ...release, items: releaseItems(release.id).map(task => ({ id:task.id, title:task.title, status:task.status, owner:task.owner, revision:task.revision })) }))
+      if (releases.length === 0) return releases
+      const itemsByRelease = new Map(releases.map(release => [release.id, []]))
+      for (const task of tasks ?? getAll()) itemsByRelease.get(task.releaseId)?.push(task)
+      return releases.map(release => ({ ...release, items: itemsByRelease.get(release.id).sort(compareReleaseItems)
+        .map(({id, title, status, owner, revision}) => ({id, title, status, owner, revision})) }))
     },
     getRelease(id) { return getRelease(requireId(id, 'release id')) },
     createRelease({ operationId, actor, release }) {
@@ -1320,6 +1329,17 @@ const releaseIsDone = release => {
       })
     },
     listActions(id) { return db.prepare('SELECT id,task_id AS taskId,revision,kind,actor,state,receipt FROM actions WHERE task_id=? ORDER BY rowid').all(requireId(id, 'task id')) },
+    listBoardActions(taskIds) {
+      if (!Array.isArray(taskIds) || taskIds.length > MAX_TASKS) throw new Error('invalid board task ids')
+      const actionsByTask = new Map()
+      if (taskIds.length === 0) return actionsByTask
+      const ids = JSON.stringify(taskIds.map(id => requireId(id, 'task id')))
+      for (const action of boardActionRows.all(ids)) {
+        if (!actionsByTask.has(action.taskId)) actionsByTask.set(action.taskId, [])
+        actionsByTask.get(action.taskId).push(action)
+      }
+      return actionsByTask
+    },
     roomTaskChanges(roomId, after, count = 100) {
       requireId(roomId, 'room id')
       const { sequence:head } = historyHead.get()
