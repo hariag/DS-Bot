@@ -465,6 +465,7 @@ test('startup drains all async effects with zero op spawns when no connector or 
     },
   }
   ctx.sessionController = { resolveAgent: async () => ({ agent }) }
+  ctx.agents = { get: id => id === agent.id ? agent : undefined }
   ctx.sessions = { flush: async () => {} }
   ctx.workspaceRegistry = { archiveSession: async () => {} }
   ctx.llm.stream = () => (async function* () {})()
