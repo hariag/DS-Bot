@@ -92,3 +92,14 @@ test('derive newest-first history from known spans without fabricating a first t
   membership = 'other'
   assert.deepEqual(await api.listHistory({ issueId: 'issue-6' }), { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } })
 })
+
+test('only explicit successful Linear comment results provide a posted receipt', async () => {
+  let result = { success: false, id: 'rejected-id' }
+  const api = createLinearProjectMcpApi({ projectId, async callWrite() { return result }, hasWriteTool: name => name === 'create_comment' })
+  const args = { issueId: 'issue-6', body: 'board update' }
+  assert.deepEqual(await api.addIssueComment(args), { posted: false, reason: 'comment-unconfirmed' })
+  result = {}
+  assert.deepEqual(await api.addIssueComment(args), { posted: false, reason: 'comment-unconfirmed' })
+  result = { id: 'comment-id' }
+  assert.deepEqual(await api.addIssueComment(args), { posted: true, tool: 'create_comment' })
+})

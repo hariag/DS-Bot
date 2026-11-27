@@ -184,11 +184,14 @@ export function createLinearProjectMcpApi({ projectId, call, callWrite, hasWrite
         await ensureConnected?.()
         const toolName = ['create_comment', 'save_comment'].find(name => hasWriteTool(name))
         if (!toolName) return { posted: false, reason: 'comment-tool-unavailable' }
-        await callWrite(toolName, { issueId, body: body.trim().slice(0, 1500) })
-        return { posted: true, tool: toolName }
-      } catch (error) {
-        return { posted: false, reason: error?.message || 'comment-failed' }
+        const receipt = await callWrite(toolName, { issueId, body: body.trim().slice(0, 1500) })
+        if (receipt?.success !== false && (receipt?.success === true || nonempty(receipt?.id) || nonempty(receipt?.comment?.id))) {
+          return { posted: true, tool: toolName }
+        }
+      } catch {
+        // Delivery is ambiguous and retried comments can duplicate an accepted write.
       }
+      return { posted: false, reason: 'comment-unconfirmed' }
     },
   }
 }

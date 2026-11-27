@@ -561,8 +561,11 @@ export function install(rt) {
       const driver = createTaskDriver({ store, admission,
         authorized: (action, task) => allowedAction(store.get(task.id), action),
         authorizedNow: (action, task) => allowedAction(store.get(task.id), action),
-        onError: error => rt.warn?.('ds-bot: board scheduler: %s%s', error?.message || 'unknown error',
-          process.env.DSBOT_BOARD_DEBUG === '1' && error?.stack ? '\n' + error.stack : '') })
+        onError: error => {
+          rt.inboxChanged?.()
+          rt.warn?.('ds-bot: board scheduler: %s%s', error?.message || 'unknown error',
+            process.env.DSBOT_BOARD_DEBUG === '1' && error?.stack ? '\n' + error.stack : '')
+        } })
       instance = { store, api, root, imageDir, proofs, admissionProofs, shareAllowed, dependencyAllowed, driver, goalEditor }
       if (!releaseTimer) {
         releaseTimer = setInterval(() => { void monitorReleases().catch(error => rt.warn?.('ds-bot: release monitor: %s', error?.message || error)) }, Math.max(1000, Number(process.env.DS_BOT_RELEASE_MONITOR_MS ?? 30_000)))
@@ -730,6 +733,28 @@ export function install(rt) {
   const commitListeners = new Set()
   const availableBoardStore = () => instance?.store
     ?? (existsSync(join(rt.home, 'board-v1', 'tasks.sqlite')) && !closing && !rt.stopping && rt.readOnly?.() === undefined ? service().store : undefined)
+  let deliveryInboxStore, deliveryInboxVersion, uncertainDeliveries = []
+  const deliveryInbox = () => {
+    if (closing || rt.stopping) return []
+    const store = availableBoardStore()
+    if (!store) return []
+    const version = store.version()
+    if (store !== deliveryInboxStore || version !== deliveryInboxVersion) {
+      uncertainDeliveries = store.listUncertainDeliveries()
+      deliveryInboxStore = store
+      deliveryInboxVersion = version
+    }
+    return uncertainDeliveries.flatMap(({ id, actor, taskId, scope, heldAt }) => {
+      const [kind, scopeId] = scope.split(':', 2)
+      const botId = kind === 'personal' && scopeId !== 'user' ? scopeId : actor
+      const bot = rt.botOf(botId)
+      if (kind === 'room') {
+        if (!rt.roomOf(scopeId)) return []
+      } else if (kind !== 'personal' || !bot || bot.private === true) return []
+      return [{ kind:'board-delivery', group:'fix', ref:id, taskId, text:taskId, at:Date.parse(heldAt) || 0,
+        ...(bot && bot.private !== true ? { botId } : {}), ...(kind === 'room' ? { roomId:scopeId } : {}) }]
+    })
+  }
   rt.onBoardTaskCommit = fn => {
     if (typeof fn !== 'function') return () => {}
     commitListeners.add(fn)
@@ -984,6 +1009,7 @@ export function install(rt) {
             || !store.confirmConsumedAdmission(held, proof)) {
             throw Object.assign(new Error('The original Bot input could not be confirmed. Check the existing delivery before retrying.'), { code:'bot/refused' })
           }
+          rt.inboxChanged?.()
           return { taskId:task.id, revision:task.revision, dispatchState:'accepted' }
         }
         if(['goal-task-edit','goal-history-title','goal-card-details','goal-card-comment','goal-image-remove'].includes(payload.type)) {
@@ -1211,5 +1237,8 @@ export function install(rt) {
   })
   rt.onHomeDrain(stop)
   ctx.effect(() => ctx.connection.fetch.register({ path: BOARD_UPLOAD_PATH, methods: ['POST'], requestBody: 'streaming', fetch: upload }), 'ds-bot: board streaming upload')
-  ctx.effect(() => stop, 'ds-bot: board service')
+  ctx.effect(() => {
+    const offInbox = rt.addInboxSource?.(deliveryInbox)
+    return () => { offInbox?.(); return stop() }
+  }, 'ds-bot: board service')
 }

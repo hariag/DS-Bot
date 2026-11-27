@@ -663,6 +663,15 @@ const releaseIsDone = release => {
     return start.operation_id
   }
   const restartReason = 'process restarted; delivery outcome unknown'
+  const uncertainDeliveries = db.prepare(`SELECT a.id, a.actor, a.task_id AS taskId,
+      json_extract(t.body,'$.scope') AS scope, (SELECT d.created_at FROM admission_decisions d
+        WHERE d.action_id=a.id ORDER BY d.rowid DESC LIMIT 1) AS heldAt
+    FROM actions a JOIN tasks t ON t.id=a.task_id
+    WHERE a.state='uncertain' AND a.revision=json_extract(t.body,'$.actionRevision')
+      AND json_extract(t.body,'$.archivedAt') IS NULL AND (
+        (a.kind='review' AND json_extract(t.body,'$.status')='reported' AND a.actor=json_extract(t.body,'$.reviewer')) OR
+        (a.kind='execute' AND json_extract(t.body,'$.status') IN ('ready','working') AND a.actor=json_extract(t.body,'$.owner')))
+    ORDER BY a.rowid`)
   const recoverySource = `SELECT a.id AS action_id, a.kind, i.admission_id, i.message_id, i.payload, i.payload_hash,
       i.task_revision AS intent_revision, received.sequence AS receipt_sequence,
       r.operation_id AS hold_operation, r.task_revision AS hold_revision, held.sequence AS hold_sequence,
@@ -873,6 +882,7 @@ const releaseIsDone = release => {
     },
     get(id) { return getTask(requireId(id, 'task id')) },
     list() { return getAll() },
+    listUncertainDeliveries() { return uncertainDeliveries.all() },
     listSchedule() {
       const releases = new Map(getAllReleases().map(release => [release.id, release]))
       return getAll().filter(task => !task.archivedAt && itemContextOpen(task) && (!task.releaseId || releases.get(task.releaseId)?.status === 'running')).sort((left, right) => {

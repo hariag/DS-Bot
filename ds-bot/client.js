@@ -18520,6 +18520,10 @@ var ZH = {
   "Preparing delivery": "正在准备派发",
   "Sent to Bot": "已发送给 Bot",
   "Delivery needs review": "派发结果待核对",
+  "Delivery for {task} needs review": "任务 {task} 的派发结果待核对。",
+  "Verify original delivery": "核对原派发",
+  "Unable to verify original delivery": "无法核对原派发。",
+  "The original Bot input could not be confirmed. Check the existing delivery before retrying.": "无法确认原消息已进入 Bot 会话。请核对原记录后再决定是否重派。",
   "The Bot message may or may not have reached its Session. Check the delivery before scheduling again.": "Bot 消息是否进入会话尚不确定。请先核对派发结果，再决定是否重新派发。",
   "This change is being worked as a separate task; the original stays unchanged.": "此变更作为独立任务推进；原任务保持不变。",
   "This change waits for the original task to complete. It has not been dispatched.": "此变更等待原任务完成，尚未派发。",
@@ -23984,8 +23988,8 @@ function teamActions({ call: call2, after, partFor, roster, ui, live, cards, hel
       ui.set((state) => state.inbox ? { ...state, inbox: false, inboxTarget: null } : state);
     },
     // A board request belongs to the same Session navigation that closes the inbox.
-    openInboxTaskBoard: (roomId) => {
-      const sessionId = partFor(roomId);
+    openInboxTaskBoard: (chatId) => {
+      const sessionId = partFor(chatId);
       ui.set((state) => state.inboxTarget === sessionId ? { ...state, inboxBoardTarget: sessionId } : state);
     },
     consumeInboxTaskBoard: (sessionId) => {
@@ -49623,6 +49627,7 @@ var TAGS = {
   paused: "Paused",
   "room-paused": "Paused",
   learning: "Proposal",
+  "board-delivery": "Delivery needs review",
   "connector-health": "Connector",
   "linear-sync": "Linear",
   "linear-watch": "Linear",
@@ -49633,6 +49638,8 @@ var inboxTag = (item) => TAGS[item?.kind] ?? "Alert";
 function inboxSummary(item, t2, nameOf2 = () => void 0) {
   const text = typeof item?.text === "string" ? item.text : "";
   switch (item?.kind) {
+    case "board-delivery":
+      return t2("Delivery for {task} needs review", { task: item.taskId ?? text });
     case "approval": {
       const what = text ? `${item.tool}: ${text}` : String(item.tool ?? "");
       return item.taskTitle ? `${item.taskTitle} · ${what}` : what;
@@ -49817,6 +49824,12 @@ function ItemBody({ item, bot, summary, roster, actions, hooks }) {
       return compact2("Connectors", () => {
         actions.closeInbox();
         actions.openConnectors();
+      });
+    case "board-delivery":
+      return compact2("Task board", () => {
+        const id = item.roomId ?? item.botId;
+        actions.openSession(id);
+        actions.openInboxTaskBoard(id);
       });
     case "linear-sync":
       return item.roomId ? compact2("Task board", () => {
@@ -69509,6 +69522,12 @@ function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand
     task.status === "cancelled" ? (0, import_react82.createElement)("p", { className: "bt-card-note" }, t("Cancelled cards are not scheduled and can be restored.")) : null,
     task.dispatchHold === "release-not-running" ? (0, import_react82.createElement)("p", { className: "bt-card-note", role: "status" }, t("Release not running")) : null,
     task.dispatchState === "uncertain" ? (0, import_react82.createElement)("p", { className: "bt-card-warning", role: "status" }, t("The Bot message may or may not have reached its Session. Check the delivery before scheduling again.")) : null,
+    commandOf(commands, "confirm-delivery") ? (0, import_react82.createElement)("button", {
+      type: "button",
+      className: "bt-btn bt-btn-block",
+      disabled,
+      onClick: () => void onCommand(task, { type: "confirm-delivery" })
+    }, t("Verify original delivery")) : null,
     canMove ? (0, import_react82.createElement)("label", { className: "bt-field" }, (0, import_react82.createElement)("span", null, t("Personal progress")), (0, import_react82.createElement)("select", { value: task.personalProgress, disabled, "aria-label": t("Move personal task"), onChange: (event) => void onCommand(task, { type: "personal-progress" }, { progress: event.target.value }) }, PERSONAL_COLUMNS.map(([id, label]) => (0, import_react82.createElement)("option", { key: id, value: id }, t(label))))) : null,
     canSchedule ? (0, import_react82.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary bt-btn-block", disabled, onClick: () => void onCommand(task, { type: "schedule" }) }, t("Schedule Bot")) : null,
     commandOf(commands, "unblock") ? (0, import_react82.createElement)("button", {
@@ -71369,6 +71388,27 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
     };
   }, [key, visible]);
   const run2 = async (task, command, value) => {
+    if (command.type === "confirm-delivery") {
+      if (fetching.current || pendingRef.current || !Number.isSafeInteger(task.revision)) return;
+      const epoch2 = generation.current, token = /* @__PURE__ */ Symbol("verify-delivery");
+      fetching.current = token;
+      setBusy(true);
+      setError("");
+      try {
+        await request("board-command", { scope, taskId: task.id, expectedRevision: task.revision, type: command.type });
+        await load(epoch2);
+        return "committed";
+      } catch (caught) {
+        await load(epoch2);
+        if (current2(epoch2)) setError(caught?.message ? t(caught.message) : t("Unable to verify original delivery"));
+      } finally {
+        if (fetching.current === token) {
+          fetching.current = null;
+          if (current2(epoch2)) setBusy(false);
+        }
+      }
+      return;
+    }
     if (fetching.current || pendingRef.current || !store.current || !window.crypto?.randomUUID) return;
     const operationId = (command.type.startsWith("goal-") ? "goal:" : "") + window.crypto.randomUUID();
     fetching.current = operationId;
@@ -73573,7 +73613,7 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
   const room2 = roster.roomsById[sessionId];
   const inboxBoard = useUi((state) => state.inboxTarget === sessionId && state.inboxBoardTarget === sessionId);
   (0, import_react83.useEffect)(() => {
-    if (!inboxBoard || !room2) return;
+    if (!inboxBoard || !(room2 || bot)) return;
     if (away) {
       selectView("chat");
       return;
@@ -73581,7 +73621,7 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
     setBoardReview(false);
     setBoardOpen(true);
     actions.consumeInboxTaskBoard(sessionId);
-  }, [inboxBoard, room2?.id, away, sessionId]);
+  }, [inboxBoard, room2?.id, bot?.id, away, sessionId]);
   const goal = room2?.goal;
   const goalCompose = useUi((state) => room2 !== void 0 && state.goalCompose === room2.id);
   const goalOpen = useUi((state) => room2 !== void 0 && state.goalOpen === room2.id);

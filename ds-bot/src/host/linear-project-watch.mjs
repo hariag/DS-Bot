@@ -379,6 +379,10 @@ function createProjectWatcher(rt, spec) {
     if (args.action === 'retry_outbound') {
       const opId = typeof args.operation_id === 'string' ? args.operation_id.trim() : ''
       if (!opId) return 'Supply operation_id to retry.'
+      const job = store.getOutbound(opId)
+      if (job?.comment_attempted_at && !job.comment_posted) {
+        return `Linear comment delivery for ${opId} is unconfirmed. Reconcile it on the original issue before sending again.`
+      }
       const retried = store.retryOutbound(opId)
       if (retried) queueMicrotask(() => { void ensureSync(store)?.drain() })
       notifyInbox()

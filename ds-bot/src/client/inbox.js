@@ -175,6 +175,12 @@ function ItemBody({ item, bot, summary, roster, actions, hooks }) {
     case 'connector-health':
     case 'linear-watch':
       return compact('Connectors', () => { actions.closeInbox(); actions.openConnectors() })
+    case 'board-delivery':
+      return compact('Task board', () => {
+        const id = item.roomId ?? item.botId
+        actions.openSession(id)
+        actions.openInboxTaskBoard(id)
+      })
     case 'linear-sync':
       return item.roomId
         ? compact('Task board', () => {

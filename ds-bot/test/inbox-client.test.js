@@ -134,6 +134,8 @@ test('integration alerts lead to settings or the appropriate board without actin
     { kind: 'connector-health', ref: 'notion', group: 'fix', botId: 'chief' },
     { kind: 'linear-watch', ref: 'project:watch-error', group: 'fix', botId: 'chief', roomId: 'desk' },
     { kind: 'linear-sync', ref: 'project:outbound-conflict', group: 'fix', botId: 'chief', roomId: 'desk' },
+    { kind: 'board-delivery', ref: 'original-action', group: 'fix', botId: 'chief', roomId: 'desk', taskId:'T-TEST' },
+    { kind: 'board-delivery', ref: 'personal-action', group: 'fix', botId: 'chief', taskId:'T-PERSONAL' },
     { kind: 'linear-pending', ref: 'project:unhandled-events', group: 'fix', botId: 'chief' },
     { kind: 'remote-watch', ref: 'owner/repo:main', group: 'fix', botId: 'chief' },
   ]))
@@ -160,9 +162,17 @@ test('integration alerts lead to settings or the appropriate board without actin
   assert.equal(ui.getSnapshot().inboxBoardTarget, 'desk')
   actions.consumeInboxTaskBoard('desk')
   assert.equal(ui.getSnapshot().inboxBoardTarget, null)
+  assert.match(textOf(rowOf(draw(), 'board-delivery:original-action')), /Delivery for T-TEST needs review/)
+  action('board-delivery:original-action', 'Task board')
+  assert.deepEqual(opened, ['desk', 'desk'])
+  assert.equal(ui.getSnapshot().inboxBoardTarget, 'desk')
+  actions.consumeInboxTaskBoard('desk')
+  action('board-delivery:personal-action', 'Task board')
+  assert.equal(ui.getSnapshot().inboxBoardTarget, 'chief')
+  actions.consumeInboxTaskBoard('chief')
   actions.openInbox()
   button(rowOf(draw(), 'linear-pending:project:unhandled-events'), 'Open in chat').props.onClick()
-  assert.deepEqual(opened, ['desk', 'chief'])
+  assert.deepEqual(opened, ['desk', 'desk', 'chief', 'chief'])
   assert.equal(ui.getSnapshot().inbox, false)
   action('remote-watch:owner/repo:main', 'Remote code changes')
   assert.equal(ui.getSnapshot().personalBoard, true)

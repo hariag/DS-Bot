@@ -59,6 +59,16 @@ test('the Bot header has no right sidebar button', () => {
   assert.equal(sideButton(header({})), null)
 })
 
+test('the Bot header accepts an inbox request for its personal task board', () => {
+  effects.length = 0
+  const consumed = []
+  header({ consumeInboxTaskBoard: id => consumed.push(id) }, { useUi:hook({ inboxTarget:'a', inboxBoardTarget:'a' }) })
+  for (const run of effects.splice(0)) {
+    try { run() } catch { /* DOM-only effects are outside this harness. */ }
+  }
+  assert.deepEqual(consumed, ['a'])
+})
+
 test('a Bot in another Conversation View can return to chat without changing its draft', () => {
   const state = { view: 'study-workspace', draft: 'Keep this draft', viewRequest: null }
   const views = [{ id: 'chat' }, { id: 'study-workspace' }]

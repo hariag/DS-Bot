@@ -18,7 +18,7 @@ import { stoppedBeforeSuccess } from '../process-stop.mjs'
 
 function fixture(t) {
   const home = privateTempDir(join(tmpdir(), 'dsbot-board-host-'))
-  const effects = [], routes = [], drains = [], deliveries = [], agents = new Map()
+  const effects = [], routes = [], drains = [], deliveries = [], inboxSources = new Set(), agents = new Map()
   const agentFor = id => {
     if (!agents.has(id)) {
       const session = { id }, agent = { id, session, followup:message => deliveries.push({ sessionId:id, message }), steer:message => deliveries.push({ sessionId:id, message }) }
@@ -31,6 +31,7 @@ function fixture(t) {
     ctx: { sessionController:{ resolveAgent:async id=>({agent:agentFor(id)}) }, sessions:{flush:async()=>{}},
       effect(fn) { const dispose = fn(); effects.push(dispose) }, connection: { fetch: { register(route) { routes.push(route); return () => {} } } } },
     onHomeDrain(fn) { drains.push(fn) }, async load() {}, readOnly() {}, requireHomeLock() {}, warn(...args) { console.log(...args) },
+    addInboxSource(fn) { inboxSources.add(fn); return () => inboxSources.delete(fn) },
     botOf:id=>Object.hasOwn(rt.state.bots,id)?{id,...rt.state.bots[id]}:undefined,
     selfOf:id=>id==='group-one'?'one':id==='group-two'?'two':id==='chat-one'?'one':id==='chat-two'?'two':undefined,
     roomOf:id=>Object.hasOwn(rt.state.rooms,id)?rt.state.rooms[id]:undefined,
@@ -53,7 +54,7 @@ function fixture(t) {
   installDelivery(rt)
   install(rt)
   t.after(async () => { for (const dispose of effects.reverse()) await dispose?.(); for (const drain of drains) await drain(); rmSync(home, { recursive: true, force: true }) })
-  return { rt, route: routes.find(route => route.path === BOARD_UPLOAD_PATH), home, deliveries }
+  return { rt, route: routes.find(route => route.path === BOARD_UPLOAD_PATH), home, deliveries, readInbox:() => [...inboxSources].flatMap(source => source()) }
 }
 const scope = { kind:'room', id:'group' }
 const create = { scope, operationId:'create-1', taskId:'t1', type:'create', value:{ title:'Task', owner:'one', reviewer:'two', acceptance:'Independent proof', dependencies:[] } }
@@ -326,7 +327,7 @@ test('a personal Bot task can be created and delivered to its private Session', 
 })
 
 test('the board owner can confirm a consumed review input without entering a verdict', async t => {
-  const { rt, home, deliveries } = fixture(t)
+  const { rt, home, deliveries, readInbox } = fixture(t)
   const card = await rt.boardCall('board-command', create)
   const ready = await rt.boardCall('board-command', { scope, taskId:card.id, type:'schedule', expectedRevision:card.revision, operationId:'confirm-delivery-schedule' })
   await settle(async () => deliveries.length === 1)
@@ -337,9 +338,15 @@ test('the board owner can confirm a consumed review input without entering a ver
   const working = await update('start', ready.revision)
   const reported = await update('report', working.revision, { kind:'personal', evidence:'Implemented the work', environment:'test' })
   await settle(async () => deliveries.length === 2)
+  assert.deepEqual(readInbox(), [])
 
   const db = openTaskStore(join(home, 'board-v1', 'tasks.sqlite'), { assertWriteLock() {} })
   try { assert.equal(db.holdInterruptedAdmissions(), 1) } finally { db.close() }
+  const [held] = readInbox()
+  assert.deepEqual(readInbox(), [{ kind:'board-delivery', group:'fix', ref:held.ref, taskId:card.id, text:card.id, at:held.at, roomId:'group', botId:'two' }])
+  assert.ok(held.at > 0)
+  const heldBoard = await rt.boardCall('board-list', { scope })
+  assert.ok(heldBoard.capabilities.commands[card.id].some(x => x.type === 'confirm-delivery'))
   let revision = 0, changed = true
   const read = async () => (await rt.boardCall('board-list', { scope })).tasks.find(item => item.id === card.id)
   const confirm = payload => rt.boardCall('board-command', { scope, taskId:card.id, type:'confirm-delivery', expectedRevision:reported.revision, ...payload })
@@ -359,6 +366,7 @@ test('the board owner can confirm a consumed review input without entering a ver
   await assert.rejects(confirm({ scope:{ kind:'personal', id:'user' } }), /task is unavailable/)
   await assert.rejects(confirm({}), /original Bot input could not be confirmed/)
   assert.equal((await read()).dispatchState, 'uncertain')
+  assert.deepEqual(readInbox(), [held])
   changed = false
   rt.chatOf = id => id === 'two' ? 'chat-two-current' : `chat-${id}`
   rt.state.bots.two.segments = [{ sessionId:'chat-two' }]
@@ -366,6 +374,7 @@ test('the board owner can confirm a consumed review input without entering a ver
   await assert.rejects(confirm({}), /original Bot input could not be confirmed/)
   rt.pastOwners.set('chat-two', { botId:'two' })
   assert.deepEqual(await confirm({}), { taskId:card.id, revision:reported.revision, dispatchState:'accepted' })
+  assert.deepEqual(readInbox(), [])
   const confirmed = await read()
   assert.equal(confirmed.status, 'reported')
   assert.equal(confirmed.revision, reported.revision)

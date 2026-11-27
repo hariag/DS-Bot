@@ -205,6 +205,7 @@ export function createLinearProjectSync({
       ? `outbound:${operationId}:${after.id}:rev${after.revision}:${mapping.toStatus}`
       : `outbound:${after.id}:rev${after.revision}:${mapping.toStatus}`
     const commentBody = postComments ? buildCommentBody(after, mapping.commentKind, operationId) : null
+    if (!mapping.targetState && !commentBody) return null
     return store.enqueueOutbound({
       operationId: opKey,
       issueId: binding.issueId,
@@ -247,23 +248,62 @@ export function createLinearProjectSync({
     if (!applies) return finish('superseded', 'The board task has moved beyond the queued transition')
   }
 
+  function commentConflict(job, reason, stateConfirmed) {
+    store.markOutboundConflict(job.operation_id, stateConfirmed ? `Linear state confirmed. ${reason}` : reason)
+    return 'conflict'
+  }
+
+  async function deliverComment(job) {
+    if (job.comment_posted) return 'posted'
+    if (!postComments || !nonempty(job.comment_body)) return 'disabled'
+    if (typeof linear?.addIssueComment !== 'function') return 'unavailable'
+    // Persist the attempt before crossing the network. A restart during the
+    // call or the receipt write must never submit that comment again.
+    if (!store.markOutboundCommentAttempt(job.operation_id)) return 'unconfirmed'
+    let result
+    try {
+      result = await linear.addIssueComment({ issueId: job.issue_id, body: job.comment_body })
+    } catch {
+      return 'unconfirmed'
+    }
+    if (result?.posted === true) return 'posted'
+    if (['write-disabled', 'invalid-comment', 'comment-tool-unavailable'].includes(result?.reason)) {
+      if (!store.clearUnsentOutboundComment(job.operation_id)) return 'unconfirmed'
+      return 'unavailable'
+    }
+    return 'unconfirmed'
+  }
+
   async function processJob(job) {
     assertActive()
+    if (job.comment_attempted_at && !job.comment_posted) {
+      return commentConflict(job, 'Linear comment delivery is unconfirmed. Reconcile the original issue before sending again.', Boolean(job.remote_after_at))
+    }
     const blocked = checkJob(job)
     if (blocked) return blocked
 
+    if (!job.target_linear_state && (!postComments || !nonempty(job.comment_body))) {
+      store.markOutboundSuperseded(job.operation_id, 'Linear comment synchronization is disabled for this operation')
+      return 'superseded'
+    }
+    if (typeof linear?.getIssueSnapshot !== 'function') {
+      store.markOutboundConflict(job.operation_id, 'Linear issue scope could not be verified')
+      return 'conflict'
+    }
+    const snapshot = await linear.getIssueSnapshot({ issueId: job.issue_id })
+    if (snapshot.archivedAt) {
+      store.markOutboundConflict(job.operation_id, 'Bound Linear issue has been archived')
+      return 'conflict'
+    }
+    const obsolete = checkJob(job)
+    if (obsolete) return obsolete
+
+    let readback
     if (job.target_linear_state) {
-      if (typeof linear?.getIssueSnapshot !== 'function' || typeof linear?.updateIssueState !== 'function') {
+      if (typeof linear?.updateIssueState !== 'function') {
         store.markOutboundConflict(job.operation_id, 'Linear write API unavailable')
         return 'conflict'
       }
-      const snapshot = await linear.getIssueSnapshot({ issueId: job.issue_id })
-      if (snapshot.archivedAt) {
-        store.markOutboundConflict(job.operation_id, 'Bound Linear issue has been archived')
-        return 'conflict'
-      }
-      const obsolete = checkJob(job)
-      if (obsolete) return obsolete
       const attemptedMs = now()
       let finalState = snapshot.state
       let finalUpdatedAt = snapshot.updatedAt
@@ -297,29 +337,25 @@ export function createLinearProjectSync({
         })
       }
 
-      const verifiedMs = now()
-      let commentPosted = Boolean(job.comment_posted)
-      if (postComments && !commentPosted && nonempty(job.comment_body) && typeof linear.addIssueComment === 'function') {
-        const commentOutcome = await linear.addIssueComment({ issueId: job.issue_id, body: job.comment_body })
-        commentPosted = commentOutcome?.posted === true
-      }
-
-      store.markOutboundVerified(job.operation_id, {
-        verifiedAt: iso(verifiedMs),
+      readback = {
         remoteAfterAt: finalUpdatedAt,
         stateStartedAt: finalStartedAt,
         targetLinearState: finalState.name,
-        commentPosted,
-      })
-      return 'verified'
+      }
+      if (!store.recordOutboundStateReadback(job.operation_id, readback)) throw new Error('Linear state readback could not be stored')
     }
 
-    let commentPosted = Boolean(job.comment_posted)
-    if (postComments && !commentPosted && nonempty(job.comment_body) && typeof linear?.addIssueComment === 'function') {
-      const commentOutcome = await linear.addIssueComment({ issueId: job.issue_id, body: job.comment_body })
-      commentPosted = commentOutcome?.posted === true
+    const comment = await deliverComment(job)
+    if (comment === 'unconfirmed') {
+      return commentConflict(job, 'Linear comment delivery is unconfirmed. Reconcile the original issue before sending again.', readback !== undefined)
     }
-    store.markOutboundVerified(job.operation_id, { verifiedAt: iso(now()), commentPosted })
+    if (comment === 'unavailable' && !readback) return commentConflict(job, 'Linear comment tool is unavailable.', false)
+    store.markOutboundVerified(job.operation_id, {
+      ...readback,
+      verifiedAt: iso(now()),
+      commentPosted: comment === 'posted',
+      note: comment === 'unavailable' ? 'Linear comment tool is unavailable.' : null,
+    })
     return 'verified'
   }
 

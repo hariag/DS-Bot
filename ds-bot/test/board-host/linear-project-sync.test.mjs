@@ -439,6 +439,7 @@ test('outbound sync degrades gracefully without comment tools, syncs block/cance
   assert.equal(monitor.stats().outbound.verified, 1)
   assert.equal(monitor.stats().outbound.pending, 0)
   assert.equal(remote.comments.length, 0)
+  assert.equal(monitor.listOutbound()[0].last_error, 'Linear comment tool is unavailable.')
 
   // Cancel syncs to Canceled
   const prev = store.get('T-BUG-0011')
@@ -446,6 +447,85 @@ test('outbound sync degrades gracefully without comment tools, syncs block/cance
   sync2.handleBoardCommit([{ before: prev, after: cancelled, operationId: 'op-cancel', actor: 'user' }])
   await sync2.drain()
   assert.equal(remote.issues.get(issueUuid).status, 'Canceled')
+})
+
+test('comment-only transitions check the bound issue before posting', async t => {
+  for (const reason of ['archived', 'project moved']) {
+    await t.test(reason, async t => {
+      const remote = createFakeLinearMcpServer()
+      const issueId = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbb3'
+      remote.addIssue({ uuid: issueId, id: 'HAR-12' })
+      const store = openLinearProjectMonitor({ path: ':memory:', projectId: PROJECT_ID, linear: remote.api, now: remote.now })
+      t.after(() => store.close())
+      const before = { id: 'T-BUG-0012', revision: 5, scope: `room:${ROOM_ID}`, status: 'working' }
+      const after = { ...before, revision: 6, blocked: { reason: 'awaiting dependency' } }
+      store.bindIssue({ issueId, identifier: 'HAR-12', taskId: after.id, roomId: ROOM_ID })
+      if (reason === 'archived') remote.issues.get(issueId).archivedAt = new Date(remote.now()).toISOString()
+      else remote.issues.get(issueId).projectId = PROJECT_2
+      const sync = createLinearProjectSync({ store, linear: remote.api, boardRoomId: ROOM_ID, getBoardTask: () => after, now: remote.now })
+      sync.handleBoardCommit([{ before, after, operationId: 'op-block' }])
+      await sync.drain()
+      const [job] = store.listOutbound()
+      assert.equal(job.status, 'conflict')
+      assert.match(job.last_error, reason === 'archived' ? /archived/ : /scope mismatch/)
+      assert.equal(job.comment_attempted_at, null)
+      assert.deepEqual(remote.writeCalls, [])
+    })
+  }
+})
+
+test('lost Linear comment receipt remains a conflict with state proof and is not resent on restart', async t => {
+  for (const commentOnly of [true, false]) {
+    await t.test(commentOnly ? 'comment only' : 'state and comment', async t => {
+      const dir = mkdtempSync(join(tmpdir(), 'linear-comment-receipt-'))
+      const path = join(dir, 'monitor.sqlite')
+      t.after(() => rmSync(dir, { recursive: true, force: true }))
+      const remote = createFakeLinearMcpServer()
+      const issueId = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbb3'
+      remote.addIssue({ uuid: issueId, id: 'HAR-12' })
+      let store = openLinearProjectMonitor({ path, projectId: PROJECT_ID, linear: remote.api, now: remote.now })
+      t.after(() => store.close())
+      const before = { id: 'T-BUG-0012', scope: `room:${ROOM_ID}`, revision: 5, status: commentOnly ? 'working' : 'proposed' }
+      const after = { ...before, status: 'working', revision: 6, ...(commentOnly ? { blocked: { reason: 'awaiting dependency' } } : {}) }
+      store.bindIssue({ issueId, identifier: 'HAR-12', taskId: after.id, roomId: ROOM_ID })
+      const linear = { ...remote.api, async addIssueComment(args) {
+        await remote.api.addIssueComment(args)
+        throw new Error('connection closed before comment receipt')
+      } }
+      const makeSync = api => createLinearProjectSync({ store, linear: api, boardRoomId: ROOM_ID, getBoardTask: () => after, now: remote.now })
+      const sync = makeSync(linear)
+      sync.handleBoardCommit([{ before, after, operationId: 'op-change' }])
+      await sync.drain()
+      const [job] = store.listOutbound()
+      assert.equal(job.status, 'conflict')
+      assert.match(job.last_error, /comment delivery is unconfirmed/)
+      assert.equal(job.comment_posted, 0)
+      assert.ok(job.comment_attempted_at)
+      assert.equal(Boolean(job.remote_after_at), !commentOnly)
+      assert.equal(remote.comments.length, 1)
+      assert.equal(remote.issues.get(issueId).status, commentOnly ? 'Todo' : 'In Progress')
+      await store.close()
+
+      store = openLinearProjectMonitor({ path, projectId: PROJECT_ID, linear: remote.api, now: remote.now })
+      assert.equal(store.retryOutbound(job.operation_id), false)
+      await makeSync(remote.api).drain()
+      assert.equal(remote.comments.length, 1)
+      assert.equal(store.getOutbound(job.operation_id).status, 'conflict')
+    })
+  }
+})
+
+test('a comment attempt left pending by an interrupted process is never submitted again', async t => {
+  const remote = createFakeLinearMcpServer()
+  const store = openLinearProjectMonitor({ path: ':memory:', projectId: PROJECT_ID, linear: remote.api, now: remote.now })
+  t.after(() => store.close())
+  const issueId = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbb3'
+  store.enqueueOutbound({ operationId: 'old-comment-attempt', issueId, identifier: 'HAR-12', taskId: 'T-BUG-0012', taskRevision: 6, toStatus: 'blocked', commentBody: 'follow up' })
+  assert.equal(store.markOutboundCommentAttempt('old-comment-attempt'), true)
+  await createLinearProjectSync({ store, linear: remote.api, boardRoomId: ROOM_ID, now: remote.now }).drain()
+  assert.equal(store.getOutbound('old-comment-attempt').status, 'conflict')
+  assert.deepEqual(remote.writeCalls, [])
+  assert.deepEqual(remote.readCalls, [])
 })
 
 test('board journal starts at cutover, preserves offline commits, and never replays an older state over a newer one', async t => {

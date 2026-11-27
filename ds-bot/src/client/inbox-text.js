@@ -9,6 +9,7 @@ const TAGS = {
   approval: 'Approval', question: 'Question', view: 'Form', secret: 'Secret', connector: 'Connector', mail: 'Email',
   computer: 'Computer', handoff: 'Hand-off', goal: 'Goal', blocked: 'Stopped', model: 'No model', paused: 'Paused',
   'room-paused': 'Paused', learning: 'Proposal',
+  'board-delivery': 'Delivery needs review',
   'connector-health': 'Connector', 'linear-sync': 'Linear', 'linear-watch': 'Linear', 'linear-pending': 'Linear', 'remote-watch': 'GitHub',
 }
 
@@ -25,6 +26,7 @@ export const inboxTag = item => TAGS[item?.kind] ?? 'Alert'
 export function inboxSummary(item, t, nameOf = () => undefined) {
   const text = typeof item?.text === 'string' ? item.text : ''
   switch (item?.kind) {
+    case 'board-delivery': return t('Delivery for {task} needs review', { task: item.taskId ?? text })
     case 'approval': {
       const what = text ? `${item.tool}: ${text}` : String(item.tool ?? '')
       return item.taskTitle ? `${item.taskTitle} · ${what}` : what

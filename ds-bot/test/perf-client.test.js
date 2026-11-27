@@ -12,6 +12,7 @@ import { installMotionRest } from '../src/client/motion-rest.js'
 import { openCapture } from '../src/client/speech.js'
 import { createAppViewProxy, createBotBrowsers } from '../src/client/bot-browsers.js'
 import { installAgentForks } from '../src/client/agent-fork.js'
+import { VISIBLE_POLL_MS } from '../src/client/polling.js'
 import { teamActions } from '../src/client/team-actions.js'
 import { createSource } from '../src/client/sources.js'
 import { characterMarkup, markupCache, maskCache, maskOf } from '../src/client/characters.js'
@@ -1147,7 +1148,7 @@ test('index.js computer-cursor-wait 2s error backoff is NOT broken by unrelated 
   // must NOT cancel the 2000ms backoff or trigger an immediate retry!
   stateRev = 2
   botName = 'Bot 1 renamed'
-  const statePoll = [...app.timers.entries()].find(([, t]) => t.ms === 1500)
+  const statePoll = [...app.timers.entries()].find(([, t]) => t.ms === VISIBLE_POLL_MS)
   assert.ok(statePoll)
   app.timers.delete(statePoll[0])
   statePoll[1].fn()

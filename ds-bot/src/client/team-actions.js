@@ -98,8 +98,8 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     openInbox: () => { ui.set(state => ({ ...state, inbox: true, inboxTarget: null, inboxBoardTarget: null, newChat: null, newChatSection: null, exchange: null, menu: null, palette: null, groupSearch: null, leftDrawer: false })) },
     closeInbox: () => { ui.set(state => (state.inbox ? { ...state, inbox: false, inboxTarget: null } : state)) },
     // A board request belongs to the same Session navigation that closes the inbox.
-    openInboxTaskBoard: (roomId) => {
-      const sessionId = partFor(roomId)
+    openInboxTaskBoard: (chatId) => {
+      const sessionId = partFor(chatId)
       ui.set(state => (state.inboxTarget === sessionId ? { ...state, inboxBoardTarget: sessionId } : state))
     },
     consumeInboxTaskBoard: (sessionId) => {

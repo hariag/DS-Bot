@@ -1551,6 +1551,8 @@ function StatusBlock({ task, commands, canMove, canSchedule, disabled, onCommand
     task.status === 'cancelled' ? h('p', { className: 'bt-card-note' }, t('Cancelled cards are not scheduled and can be restored.')) : null,
     task.dispatchHold === 'release-not-running' ? h('p', { className: 'bt-card-note', role: 'status' }, t('Release not running')) : null,
     task.dispatchState === 'uncertain' ? h('p', { className: 'bt-card-warning', role: 'status' }, t('The Bot message may or may not have reached its Session. Check the delivery before scheduling again.')) : null,
+    commandOf(commands, 'confirm-delivery') ? h('button', { type:'button', className:'bt-btn bt-btn-block', disabled,
+      onClick: () => void onCommand(task, { type:'confirm-delivery' }) }, t('Verify original delivery')) : null,
     canMove ? h('label', { className: 'bt-field' }, h('span', null, t('Personal progress')), h('select', { value: task.personalProgress, disabled, 'aria-label': t('Move personal task'), onChange: event => void onCommand(task, { type: 'personal-progress' }, { progress: event.target.value }) }, PERSONAL_COLUMNS.map(([id, label]) => h('option', { key: id, value: id }, t(label))))) : null,
     canSchedule ? h('button', { type: 'button', className: 'bt-btn bt-btn-primary bt-btn-block', disabled, onClick: () => void onCommand(task, { type: 'schedule' }) }, t('Schedule Bot')) : null,
     commandOf(commands, 'unblock') ? h('button', { type: 'button', className: 'bt-btn bt-btn-block', disabled,
@@ -2628,6 +2630,23 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
   }, [key, visible])
 
   const run = async (task, command, value) => {
+    if (command.type === 'confirm-delivery') {
+      if (fetching.current || pendingRef.current || !Number.isSafeInteger(task.revision)) return
+      const epoch = generation.current, token = Symbol('verify-delivery')
+      fetching.current = token
+      setBusy(true); setError('')
+      try {
+        await request('board-command', { scope, taskId:task.id, expectedRevision:task.revision, type:command.type })
+        await load(epoch)
+        return 'committed'
+      } catch (caught) {
+        await load(epoch)
+        if (current(epoch)) setError(caught?.message ? t(caught.message) : t('Unable to verify original delivery'))
+      } finally {
+        if (fetching.current === token) { fetching.current = null; if (current(epoch)) setBusy(false) }
+      }
+      return
+    }
     if (fetching.current || pendingRef.current || !store.current || !window.crypto?.randomUUID) return
     const operationId = (command.type.startsWith('goal-') ? 'goal:' : '') + window.crypto.randomUUID()
     fetching.current = operationId

@@ -51,10 +51,12 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
     const releaseById = new Map(releases.map(release => [release.id, release]))
     const commands = Object.fromEntries(board.tasks.map(task => {
       const source = byId.get(task.id)
+      let canVerifyDelivery = false
       if (!task.shared && !task.legacy && ['ready','working','reported'].includes(source?.status)) {
         const kind = source.status === 'reported' ? 'review' : 'execute'
         const action = (store.listActions?.(source.id) ?? []).find(item => item.kind === kind && item.revision === source.actionRevision)
         if (action && liveAction(action)) task.dispatchState = action.state
+        canVerifyDelivery = action?.state === 'uncertain' && (source.status === 'ready' || source.status === 'reported')
         // Item dispatch also waits on its parent card's release. Personal views
         // can include room tasks even though they list only personal releases.
         const releaseId = source.releaseId ?? byId.get(source.parentTaskId)?.releaseId
@@ -87,6 +89,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
         ...(scope.kind === 'room' && source?.parentTaskId && !source.archivedAt && !source.authority && ['draft','proposed'].includes(source.status) ? [{type:'move-item',label:'Move to card'}] : []),
         ...(editableReleases.length && !source?.parentTaskId && !source?.change && !['done','cancelled'].includes(source?.status) ? [{type:'release-assign',label:'Assign release'}] : []),
         ...(canSchedule ? [{type:'schedule',label:'Schedule Bot'}] : []),
+        ...(canVerifyDelivery ? [{type:'confirm-delivery',label:'Verify original delivery'}] : []),
         ...(canClearUserBlock(source) ? [{type:'unblock',label:'Clear blocker'}] : []),
         ...(canUnschedule ? [{type:'unschedule',label:'Unschedule'}] : []), {type:'card-comment',label:'Add comment'},{type:'participants',label:'Manage participants'},
         ...(Array.isArray(source?.comments) && source.comments.length ? [{type:'card-comment-edit',label:'Edit comment'},{type:'card-comment-delete',label:'Delete comment'}] : []),

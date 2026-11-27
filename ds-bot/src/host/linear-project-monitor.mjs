@@ -103,7 +103,7 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
       target_linear_state TEXT, expected_linear_state_id TEXT, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
       next_retry_ms INTEGER NOT NULL DEFAULT 0, attempted_at TEXT, verified_at TEXT,
       remote_before_at TEXT, remote_after_at TEXT, state_started_at TEXT,
-      last_error TEXT, comment_body TEXT, comment_posted INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT, comment_body TEXT, comment_posted INTEGER NOT NULL DEFAULT 0, comment_attempted_at TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS linear_outbound_echo (
@@ -127,6 +127,7 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
   if (!issueCols.has('content_meta')) db.exec('ALTER TABLE monitor_issues ADD COLUMN content_meta TEXT')
   const outboundCols = new Set(db.prepare('PRAGMA table_info(linear_outbound_sync)').all().map(row => row.name))
   if (!outboundCols.has('expected_linear_state_id')) db.exec('ALTER TABLE linear_outbound_sync ADD COLUMN expected_linear_state_id TEXT')
+  if (!outboundCols.has('comment_attempted_at')) db.exec('ALTER TABLE linear_outbound_sync ADD COLUMN comment_attempted_at TEXT')
 
   db.prepare('INSERT OR IGNORE INTO monitor_checkpoint(id, project_id) VALUES (1, ?)').run(projectId)
   const readCheckpoint = db.prepare('SELECT project_id, started_ms, until_ms FROM monitor_checkpoint WHERE id = 1')
@@ -376,14 +377,19 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
   const selectNextOutbound = db.prepare("SELECT * FROM linear_outbound_sync WHERE status IN ('pending', 'retry', 'attempted') AND next_retry_ms <= ? ORDER BY created_at ASC, rowid ASC LIMIT 1")
   const selectOutboundList = db.prepare('SELECT * FROM linear_outbound_sync ORDER BY rowid DESC LIMIT ?')
   const updateOutboundAttempt = db.prepare("UPDATE linear_outbound_sync SET status = 'attempted', attempts = attempts + 1, attempted_at = ?, remote_before_at = COALESCE(remote_before_at, ?), updated_at = ? WHERE operation_id = ?")
-  const updateOutboundVerified = db.prepare("UPDATE linear_outbound_sync SET status = 'verified', verified_at = ?, remote_after_at = ?, state_started_at = ?, target_linear_state = COALESCE(?, target_linear_state), comment_posted = CASE WHEN ? THEN 1 ELSE comment_posted END, last_error = NULL, updated_at = ? WHERE operation_id = ?")
+  const updateOutboundVerified = db.prepare("UPDATE linear_outbound_sync SET status = 'verified', verified_at = ?, remote_after_at = ?, state_started_at = ?, target_linear_state = COALESCE(?, target_linear_state), comment_posted = CASE WHEN ? THEN 1 ELSE comment_posted END, last_error = ?, updated_at = ? WHERE operation_id = ?")
+  const updateOutboundStateReadback = db.prepare('UPDATE linear_outbound_sync SET remote_after_at = ?, state_started_at = ?, updated_at = ? WHERE operation_id = ?')
+  const beginOutboundComment = db.prepare(`UPDATE linear_outbound_sync SET comment_attempted_at = ?, updated_at = ?
+    WHERE operation_id = ? AND status IN ('pending', 'retry', 'attempted') AND comment_attempted_at IS NULL AND comment_posted = 0`)
+  const clearUnsentComment = db.prepare('UPDATE linear_outbound_sync SET comment_attempted_at = NULL, updated_at = ? WHERE operation_id = ? AND comment_posted = 0')
   const updateOutboundComment = db.prepare('UPDATE linear_outbound_sync SET comment_posted = ?, updated_at = ? WHERE operation_id = ?')
   const updateOutboundRetry = db.prepare("UPDATE linear_outbound_sync SET status = 'retry', next_retry_ms = ?, last_error = ?, updated_at = ? WHERE operation_id = ?")
   const updateOutboundConflict = db.prepare("UPDATE linear_outbound_sync SET status = 'conflict', last_error = ?, updated_at = ? WHERE operation_id = ?")
   const updateOutboundSuperseded = db.prepare("UPDATE linear_outbound_sync SET status = 'superseded', last_error = ?, updated_at = ? WHERE operation_id = ?")
   const reactivateOutbound = db.prepare(`UPDATE linear_outbound_sync SET status = 'pending', next_retry_ms = 0, last_error = NULL,
     expected_linear_state_id = COALESCE((SELECT state_id FROM monitor_issues WHERE id = linear_outbound_sync.issue_id), expected_linear_state_id),
-    updated_at = ? WHERE operation_id = ? AND status IN ('conflict', 'retry')`)
+    updated_at = ? WHERE operation_id = ? AND status IN ('conflict', 'retry')
+      AND (comment_attempted_at IS NULL OR comment_posted = 1)`)
   const countBindings = db.prepare('SELECT count(*) AS n FROM linear_issue_bindings')
   const countSuppressed = db.prepare('SELECT count(*) AS n FROM monitor_suppressed_echoes')
   const countOutboundByStatus = db.prepare('SELECT status, count(*) AS n FROM linear_outbound_sync GROUP BY status')
@@ -499,8 +505,18 @@ export function openLinearProjectMonitor({ path, projectId, linear, now = Date.n
     markOutboundAttempt(operationId, attemptedAt = iso(now()), remoteBeforeAt = null) {
       return transaction(() => updateOutboundAttempt.run(attemptedAt, remoteBeforeAt, iso(now()), operationId).changes > 0)
     },
-    markOutboundVerified(operationId, { verifiedAt = iso(now()), remoteAfterAt = null, stateStartedAt = null, targetLinearState = null, commentPosted = false } = {}) {
-      return transaction(() => updateOutboundVerified.run(verifiedAt, remoteAfterAt, stateStartedAt, targetLinearState, commentPosted ? 1 : 0, iso(now()), operationId).changes > 0)
+    recordOutboundStateReadback(operationId, { remoteAfterAt, stateStartedAt = null }) {
+      return transaction(() => updateOutboundStateReadback.run(remoteAfterAt, stateStartedAt, iso(now()), operationId).changes > 0)
+    },
+    markOutboundCommentAttempt(operationId) {
+      const at = iso(now())
+      return transaction(() => beginOutboundComment.run(at, at, operationId).changes > 0)
+    },
+    clearUnsentOutboundComment(operationId) {
+      return transaction(() => clearUnsentComment.run(iso(now()), operationId).changes > 0)
+    },
+    markOutboundVerified(operationId, { verifiedAt = iso(now()), remoteAfterAt = null, stateStartedAt = null, targetLinearState = null, commentPosted = false, note = null } = {}) {
+      return transaction(() => updateOutboundVerified.run(verifiedAt, remoteAfterAt, stateStartedAt, targetLinearState, commentPosted ? 1 : 0, note, iso(now()), operationId).changes > 0)
     },
     markOutboundCommentPosted: (operationId, posted = true) => transaction(() => updateOutboundComment.run(posted ? 1 : 0, iso(now()), operationId).changes > 0),
     markOutboundRetry: (operationId, nextRetryMs, reason) => transaction(() => updateOutboundRetry.run(nextRetryMs, String(reason || 'retry').slice(0, 400), iso(now()), operationId).changes > 0),
