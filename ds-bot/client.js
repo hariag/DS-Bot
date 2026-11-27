@@ -18846,6 +18846,15 @@ var ZH = {
   "Board": "看板",
   "Sender": "发送者",
   "My task board": "我的任务看板",
+  "Back to my task board": "返回我的任务看板",
+  "Deleted group boards": "已删除群聊的看板",
+  "Deleted group task board": "已删除群聊的任务看板",
+  "{count} open cards": "{count} 张未完成任务卡",
+  "Recover task to a group": "将任务恢复到群聊",
+  "Destination group": "目标群聊",
+  "Move task to group": "将任务转入群聊",
+  "Remove from release": "从版本中移除任务",
+  "Task moved to the destination group": "任务已转入目标群聊",
   "Group task board": "群任务看板",
   "Personal task board": "个人任务看板",
   Preparing: "待准备",
@@ -70092,7 +70101,34 @@ function EditHistoryTitle({ task, disabled, onEdit }) {
     )
   );
 }
-function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadEnabled, uncertain, onCommand, onUpload, request, onClose, onOpenRelated, onCreateItem, focusReturn, boardRef, pending, busy, error, onCheck, onCancel, cancelBusy, onDuplicate }) {
+function RecoverTask({ task, targets, disabled, onCommand }) {
+  const [roomId, setRoomId] = (0, import_react82.useState)("");
+  const selected = targets.some((target) => target.id === roomId) ? roomId : "";
+  return (0, import_react82.createElement)(
+    SideSection,
+    { title: t("Recover task to a group") },
+    (0, import_react82.createElement)(
+      "form",
+      { onSubmit: (event) => {
+        event.preventDefault();
+        if (selected && !disabled) void onCommand(task, { type: "recover-to-room" }, { roomId: selected });
+      } },
+      (0, import_react82.createElement)(
+        "label",
+        { className: "bt-field" },
+        (0, import_react82.createElement)("span", null, t("Destination group")),
+        (0, import_react82.createElement)(
+          "select",
+          { value: selected, disabled, onChange: (event) => setRoomId(event.target.value) },
+          (0, import_react82.createElement)("option", { value: "" }, t("Choose a group")),
+          targets.map((target) => (0, import_react82.createElement)("option", { value: target.id, key: target.id }, target.name || target.id))
+        )
+      ),
+      (0, import_react82.createElement)("button", { type: "submit", className: "bt-btn bt-btn-block", disabled: disabled || !selected }, t("Move task to group"))
+    )
+  );
+}
+function TaskCardDialog({ scope, task, tasks, commands, actors, targets, retired, recoveryTargets, uploadEnabled, uncertain, onCommand, onUpload, request, onClose, onOpenRelated, onCreateItem, focusReturn, boardRef, pending, busy, error, onCheck, onCancel, cancelBusy, onDuplicate }) {
   const modal = (0, import_react82.useRef)(null);
   const lightboxRef = (0, import_react82.useRef)(null);
   const confirmationRef = (0, import_react82.useRef)(null);
@@ -70121,6 +70157,7 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
   const canMove = commandOf(commands, "personal-progress") && PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress);
   const canArchive = commandOf(commands, "archive");
   const canUnarchive = commandOf(commands, "unarchive");
+  const canRecover = commandOf(commands, "recover-to-room") && Array.isArray(recoveryTargets) && recoveryTargets.length > 0;
   const canGoalEdit = commandOf(commands, "goal-task-edit");
   const canHistoryTitle = commandOf(commands, "goal-history-title");
   const canRename = !legacy && !task.shared && canEdit && ["proposed", "waiting", "ready"].includes(task.status) && !uncertain;
@@ -70385,6 +70422,17 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
           "aside",
           { className: "bt-card-side" },
           (0, import_react82.createElement)(StatusBlock, { task, commands, canMove, canSchedule, disabled: uncertain || busy, onCommand }),
+          retired && task.releaseId && commandOf(commands, "release-assign") ? (0, import_react82.createElement)(
+            SideSection,
+            { title: t("Release") },
+            (0, import_react82.createElement)("button", {
+              type: "button",
+              className: "bt-btn bt-btn-block",
+              disabled: uncertain || busy || !!pending,
+              onClick: () => void onCommand(task, { type: "release-assign" }, { releaseId: null })
+            }, t("Remove from release"))
+          ) : null,
+          canRecover ? (0, import_react82.createElement)(RecoverTask, { task, targets: recoveryTargets, disabled: uncertain || busy || !!pending, onCommand }) : null,
           (0, import_react82.createElement)(PeopleBlock, { task, actors, canEdit, disabled: uncertain || busy, onAssign: assignPeople }),
           (0, import_react82.createElement)(ParticipantsBlock, { task, actors, commands, disabled: uncertain || busy, onCommand }),
           !legacy ? (0, import_react82.createElement)(CardTextEditor, { task, field: "stage", editable: canDetails, disabled: uncertain || busy, onSave: detailsSave }) : null,
@@ -70394,7 +70442,7 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
           (0, import_react82.createElement)(DependenciesBlock, { task, tasks }),
           (0, import_react82.createElement)(FactsBlock, { task }),
           (0, import_react82.createElement)("div", { className: "bt-card-side-block" }, (0, import_react82.createElement)(ShareTask, { task, commands, targets, disabled: uncertain || busy, onCommand })),
-          !canEdit && !canDetails && !canComment && !canUpload && !canShare && !canUnshare && !canMove && !canSchedule && !canGoalEdit && !canHistoryTitle ? (0, import_react82.createElement)("p", { className: "bt-card-note" }, t("Read only")) : null,
+          !canEdit && !canDetails && !canComment && !canUpload && !canShare && !canUnshare && !canMove && !canSchedule && !canGoalEdit && !canHistoryTitle && !canRecover ? (0, import_react82.createElement)("p", { className: "bt-card-note" }, t("Read only")) : null,
           (0, import_react82.createElement)(
             "details",
             { className: "bt-card-more" },
@@ -71047,21 +71095,26 @@ function TaskBoard(props) {
   const [destination, setDestination] = (0, import_react82.useState)(null);
   const sourceKey = props.scope.kind + ":" + props.scope.id;
   const route = destination?.source === sourceKey ? destination : null;
-  if (route?.roomId) return (0, import_react82.createElement)(ScopedTaskBoard, {
-    key: route.roomId,
-    scope: { kind: "room", id: route.roomId },
-    title: route.name,
-    request: props.request,
-    initialCardId: route.taskId,
-    close: () => setDestination({ source: sourceKey })
-  });
+  if (route?.roomId) {
+    const close = () => setDestination(route.retired ? null : { source: sourceKey });
+    return (0, import_react82.createElement)(ScopedTaskBoard, {
+      key: route.roomId,
+      scope: { kind: "room", id: route.roomId },
+      title: route.name,
+      request: props.request,
+      initialCardId: route.taskId,
+      close,
+      backToPersonal: route.retired === true
+    });
+  }
   return (0, import_react82.createElement)(ScopedTaskBoard, {
     ...props,
     initialProject: !!route,
-    visitSource: (roomId, name, taskId) => setDestination({ source: sourceKey, roomId, name, taskId })
+    visitSource: (roomId, name, taskId) => setDestination({ source: sourceKey, roomId, name, taskId }),
+    visitRetired: (roomId) => setDestination({ source: sourceKey, roomId, name: t("Deleted group task board"), retired: true })
   });
 }
-function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveReview, refreshGoal, currentRoomGoal, initialReview = false, initialCardId, initialProject, visitSource }) {
+function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveReview, refreshGoal, currentRoomGoal, initialReview = false, initialCardId, initialProject, visitSource, visitRetired, backToPersonal = false }) {
   const [visible, setVisible] = (0, import_react82.useState)(true);
   const [snapshot, setData] = (0, import_react82.useState)(null);
   const [error, setError] = (0, import_react82.useState)("");
@@ -71135,6 +71188,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
   const store = (0, import_react82.useRef)(null);
   const key = scope.kind + ":" + scope.id;
   const data = snapshot?.key === key ? snapshot.value : null;
+  const retired = data?.retired === true;
   const notify = (text, action) => {
     clearTimeout(noticeTimer.current);
     setNotice(text);
@@ -71421,6 +71475,10 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
         ...value !== void 0 ? { value } : {}
       });
       const state = await check(operationId, epoch);
+      if (state === "committed" && command.type === "recover-to-room") {
+        setSelectedCard((selected2) => selected2?.id === task.id ? null : selected2);
+        notify(t("Task moved to the destination group"));
+      }
       const inverse = { cancel: "restore", submit: "cancel", archive: "unarchive", schedule: "unschedule" }[command.type];
       if (state === "committed" && inverse) {
         notify(t("Card updated"), async () => {
@@ -71880,9 +71938,9 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
   });
   const releaseById = new Map(releases.map((release) => [release.id, release]));
   const releaseRoles = Array.isArray(data?.releaseRoles) ? data.releaseRoles.filter((role) => role && typeof role.key === "string" && role.key) : null;
-  const releaseTeamSupported = scope.kind === "room" && !!releaseRoles?.length;
+  const releaseTeamSupported = scope.kind === "room" && !retired && !!releaseRoles?.length;
   const proposals = Array.isArray(data?.proposals) ? data.proposals : [];
-  const proposalSupported = Array.isArray(data?.proposals);
+  const proposalSupported = !retired && Array.isArray(data?.proposals);
   const chooseView = (next) => {
     setView(next);
     setReleaseFocus("");
@@ -72110,6 +72168,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
     return matched && memberOk && labelOk && dueOk && typeOk;
   });
   const personal = scope.kind === "personal" && scope.id === "user";
+  const retiredBoards = personal && Array.isArray(data?.retiredBoards) ? data.retiredBoards.filter((board) => textValue(board?.id)) : [];
   const taskById = new Map(allTasks.map((task) => [task.id, task]));
   const matchedIds = new Set(filtered.map((task) => task.id));
   const activeRoots = /* @__PURE__ */ new Set(), archivedRoots = /* @__PURE__ */ new Set();
@@ -72154,6 +72213,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
   const hasFilters = !!(search || memberFilter || labelFilter || dueFilter || typeFilter);
   const laneOf = (task) => personal && PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress) ? task.personalProgress : task.status;
   const canDropOn = (task, kind, stage) => {
+    if (retired && kind === "release") return false;
     if (!task || task.shared) return false;
     const commands = commandsFor(task);
     if (kind === "personal") return commandOf(commands, "personal-progress");
@@ -72421,6 +72481,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
     });
   };
   const releaseActions = (release) => {
+    if (retired) return (0, import_react82.createElement)("button", { type: "button", className: "bt-card-mini", onClick: () => openReleaseDetails(release.id) }, t("Details"));
     const editable = ["draft", "queued"].includes(release.status);
     const index = orderedReleases.findIndex((item) => item.id === release.id);
     const destructive = ["draft", "queued", "running"].includes(release.status);
@@ -72501,7 +72562,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
   const releaseSection = releaseSupported ? (0, import_react82.createElement)(
     "section",
     { className: "bt-board-section", "aria-label": t("Releases") },
-    scope.kind === "room" ? (0, import_react82.createElement)(MajorVersionCard, {
+    retired ? (0, import_react82.createElement)("div", { className: "bt-board-section-heading" }, (0, import_react82.createElement)("h3", null, t("Releases"))) : scope.kind === "room" ? (0, import_react82.createElement)(MajorVersionCard, {
       name: textValue(title) || textValue(goal?.title) || scope.id,
       releases: orderedReleases,
       tasks: allTasks,
@@ -72548,13 +72609,13 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
             (0, import_react82.createElement)("h2", null, title || t("Task board")),
             showCapacity ? (0, import_react82.createElement)("span", { className: "bt-board-capacity" }, t("{count} / {limit}", { count: capacity.taskCount, limit: capacity.taskLimit })) : null
           ),
-          (0, import_react82.createElement)("p", null, scope.kind === "room" ? t("DS-Bot project · Major version (group) · Minor releases") : t("Personal task board"), data ? " · " + t("{count} cards", { count: filtered.length }) : "")
+          (0, import_react82.createElement)("p", null, retired ? `${t("Deleted group")} · ${scope.id}` : scope.kind === "room" ? t("DS-Bot project · Major version (group) · Minor releases") : t("Personal task board"), data ? " · " + t("{count} cards", { count: filtered.length }) : "")
         ),
         (0, import_react82.createElement)(
           "div",
           { className: "bt-board-head-actions" },
           (0, import_react82.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Refresh"), title: t("Refresh"), onClick: () => void load() }, (0, import_react82.createElement)(RefreshIcon)),
-          (0, import_react82.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Close"), title: t("Close"), onClick: dismiss }, (0, import_react82.createElement)(CloseIcon))
+          backToPersonal ? (0, import_react82.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", onClick: dismiss }, t("Back to my task board")) : (0, import_react82.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Close"), title: t("Close"), onClick: dismiss }, (0, import_react82.createElement)(CloseIcon))
         )
       ),
       boardConfirm ? (0, import_react82.createElement)(
@@ -72600,7 +72661,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
         (0, import_react82.createElement)(
           "div",
           { className: "bt-board-views", role: "group", "aria-label": t("Board view") },
-          [["status", "Status"], ["type", "Type"], ...releaseSupported ? [["release", "Release"]] : [], ...archivedTasks.length > 0 || canAct ? [["archive", "Archive"]] : [], ["activity", "Activity"], ...scope.kind === "room" ? [["project", "Project coordination"]] : []].map(([id, label]) => (0, import_react82.createElement)("button", { key: id, type: "button", className: "bt-board-view", "aria-pressed": view === id, onClick: () => chooseView(id) }, t(label)))
+          [["status", "Status"], ["type", "Type"], ...releaseSupported ? [["release", "Release"]] : [], ...archivedTasks.length > 0 || canAct ? [["archive", "Archive"]] : [], ["activity", "Activity"], ...scope.kind === "room" && !retired ? [["project", "Project coordination"]] : []].map(([id, label]) => (0, import_react82.createElement)("button", { key: id, type: "button", className: "bt-board-view", "aria-pressed": view === id, onClick: () => chooseView(id) }, t(label)))
         ),
         (0, import_react82.createElement)("label", { className: "bt-board-search" }, (0, import_react82.createElement)(SearchIcon), (0, import_react82.createElement)("input", { ref: searchRef, type: "search", "aria-label": t("Search tasks"), placeholder: t("Search tasks"), value: search, onChange: (event) => setSearch(event.target.value) })),
         (0, import_react82.createElement)("button", { type: "button", className: "bt-board-filter-toggle", "aria-expanded": filtersOpen, onClick: () => setFiltersOpen((value) => !value) }, t("Filters"), hasFilters ? (0, import_react82.createElement)("span", { className: "bt-board-count" }, "•") : null),
@@ -72720,7 +72781,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
           (0, import_react82.createElement)("option", { value: "" }, t("Set owner")),
           (Array.isArray(actors) ? actors : []).filter((actor) => actor.id !== "user").map((actor) => (0, import_react82.createElement)("option", { key: actor.id, value: actor.id }, actor.name || actor.id))
         )),
-        orderedReleases.some((release) => ["draft", "queued"].includes(release.status)) ? (0, import_react82.createElement)("label", { className: "bt-board-bulk-select" }, (0, import_react82.createElement)("span", null, t("Release")), (0, import_react82.createElement)(
+        !retired && orderedReleases.some((release) => ["draft", "queued"].includes(release.status)) ? (0, import_react82.createElement)("label", { className: "bt-board-bulk-select" }, (0, import_react82.createElement)("span", null, t("Release")), (0, import_react82.createElement)(
           "select",
           { defaultValue: "", disabled: bulkBusy || !selectedIds.size, "aria-label": t("Add selected cards to release"), onChange: (event) => {
             const next = event.target.value;
@@ -72744,14 +72805,25 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
         (0, import_react82.createElement)("span", { className: data.summary.overdue ? "bt-board-summary-alert" : "" }, (0, import_react82.createElement)("b", null, data.summary.overdue ?? 0), " ", t("Overdue")),
         (0, import_react82.createElement)("span", null, (0, import_react82.createElement)("b", null, data.summary.statuses?.done ?? 0), " ", t("Done"))
       ) : null,
-      data ? (0, import_react82.createElement)("button", { type: "button", className: "bt-board-tools-toggle", "aria-expanded": toolsOpen, onClick: () => {
+      data && !retired ? (0, import_react82.createElement)("button", { type: "button", className: "bt-board-tools-toggle", "aria-expanded": toolsOpen, onClick: () => {
         if (toolsOpen && recoveryOpen) inspectRecovery(false);
         setToolsOpen((value) => !value);
       } }, t("Board tools")) : null,
-      data ? (0, import_react82.createElement)("div", { className: "bt-board-review-tools" + (toolsOpen ? " bt-board-review-tools-open" : "") }, (0, import_react82.createElement)(HeldTurns, { key: "held:" + key, recovery: data.recovery, open: recoveryOpen && recoveryScope.current === key, onOpen: inspectRecovery, scope, request, onRefresh: () => recoveryScope.current === key && loadRef.current?.() }), (0, import_react82.createElement)(WorkDecisions, { key: "decisions:" + key, scope, request, actors: data.capabilities?.actors }), (0, import_react82.createElement)(LegacyWorkReview, { key: "legacy-review:" + key, scope, request, actors: data.capabilities?.actors }), (0, import_react82.createElement)(PeriodicReviewRecovery, { key: "periodic:" + key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), (0, import_react82.createElement)(RemoteChanges, { key: "remote:" + key, monitor: data.remoteChanges })) : null,
+      data && !retired ? (0, import_react82.createElement)("div", { className: "bt-board-review-tools" + (toolsOpen ? " bt-board-review-tools-open" : "") }, (0, import_react82.createElement)(HeldTurns, { key: "held:" + key, recovery: data.recovery, open: recoveryOpen && recoveryScope.current === key, onOpen: inspectRecovery, scope, request, onRefresh: () => recoveryScope.current === key && loadRef.current?.() }), (0, import_react82.createElement)(WorkDecisions, { key: "decisions:" + key, scope, request, actors: data.capabilities?.actors }), (0, import_react82.createElement)(LegacyWorkReview, { key: "legacy-review:" + key, scope, request, actors: data.capabilities?.actors }), (0, import_react82.createElement)(PeriodicReviewRecovery, { key: "periodic:" + key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), (0, import_react82.createElement)(RemoteChanges, { key: "remote:" + key, monitor: data.remoteChanges })) : null,
       !data ? (0, import_react82.createElement)("div", { className: "bt-board-empty" }, error ? t("Board unavailable") : t("Loading…"), error ? (0, import_react82.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", onClick: () => load() }, t("Retry")) : null) : (0, import_react82.createElement)(
         "div",
         { className: "bt-board-content" },
+        view === "status" && retiredBoards.length > 0 && visitRetired ? (0, import_react82.createElement)(
+          "section",
+          { className: "bt-board-section", "aria-label": t("Deleted group boards") },
+          (0, import_react82.createElement)("div", { className: "bt-board-section-heading" }, (0, import_react82.createElement)("h3", null, t("Deleted group boards"))),
+          (0, import_react82.createElement)("div", { className: "bt-board-activity" }, retiredBoards.map((board) => (0, import_react82.createElement)(
+            "button",
+            { key: board.id, type: "button", className: "bt-board-activity-row", onClick: () => visitRetired(board.id) },
+            (0, import_react82.createElement)("span", { className: "bt-board-activity-text" }, (0, import_react82.createElement)("strong", null, t("Deleted group")), (0, import_react82.createElement)("span", null, board.id)),
+            (0, import_react82.createElement)("span", { className: "bt-board-activity-by" }, t("{count} cards", { count: board.taskCount }), " · ", t("{count} open cards", { count: board.openCount }))
+          )))
+        ) : null,
         changesOpen && proposalSupported ? (0, import_react82.createElement)(ProposalPanel, {
           proposals,
           actors,
@@ -72764,7 +72836,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
           onClose: () => setChangesOpen(false)
         }) : null,
         releaseError ? (0, import_react82.createElement)("div", { className: "bt-board-release-error", role: "alert" }, releaseError) : null,
-        view === "status" && releaseSupported ? releaseBar : null,
+        view === "status" && releaseSupported && !retired ? releaseBar : null,
         view === "status" && personal ? (0, import_react82.createElement)(
           "section",
           { className: "bt-board-section", "aria-label": t("Personal progress") },
@@ -72797,7 +72869,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
         view === "release" && releaseSupported ? releaseSection : null,
         view === "archive" ? archiveSection : null,
         view === "activity" ? activitySection : null,
-        view === "project" && scope.kind === "room" ? (0, import_react82.createElement)(ProjectCoordinationPanel, {
+        view === "project" && scope.kind === "room" && !retired ? (0, import_react82.createElement)(ProjectCoordinationPanel, {
           key,
           scope,
           request,
@@ -72815,6 +72887,8 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
           commands: commandsFor(selected),
           actors: data.capabilities?.actors,
           targets: data.capabilities?.shareTargets?.[selected.id],
+          retired,
+          recoveryTargets: data.capabilities?.recoveryTargets?.[selected.id],
           uploadEnabled: data.capabilities?.upload === true,
           uncertain: !canAct,
           onCommand: run2,
@@ -72866,7 +72940,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
           release: panelRelease,
           actors,
           releaseRoles,
-          canEdit: releaseEditable(panelRelease),
+          canEdit: !retired && releaseEditable(panelRelease),
           busy: !!releaseBusy,
           error: releaseError,
           onConfigureTeam: teamConfigurable && canAct ? () => {

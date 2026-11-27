@@ -1882,7 +1882,22 @@ function EditHistoryTitle({ task, disabled, onEdit }) {
 }
 
 
-function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadEnabled, uncertain, onCommand, onUpload, request, onClose, onOpenRelated, onCreateItem, focusReturn, boardRef, pending, busy, error, onCheck, onCancel, cancelBusy, onDuplicate }) {
+function RecoverTask({ task, targets, disabled, onCommand }) {
+  const [roomId, setRoomId] = useState('')
+  const selected = targets.some(target => target.id === roomId) ? roomId : ''
+  return h(SideSection, { title: t('Recover task to a group') },
+    h('form', { onSubmit: event => {
+      event.preventDefault()
+      if (selected && !disabled) void onCommand(task, { type:'recover-to-room' }, { roomId:selected })
+    } },
+    h('label', { className:'bt-field' }, h('span', null, t('Destination group')),
+      h('select', { value:selected, disabled, onChange:event => setRoomId(event.target.value) },
+        h('option', { value:'' }, t('Choose a group')),
+        targets.map(target => h('option', { value:target.id, key:target.id }, target.name || target.id)))),
+    h('button', { type:'submit', className:'bt-btn bt-btn-block', disabled:disabled || !selected }, t('Move task to group'))))
+}
+
+function TaskCardDialog({ scope, task, tasks, commands, actors, targets, retired, recoveryTargets, uploadEnabled, uncertain, onCommand, onUpload, request, onClose, onOpenRelated, onCreateItem, focusReturn, boardRef, pending, busy, error, onCheck, onCancel, cancelBusy, onDuplicate }) {
   const modal = useRef(null)
   const lightboxRef = useRef(null)
   const confirmationRef = useRef(null)
@@ -1911,6 +1926,7 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
   const canMove = commandOf(commands, 'personal-progress') && PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress)
   const canArchive = commandOf(commands, 'archive')
   const canUnarchive = commandOf(commands, 'unarchive')
+  const canRecover = commandOf(commands, 'recover-to-room') && Array.isArray(recoveryTargets) && recoveryTargets.length > 0
   const canGoalEdit = commandOf(commands, 'goal-task-edit')
   const canHistoryTitle = commandOf(commands, 'goal-history-title')
   const canRename = !legacy && !task.shared && canEdit && ['proposed', 'waiting', 'ready'].includes(task.status) && !uncertain
@@ -2047,6 +2063,10 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
           h(ActivitySection, { task })),
         h('aside', { className: 'bt-card-side' },
           h(StatusBlock, { task, commands, canMove, canSchedule, disabled: uncertain || busy, onCommand }),
+          retired && task.releaseId && commandOf(commands, 'release-assign') ? h(SideSection, { title:t('Release') },
+            h('button', { type:'button', className:'bt-btn bt-btn-block', disabled:uncertain || busy || !!pending,
+              onClick:() => void onCommand(task, { type:'release-assign' }, { releaseId:null }) }, t('Remove from release'))) : null,
+          canRecover ? h(RecoverTask, { task, targets:recoveryTargets, disabled: uncertain || busy || !!pending, onCommand }) : null,
           h(PeopleBlock, { task, actors, canEdit, disabled: uncertain || busy, onAssign: assignPeople }),
           h(ParticipantsBlock, { task, actors, commands, disabled: uncertain || busy, onCommand }),
           !legacy ? h(CardTextEditor, { task, field:'stage', editable:canDetails, disabled:uncertain || busy, onSave:detailsSave }) : null,
@@ -2056,7 +2076,7 @@ function TaskCardDialog({ scope, task, tasks, commands, actors, targets, uploadE
           h(DependenciesBlock, { task, tasks }),
           h(FactsBlock, { task }),
           h('div', { className: 'bt-card-side-block' }, h(ShareTask, { task, commands, targets, disabled: uncertain || busy, onCommand })),
-          !canEdit && !canDetails && !canComment && !canUpload && !canShare && !canUnshare && !canMove && !canSchedule && !canGoalEdit && !canHistoryTitle
+          !canEdit && !canDetails && !canComment && !canUpload && !canShare && !canUnshare && !canMove && !canSchedule && !canGoalEdit && !canHistoryTitle && !canRecover
             ? h('p', { className: 'bt-card-note' }, t('Read only')) : null,
           h('details', { className: 'bt-card-more' }, h('summary', null, t('More actions')),
             h('div', { className: 'bt-card-more-body' },
@@ -2419,16 +2439,20 @@ export function TaskBoard(props) {
   const [destination, setDestination] = useState(null)
   const sourceKey = props.scope.kind + ':' + props.scope.id
   const route = destination?.source === sourceKey ? destination : null
-  if (route?.roomId) return h(ScopedTaskBoard, {
-    key:route.roomId, scope:{kind:'room',id:route.roomId}, title:route.name, request:props.request,
-    initialCardId:route.taskId, close:() => setDestination({source:sourceKey}),
-  })
+  if (route?.roomId) {
+    const close = () => setDestination(route.retired ? null : {source:sourceKey})
+    return h(ScopedTaskBoard, {
+      key:route.roomId, scope:{kind:'room',id:route.roomId}, title:route.name, request:props.request,
+      initialCardId:route.taskId, close, backToPersonal:route.retired === true,
+    })
+  }
   return h(ScopedTaskBoard, { ...props, initialProject:!!route,
     visitSource:(roomId,name,taskId) => setDestination({source:sourceKey,roomId,name,taskId}),
+    visitRetired:roomId => setDestination({source:sourceKey, roomId, name:t('Deleted group task board'), retired:true}),
   })
 }
 
-function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveReview, refreshGoal, currentRoomGoal, initialReview = false, initialCardId, initialProject, visitSource }) {
+function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveReview, refreshGoal, currentRoomGoal, initialReview = false, initialCardId, initialProject, visitSource, visitRetired, backToPersonal = false }) {
   const [visible, setVisible] = useState(true)
   const [snapshot, setData] = useState(null)
   const [error, setError] = useState('')
@@ -2493,6 +2517,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
   const store = useRef(null)
   const key = scope.kind + ':' + scope.id
   const data = snapshot?.key === key ? snapshot.value : null
+  const retired = data?.retired === true
   const notify = (text, action) => { clearTimeout(noticeTimer.current); setNotice(text); setNoticeAction(action ? { label:t('Undo'), run:action } : null); noticeTimer.current = setTimeout(() => { setNotice(''); setNoticeAction(null) }, 5200) }
   const runNoticeAction = async () => { const action = noticeAction; setNotice(''); setNoticeAction(null); clearTimeout(noticeTimer.current); try { await action?.run() } catch (caught) { setError(hostText(caught?.message) || t('The undo could not be completed.')) } }
   useEffect(() => () => clearTimeout(noticeTimer.current), [])
@@ -2658,6 +2683,10 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
         ...(task.legacy?.useOverlay ? { expectedBoardRevision: task.legacy.boardRevision, expectedPosition: task.legacy.position } : {}),
         type: command.type, ...(value !== undefined ? { value } : {}) })
       const state = await check(operationId, epoch)
+      if (state === 'committed' && command.type === 'recover-to-room') {
+        setSelectedCard(selected => selected?.id === task.id ? null : selected)
+        notify(t('Task moved to the destination group'))
+      }
       const inverse = { cancel:'restore', submit:'cancel', archive:'unarchive', schedule:'unschedule' }[command.type]
       if (state === 'committed' && inverse) {
         notify(t('Card updated'), async () => {
@@ -3002,9 +3031,9 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
   })
   const releaseById = new Map(releases.map(release => [release.id, release]))
   const releaseRoles = Array.isArray(data?.releaseRoles) ? data.releaseRoles.filter(role => role && typeof role.key === 'string' && role.key) : null
-  const releaseTeamSupported = scope.kind === 'room' && !!releaseRoles?.length
+  const releaseTeamSupported = scope.kind === 'room' && !retired && !!releaseRoles?.length
   const proposals = Array.isArray(data?.proposals) ? data.proposals : []
-  const proposalSupported = Array.isArray(data?.proposals)
+  const proposalSupported = !retired && Array.isArray(data?.proposals)
   const chooseView = next => { setView(next); setReleaseFocus('') }
   const openRelease = id => { setView('release'); setReleaseFocus(id) }
   const createRelease = async value => {
@@ -3184,6 +3213,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
     return matched && memberOk && labelOk && dueOk && typeOk
   })
   const personal = scope.kind === 'personal' && scope.id === 'user'
+  const retiredBoards = personal && Array.isArray(data?.retiredBoards) ? data.retiredBoards.filter(board => textValue(board?.id)) : []
   const taskById = new Map(allTasks.map(task => [task.id, task]))
   // Keep a matching item with its parent through search, member filters and archive.
   const matchedIds = new Set(filtered.map(task => task.id))
@@ -3233,6 +3263,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
   const hasFilters = !!(search || memberFilter || labelFilter || dueFilter || typeFilter)
   const laneOf = task => personal && PERSONAL_COLUMNS.some(([id]) => id === task.personalProgress) ? task.personalProgress : task.status
   const canDropOn = (task, kind, stage) => {
+    if (retired && kind === 'release') return false
     if (!task || task.shared) return false
     const commands = commandsFor(task)
     if (kind === 'personal') return commandOf(commands, 'personal-progress')
@@ -3385,6 +3416,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
       .then(approved => { if (approved) void releaseAction(release, 'board-release-cancel') })
   }
   const releaseActions = release => {
+    if (retired) return h('button', { type:'button', className:'bt-card-mini', onClick:() => openReleaseDetails(release.id) }, t('Details'))
     const editable = ['draft', 'queued'].includes(release.status)
     const index = orderedReleases.findIndex(item => item.id === release.id)
     const destructive = ['draft', 'queued', 'running'].includes(release.status)
@@ -3436,7 +3468,8 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
     h('div', { className: 'bt-board-section-heading' }, h('h3', null, t('Archive')), h('p', null, t('Archived cards are hidden from the workflow and release views. Restore a card to return it to the board.'))),
     h(ColumnRail, { label: t('Archive') }, renderLane('archive', 'archived', t('Archived cards'), archivedTasks, { noCreate: true, laneLabel: t('Archived cards'), emptyLabel:t('No archived cards') })))
   const releaseSection = releaseSupported ? h('section', { className: 'bt-board-section', 'aria-label': t('Releases') },
-    scope.kind === 'room' ? h(MajorVersionCard, {name:textValue(title) || textValue(goal?.title) || scope.id,
+    retired ? h('div', { className:'bt-board-section-heading' }, h('h3', null, t('Releases')))
+    : scope.kind === 'room' ? h(MajorVersionCard, {name:textValue(title) || textValue(goal?.title) || scope.id,
       releases:orderedReleases, tasks:allTasks, onOpen:openReleaseDetails, onCreate:() => setNewRelease(true), disabled:!canAct}) :
     h('div', { className: 'bt-board-section-heading bt-board-section-heading-row' },
       h('div', null, h('h3', null, t('Releases')), h('p', null, t('Drag cards between release lanes. Arrow controls reorder draft and queued releases.'))),
@@ -3459,10 +3492,11 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
         h('div', { className: 'bt-board-heading' },
           h('div', { className: 'bt-board-title-row' }, h('h2', null, title || t('Task board')),
             showCapacity ? h('span', { className: 'bt-board-capacity' }, t('{count} / {limit}', { count: capacity.taskCount, limit: capacity.taskLimit })) : null),
-          h('p', null, scope.kind === 'room' ? t('DS-Bot project · Major version (group) · Minor releases') : t('Personal task board'), data ? ' · ' + t('{count} cards', { count: filtered.length }) : '')),
+          h('p', null, retired ? `${t('Deleted group')} · ${scope.id}` : scope.kind === 'room' ? t('DS-Bot project · Major version (group) · Minor releases') : t('Personal task board'), data ? ' · ' + t('{count} cards', { count: filtered.length }) : '')),
         h('div', { className: 'bt-board-head-actions' },
           h('button', { type: 'button', className: 'bt-icon-btn', 'aria-label': t('Refresh'), title: t('Refresh'), onClick: () => void load() }, h(RefreshIcon)),
-          h('button', { type: 'button', className: 'bt-icon-btn', 'aria-label': t('Close'), title: t('Close'), onClick: dismiss }, h(CloseIcon)))),
+          backToPersonal ? h('button', { type:'button', className:'bt-btn bt-btn-ghost', onClick:dismiss }, t('Back to my task board'))
+            : h('button', { type: 'button', className: 'bt-icon-btn', 'aria-label': t('Close'), title: t('Close'), onClick: dismiss }, h(CloseIcon)))),
       boardConfirm ? h('div', { className: 'bt-board-confirm-layer', onMouseDown: event => { if (event.target === event.currentTarget) settleBoardConfirm(false) } },
         h('section', { ref: boardConfirmBox, className: 'bt-board-confirm', role: 'alertdialog', 'aria-label': t('Confirm change'), tabIndex: -1 },
           h('div', { className: 'bt-card-confirm-head' }, h('h3', null, t('Confirm change')), h('p', null, t('Review the before and after values before applying this change.'))),
@@ -3482,7 +3516,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
         h('button', { type: 'button', className: 'bt-card-mini', disabled: cancelBusy, onClick: () => cancel(pending) }, t('Safely cancel pending request'))) : null,
       h('div', { className: 'bt-board-toolbar' },
         h('div', { className: 'bt-board-views', role: 'group', 'aria-label': t('Board view') },
-          [['status', 'Status'], ['type', 'Type'], ...(releaseSupported ? [['release', 'Release']] : []), ...(archivedTasks.length > 0 || canAct ? [['archive', 'Archive']] : []), ['activity', 'Activity'], ...(scope.kind === 'room' ? [['project', 'Project coordination']] : [])].map(([id, label]) =>
+          [['status', 'Status'], ['type', 'Type'], ...(releaseSupported ? [['release', 'Release']] : []), ...(archivedTasks.length > 0 || canAct ? [['archive', 'Archive']] : []), ['activity', 'Activity'], ...(scope.kind === 'room' && !retired ? [['project', 'Project coordination']] : [])].map(([id, label]) =>
             h('button', { key: id, type: 'button', className: 'bt-board-view', 'aria-pressed': view === id, onClick: () => chooseView(id) }, t(label)))),
         h('label', { className: 'bt-board-search' }, h(SearchIcon), h('input', { ref:searchRef, type: 'search', 'aria-label': t('Search tasks'), placeholder: t('Search tasks'), value: search, onChange: event => setSearch(event.target.value) })),
         h('button', { type:'button', className:'bt-board-filter-toggle', 'aria-expanded':filtersOpen, onClick:() => setFiltersOpen(value => !value) }, t('Filters'), hasFilters ? h('span', { className:'bt-board-count' }, '•') : null),
@@ -3516,7 +3550,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
           h('option', { value:'' }, t('Set type')), TASK_TYPES.map(([id,label]) => h('option', { key:id, value:id }, t(label))))),
         h('label', { className:'bt-board-bulk-select' }, h('span', null, t('Owner')), h('select', { defaultValue:'', disabled:bulkBusy || !selectedIds.size, 'aria-label':t('Set owner for selected cards'), onChange:event => { const next=event.target.value; event.target.value=''; if(next) void bulkSetOwner(next) } },
           h('option', { value:'' }, t('Set owner')), (Array.isArray(actors) ? actors : []).filter(actor => actor.id !== 'user').map(actor => h('option', { key:actor.id, value:actor.id }, actor.name || actor.id)))),
-        orderedReleases.some(release => ['draft','queued'].includes(release.status)) ? h('label', { className:'bt-board-bulk-select' }, h('span', null, t('Release')), h('select', { defaultValue:'', disabled:bulkBusy || !selectedIds.size, 'aria-label':t('Add selected cards to release'), onChange:event => { const next=event.target.value; event.target.value=''; if(next) void bulkAssignRelease(next) } },
+        !retired && orderedReleases.some(release => ['draft','queued'].includes(release.status)) ? h('label', { className:'bt-board-bulk-select' }, h('span', null, t('Release')), h('select', { defaultValue:'', disabled:bulkBusy || !selectedIds.size, 'aria-label':t('Add selected cards to release'), onChange:event => { const next=event.target.value; event.target.value=''; if(next) void bulkAssignRelease(next) } },
           h('option', { value:'' }, t('Add to release')), orderedReleases.filter(release => ['draft','queued'].includes(release.status)).map(release => h('option', { key:release.id, value:release.id }, textValue(release.name) || release.id)))) : null,
         h('button', { type:'button', className:'bt-card-mini', disabled:bulkBusy, onClick:() => { setSelectedIds(new Set()); setSelectionMode(false) } }, t('Clear selection'))) : null,
       view === 'status' && data?.summary ? h('div', { className:'bt-board-summary', role:'status', 'aria-label':t('Board summary') },
@@ -3525,14 +3559,19 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
         h('span', { className: data.summary.blocked ? 'bt-board-summary-alert' : '' }, h('b', null, data.summary.blocked ?? 0), ' ', t('Blocked')),
         h('span', { className: data.summary.overdue ? 'bt-board-summary-alert' : '' }, h('b', null, data.summary.overdue ?? 0), ' ', t('Overdue')),
         h('span', null, h('b', null, data.summary.statuses?.done ?? 0), ' ', t('Done'))) : null,
-      data ? h('button', { type:'button', className:'bt-board-tools-toggle', 'aria-expanded':toolsOpen, onClick:() => { if (toolsOpen && recoveryOpen) inspectRecovery(false); setToolsOpen(value => !value) } }, t('Board tools')) : null,
-      data ? h('div', { className: 'bt-board-review-tools' + (toolsOpen ? ' bt-board-review-tools-open' : '') }, h(HeldTurns, { key: 'held:' + key, recovery:data.recovery, open:recoveryOpen && recoveryScope.current === key, onOpen:inspectRecovery, scope, request, onRefresh:() => recoveryScope.current === key && loadRef.current?.() }), h(WorkDecisions, { key: 'decisions:' + key, scope, request, actors: data.capabilities?.actors }), h(LegacyWorkReview, { key: 'legacy-review:' + key, scope, request, actors: data.capabilities?.actors }), h(PeriodicReviewRecovery, { key: 'periodic:' + key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), h(RemoteChanges, { key: 'remote:' + key, monitor: data.remoteChanges })) : null,
+      data && !retired ? h('button', { type:'button', className:'bt-board-tools-toggle', 'aria-expanded':toolsOpen, onClick:() => { if (toolsOpen && recoveryOpen) inspectRecovery(false); setToolsOpen(value => !value) } }, t('Board tools')) : null,
+      data && !retired ? h('div', { className: 'bt-board-review-tools' + (toolsOpen ? ' bt-board-review-tools-open' : '') }, h(HeldTurns, { key: 'held:' + key, recovery:data.recovery, open:recoveryOpen && recoveryScope.current === key, onOpen:inspectRecovery, scope, request, onRefresh:() => recoveryScope.current === key && loadRef.current?.() }), h(WorkDecisions, { key: 'decisions:' + key, scope, request, actors: data.capabilities?.actors }), h(LegacyWorkReview, { key: 'legacy-review:' + key, scope, request, actors: data.capabilities?.actors }), h(PeriodicReviewRecovery, { key: 'periodic:' + key, scope, goal, resolveReview, refreshGoal, currentRoomGoal, initiallyOpen: initialReview }), h(RemoteChanges, { key: 'remote:' + key, monitor: data.remoteChanges })) : null,
       !data ? h('div', { className: 'bt-board-empty' }, error ? t('Board unavailable') : t('Loading…'), error ? h('button', { type: 'button', className: 'bt-btn bt-btn-ghost', onClick: () => load() }, t('Retry')) : null)
         : h('div', { className: 'bt-board-content' },
+          view === 'status' && retiredBoards.length > 0 && visitRetired ? h('section', { className:'bt-board-section', 'aria-label':t('Deleted group boards') },
+            h('div', { className:'bt-board-section-heading' }, h('h3', null, t('Deleted group boards'))),
+            h('div', { className:'bt-board-activity' }, retiredBoards.map(board => h('button', { key:board.id, type:'button', className:'bt-board-activity-row', onClick:() => visitRetired(board.id) },
+              h('span', { className:'bt-board-activity-text' }, h('strong', null, t('Deleted group')), h('span', null, board.id)),
+              h('span', { className:'bt-board-activity-by' }, t('{count} cards', { count:board.taskCount }), ' · ', t('{count} open cards', { count:board.openCount })))))) : null,
           changesOpen && proposalSupported ? h(ProposalPanel, { proposals, actors, tasks: data.tasks, releases, disabled: !canAct || !!proposalBusy,
             busy: proposalBusy, error: proposalError, onDecide: decideProposal, onClose: () => setChangesOpen(false) }) : null,
           releaseError ? h('div', { className: 'bt-board-release-error', role: 'alert' }, releaseError) : null,
-          view === 'status' && releaseSupported ? releaseBar : null,
+          view === 'status' && releaseSupported && !retired ? releaseBar : null,
           view === 'status' && personal ? h('section', { className: 'bt-board-section', 'aria-label': t('Personal progress') },
             h('div', { className: 'bt-board-section-heading' }, h('h3', null, t('Personal progress')), h('p', null, t('Drag a card or use its progress menu.'), ' ', t('Your own progress markers do not complete shared work or unblock dependencies.'))),
             h(ColumnRail, { label: t('Personal progress'), personal: true }, PERSONAL_COLUMNS.map(([progress, label]) => renderLane('personal', progress, t(label), personalTasks.filter(task => task.personalProgress === progress),
@@ -3551,11 +3590,11 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
           view === 'release' && releaseSupported ? releaseSection : null,
           view === 'archive' ? archiveSection : null,
           view === 'activity' ? activitySection : null,
-          view === 'project' && scope.kind === 'room' ? h(ProjectCoordinationPanel, {
+          view === 'project' && scope.kind === 'room' && !retired ? h(ProjectCoordinationPanel, {
             key, scope, request, tasks:data.tasks, releases, actorName:id => actorName(id, actors), openCard, visitSource,
           }) : null,
           selected && !createFor ? h(TaskCardDialog, { key: selected.id, scope, task: selected, tasks: data.tasks, commands: commandsFor(selected), actors: data.capabilities?.actors,
-            targets: data.capabilities?.shareTargets?.[selected.id], uploadEnabled: data.capabilities?.upload === true, uncertain: !canAct, onCommand: run, onUpload: upload, request,
+            targets: data.capabilities?.shareTargets?.[selected.id], retired, recoveryTargets:data.capabilities?.recoveryTargets?.[selected.id], uploadEnabled: data.capabilities?.upload === true, uncertain: !canAct, onCommand: run, onUpload: upload, request,
             onCreateItem: createEnabled && scope.kind === 'room' && !selected.shared && !selected.legacy && !selected.parentTaskId && !selected.archivedAt && !selected.blocked && !selected.stale
               && ['feature','bugfix'].includes(selected.type) && !['cancelled','done','reported'].includes(selected.status)
               ? () => setCreateFor({ parentTaskId:selected.id, laneLabel:textValue(selected.title) || selected.id }) : undefined,
@@ -3573,7 +3612,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
               onClose: closeReleasePanel, onBack: () => setReleasePanel({ id: panelRelease.id, mode: 'detail' }) })
             : panelRelease
               ? h(ReleaseDetailDialog, { key: 'release:' + panelRelease.id, release: panelRelease, actors, releaseRoles,
-                canEdit: releaseEditable(panelRelease), busy: !!releaseBusy, error: releaseError,
+                canEdit: !retired && releaseEditable(panelRelease), busy: !!releaseBusy, error: releaseError,
                 onConfigureTeam:teamConfigurable && canAct ? () => { setError(''); setReleasePanel({id:panelRelease.id, mode:'team', revision:panelRelease.revision}) } : undefined,
                 onClose: closeReleasePanel, onCheck: release => void checkRelease(release),
                 onSaveGate: (gate, status, evidence) => void saveReleaseGate(panelRelease, gate, status, evidence),

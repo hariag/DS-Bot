@@ -34,6 +34,75 @@ const command = (s, id, type, actor, value, op = `${type}-${id}`) => s.command({
 const register = (s, id) => command(s, id, 'register', 'user', { kind: 'personal', reference: 'owner approval' })
 const evidence = { kind: 'git', evidence: 'artifact', targetCommit: hex, targetBlob: hex, acceptanceBlob: hex, environment: 'test' }
 
+const recoveryTeam = () => ({
+  bots: { owner:{}, reviewer:{} },
+  rooms: { removed:{ name:'Old group', members:['owner','reviewer'] }, keep:{ name:'Current group', members:['owner','reviewer'] }, other:{ members:['owner'] } },
+})
+const oldRoomCard = (store, id, fields = {}) => store.create({
+  operationId:`create-${id}`, actor:'user', task:{ ...task(id), scope:'room:removed', ...fields },
+})
+
+test('the user can recover an unstarted card and its dependent item as one operation after deleting a group', t => {
+  const team = recoveryTeam(), commits = []
+  const { store } = fixture(t, { ...opts, recoveryRoster:() => team, onTaskCommit:events => commits.push(...events) })
+  oldRoomCard(store, 'feature', { type:'feature' })
+  oldRoomCard(store, 'item', { type:'development', parentTaskId:'feature' })
+  assert.deepEqual(store.recoveryTargetRooms('feature', team.rooms, team.bots), [])
+  delete team.rooms.removed
+  assert.deepEqual(store.recoveryTargetRooms('item', team.rooms, team.bots), [])
+  assert.deepEqual(store.recoveryTargetRooms('feature', team.rooms, team.bots), [{id:'keep',name:'Current group'}])
+  assert.throws(() => command(store, 'feature', 'recover-to-room', 'owner', { roomId:'keep' }, 'bot-recovery'), /cannot move/)
+  assert.throws(() => command(store, 'feature', 'recover-to-room', 'user', { roomId:'other' }, 'wrong-room'), /cannot move/)
+  const input = {operationId:'recover-tree',taskId:'feature',expectedRevision:1,actor:'user',type:'recover-to-room',value:{roomId:'keep'}}
+  const moved = store.command(input)
+  assert.equal(moved.id, 'feature')
+  assert.equal(moved.scope, 'room:keep')
+  assert.equal(moved.recoveredFromRoomId, 'removed')
+  assert.equal(store.get('item').parentTaskId, 'feature')
+  assert.equal(store.get('item').scope, 'room:keep')
+  assert.deepEqual(store.listActions('item'), [])
+  assert.deepEqual(store.command(input), moved)
+  assert.equal(store.operation('recover-tree').result.recoveredFromRoomId, 'removed')
+  const transfer = store.history('feature').entries[0]
+  assert.deepEqual([transfer.before.scope, transfer.after.scope, transfer.recoveredFromRoomId], ['room:removed','room:keep','removed'])
+  assert.deepEqual(commits.filter(x => x.operationId==='recover-tree').map(({before,after}) => [before.scope, after.scope]), [
+    ['room:removed','room:keep'], ['room:removed','room:keep'],
+  ])
+})
+
+test('an abandoned queue can be moved only before admission, and the old dispatch is cancelled', t => {
+  const team = recoveryTeam()
+  const { store } = fixture(t, { ...opts, recoveryRoster:() => team })
+  oldRoomCard(store,'pending')
+  oldRoomCard(store,'admitted')
+  for (const id of ['pending','admitted']) command(store,id,'schedule','user',{kind:'personal',reference:`board:${id}:1`})
+  const admitted = store.listActions('admitted')[0]
+  claim(store,admitted,intentFor(admitted))
+  store.markAction({actionId:admitted.id,actor:'scheduler',expectedState:'claimed',state:'accepted',receipt:'original receipt'})
+  delete team.rooms.removed
+  assert.deepEqual(store.recoveryTargetRooms('admitted',team.rooms,team.bots),[])
+  assert.throws(() => command(store,'admitted','recover-to-room','user',{roomId:'keep'}), /cannot move/)
+  assert.equal(store.listActions('admitted')[0].receipt,'original receipt')
+  const recovered = command(store,'pending','recover-to-room','user',{roomId:'keep'})
+  assert.equal(recovered.status,'proposed')
+  assert.equal(recovered.actionRevision,null)
+  assert.equal(recovered.authority,null)
+  assert.deepEqual(store.listActions('pending').map(x=>x.state),['cancelled'])
+})
+
+test('recovery refuses a move that would sever an original board dependency', t => {
+  const team = recoveryTeam()
+  const { store } = fixture(t, { ...opts, recoveryRoster:() => team })
+  oldRoomCard(store,'prerequisite')
+  oldRoomCard(store,'dependent',{dependencies:['prerequisite']})
+  delete team.rooms.removed
+  for (const id of ['prerequisite','dependent']) {
+    assert.deepEqual(store.recoveryTargetRooms(id,team.rooms,team.bots),[])
+    assert.throws(() => command(store,id,'recover-to-room','user',{roomId:'keep'}), /cannot move/)
+    assert.equal(store.get(id).scope,'room:removed')
+  }
+})
+
 function createDualAcceptanceTask(store) {
   return store.create({ operationId:'create-pilot', actor:'owner', intake:{}, task:{ id:'pilot', title:'Pilot',
     owner:'owner', reviewer:'reviewer', acceptor:'customer', acceptance:'Independent findings', scope:'room:project', type:'feature' } })

@@ -104,6 +104,60 @@ test('remote code status is limited to the owner personal board', async t => {
   assert.equal((await rt.boardCall('board-list',{scope})).remoteChanges,undefined)
 })
 
+test('the authenticated owner can maintain a deleted group card and reconcile its move to a live board', async t => {
+  const { rt, deliveries } = fixture(t)
+  const card = await rt.boardCall('board-command', create)
+  const target = await rt.createRoom({ name:'Recovery group', members:['one','two'], admin:'one' })
+  delete rt.state.rooms[scope.id]
+  const mine = { kind:'personal', id:'user' }
+  assert.deepEqual((await rt.boardCall('board-list', { scope:mine })).retiredBoards, [{ id:scope.id, taskCount:1, openCount:1 }])
+  const old = await rt.boardCall('board-list', { scope })
+  assert.equal(old.retired, true)
+  assert.equal(old.recovery, undefined)
+  assert.equal(old.capabilities.create, false)
+  assert.equal(old.capabilities.upload, false)
+  assert.deepEqual(old.capabilities.recoveryTargets[card.id], [{ id:target.id, name:target.name }])
+  const call = (type, operationId, expectedRevision, value) => rt.boardCall('board-command', { scope, taskId:card.id, type, operationId, expectedRevision, ...(value && { value }) })
+  await assert.rejects(call('schedule','retired-schedule',card.revision), /active group/)
+  await assert.rejects(rt.boardCall('board-release-start', { scope, operationId:'retired-release' }), /active group/)
+  await assert.rejects(rt.boardCall('board-redo-confirm', { scope, operationId:'retired-redo' }), /active group/)
+  const commented = await call('card-comment','retired-comment',card.revision,{ text:'Original delivery audit.' })
+  assert.equal(commented.comments.at(-1).text, 'Original delivery audit.')
+  assert.ok((await rt.boardCall('board-history', { scope, taskId:card.id })).entries.length > 0)
+  const moved = await call('recover-to-room','retired-move',commented.revision,{ roomId:target.id })
+  assert.equal(moved.scope, `room:${target.id}`)
+  assert.equal(moved.status, 'proposed')
+  assert.equal(moved.recoveredFromRoomId, scope.id)
+  assert.equal(moved.comments.at(-1).text, 'Original delivery audit.')
+  assert.deepEqual(await call('recover-to-room','retired-move',commented.revision,{ roomId:target.id }), moved)
+  assert.deepEqual(await rt.boardCall('board-operation', { scope, operationId:'retired-move' }), { state:'committed', result:moved })
+  assert.deepEqual((await rt.boardCall('board-list', { scope })).tasks, [])
+  assert.deepEqual((await rt.boardCall('board-list', { scope:mine })).retiredBoards, [])
+  assert.deepEqual(deliveries, [])
+})
+
+test('a deleted room draft release can detach a card without reassigning that release from a live board', async t => {
+  const { rt, deliveries } = fixture(t)
+  const card = await rt.boardCall('board-command', create)
+  const release = await rt.boardCall('board-release-create', { scope, operationId:'old-release-create', release:{ id:'old-release', name:'Original release', version:'1' } })
+  const target = await rt.createRoom({ name:'Still active', members:['one','two'], admin:'one' })
+  const value = { releaseId:release.id }
+  const command = (scope, operationId, expectedRevision, value) => rt.boardCall('board-command', { scope, type:'release-assign', taskId:card.id, operationId, expectedRevision, value })
+  const assigned = await command(scope,'old-release-link',card.revision,value)
+  delete rt.state.rooms[scope.id]
+  const targetScope = { kind:'room', id:target.id }
+  await assert.rejects(rt.boardCall('board-release-remove', { scope:targetScope, operationId:'cross-scope-detach', releaseId:release.id,
+    expectedReleaseRevision:release.revision, taskId:card.id, expectedTaskRevision:assigned.revision }), /Release is unavailable/)
+  await assert.rejects(command(scope,'old-release-reassign',assigned.revision,value), /active group/)
+  const retired = await rt.boardCall('board-list', { scope })
+  assert.ok(retired.capabilities.commands[card.id].some(x => x.type === 'release-assign' && x.label === 'Remove from release'))
+  assert.equal(retired.capabilities.recoveryTargets[card.id], undefined)
+  const detached = await command(scope,'old-release-detach',assigned.revision,{ releaseId:null })
+  assert.equal(detached.releaseId, null)
+  assert.deepEqual((await rt.boardCall('board-list',{ scope })).capabilities.recoveryTargets[card.id], [{ id:target.id, name:target.name }])
+  assert.deepEqual(deliveries, [])
+})
+
 test('actual task journal backs the five instance-user endpoints with isolated group and personal views', async t => {
   const previousAclDiagnostics = process.env.DSBOT_TEST_PRIVATE_ACL_DIAGNOSTICS
   process.env.DSBOT_TEST_PRIVATE_ACL_DIAGNOSTICS = '1'

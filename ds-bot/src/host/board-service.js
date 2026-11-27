@@ -29,11 +29,13 @@ import { chineseRolePrompt } from './prompt-language.mjs'
 export const BOARD_UPLOAD_PATH = '/api/bot-board-upload'
 export const BOARD_UPLOAD_MAX_BYTES = Math.ceil(20 * 1024 * 1024 / 3) * 4 + 1024 * 1024
 const principal = Object.freeze({ kind: 'user', id: 'user' })
+const retiredBoardEndpoints = new Set(['board-list','board-history','board-operation','board-release-list','board-release-report','board-proposal-list','board-command'])
 const fail = (message, code = 'bot/invalid') => ({ ok: false, error: { code, message, details: {} } })
 const ok = value => ({ ok: true, value })
 const response = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' } })
 const rejectedMessages = new Set(['revision conflict', 'operation id conflict', 'task id exists', 'item cannot move between these cards', 'task limit reached', 'unknown task', 'unknown dependency', 'dependency cycle', 'dependency graph too large', 'reviewer must be independent', 'invalid fields', 'invalid card details', 'invalid card comment', 'unknown card comment', 'card comment limit reached', 'invalid reorder', 'reorder target unavailable', 'cards must be in the same lane', 'invalid position', 'invalid position order', 'invalid dependencies', 'invalid dependency grants', 'dependency grant unavailable', 'invalid attachments', 'invalid attachment reference', 'attachment unverified', 'attachment id conflict', 'too many attachments', 'unknown attachment', 'empty edit', 'responsibility or acceptance change requires separate reconciliation', 'share not authorized', 'share unavailable', 'share already exists or limit reached', 'personal progress unavailable', 'invalid personal progress', 'authority evidence unverified', 'task authority unavailable', 'task is not schedulable', 'task is not scheduled', 'finish or cancel active work before archiving', 'remove the card from its release before archiving', 'task action unavailable', 'invalid state', 'invalid draft state', 'invalid cancellation reason', 'task action unresolved', 'invalid release', 'release id exists', 'invalid release position', 'invalid release update', 'empty release update', 'release revision conflict', 'release is not editable', 'release is not startable', 'release is not queueable', 'release is not cancellable', 'release has active work', 'invalid release queue', 'release has no items', 'release unavailable', 'release task unavailable', 'another release is running in this scope', 'invalid release assignment', 'invalid release removal', 'invalid proposal', 'invalid proposal kind', 'invalid proposal status', 'proposal id exists', 'proposal limit reached', 'proposal revision conflict', 'proposal decision is not authorized', 'Proposal is unavailable', 'Task changed after this proposal was made', 'Invalid proposal decision'])
 const rejected = error => error?.code === 'bot/invalid' || (!error?.code && typeof error?.message === 'string' && (rejectedMessages.has(error.message) || ['change proposal unavailable','change proposal already exists','change proposal is immutable'].includes(error.message) || /^invalid (task id|operation id|actor|owner|reviewer|scope|title|acceptance|attachment id|image id|revision)$/.test(error.message)))
+rejectedMessages.add('Task cannot move to this group. Check participants, links and original delivery.')
 const requestKey = (endpoint, payload) => {
   if (endpoint !== 'board-upload' || !Array.isArray(payload?.images)) return { endpoint, payload }
   return { endpoint, payload: { ...payload, images: payload.images.map(image => image && typeof image === 'object' && typeof image.data === 'string'
@@ -403,7 +405,7 @@ export function install(rt) {
     }
     const proofs = new Map(), admissionProofs = new Map()
     const store = openTaskStore(join(root, 'tasks.sqlite'), {
-      assertWriteLock: writable, conversationKind:actor=>botWorkflow.conversationKind(actor),
+      assertWriteLock: writable, conversationKind:actor=>botWorkflow.conversationKind(actor), recoveryRoster: () => rt.state,
       onProjectEvent:projectChanged,
       onTaskCommit: events => {
         for (const fn of commitListeners) {
@@ -411,7 +413,7 @@ export function install(rt) {
           catch (error) { rt.warn?.('ds-bot: board commit listener: %s', error?.message || error) }
         }
       },
-      authorize: input => (input.actor === 'user' && ['create', 'link-goal-items', 'move-item', 'move-goal-item', 'edit', 'card-details', 'card-comment', 'card-comment-edit', 'card-comment-delete', 'participants', 'reorder', 'attach', 'remove-image', 'cancel', 'submit', 'restore', 'archive', 'unarchive', 'release-assign', 'release', 'proposal', 'share', 'unshare', 'personal-progress', 'schedule', 'unschedule', 'unblock'].includes(input.type))
+      authorize: input => (input.actor === 'user' && ['create', 'link-goal-items', 'move-item', 'move-goal-item', 'edit', 'card-details', 'card-comment', 'card-comment-edit', 'card-comment-delete', 'participants', 'reorder', 'attach', 'remove-image', 'cancel', 'submit', 'restore', 'archive', 'unarchive', 'release-assign', 'release', 'proposal', 'share', 'unshare', 'personal-progress', 'schedule', 'unschedule', 'unblock', 'recover-to-room'].includes(input.type))
         || (input.actor === 'scheduler' && (input.type === 'claim' ? allowedAction(input.task, input.action) : input.type === 'receipt'))
         || (input.actor !== 'user' && input.type === 'proposal' && botWorkflow.authorize(input))
         || botWorkflow.authorize(input),
@@ -715,6 +717,8 @@ export function install(rt) {
     })
     if (outcome.state === 'rejected') throw Object.assign(new Error(outcome.message), { code: 'bot/invalid' })
     const result = outcome.value
+    const originScope = store.get(payload.taskId)?.scope
+    if (originScope?.startsWith('room:') && !rt.roomOf(originScope.slice(5))) return result
     // An edit of active work creates a change-request task instead of rewriting the card;
     // tell the release group that, rather than claiming the source card changed.
     const change = result?.change
@@ -795,6 +799,10 @@ export function install(rt) {
   let redoPreparation
   const boardCall = (endpoint, payload = {}) => endpoint === 'board-image' ? imageCall(payload) : run(async () => {
     const { api, store, goalEditor } = service(), scope = payload.scope
+    const missingRoom = scope?.kind === 'room' && !rt.roomOf(scope.id)
+    if (missingRoom && (!retiredBoardEndpoints.has(endpoint) || endpoint === 'board-command' && ['create','confirm-delivery','goal-task-edit','goal-history-title','goal-card-details','goal-card-comment','goal-image-remove'].includes(payload.type))) {
+      throw Object.assign(new Error('This action requires an active group'), { code:'bot/invalid' })
+    }
     switch (endpoint) {
       case 'board-project':
       case 'board-project-bind':
@@ -815,7 +823,7 @@ export function install(rt) {
           const before = store.version(), rosterRevision = rt.state.revision
           const view = api.list(scope, principal)
           let recovery
-          if (payload.includeRecovery !== false) {
+          if (!view.retired && payload.includeRecovery !== false) {
             const held = await rt.recoveryHeldView?.(scope) ?? { available: false, incomplete: true, items: [], deliveries: [], deliveriesIncomplete:true }
             recovery = userRedoView({ principal, scope, state:rt.state, recovery:held })
           }
@@ -886,6 +894,7 @@ export function install(rt) {
       }
       case 'board-release-assign': {
         api.list(scope, principal)
+        if (store.getRelease(payload.releaseId)?.scope !== `${scope.kind}:${scope.id}`) throw new Error('Release is unavailable')
         const result = store.assignRelease({ operationId: payload.operationId, actor: 'user', releaseId: payload.releaseId, expectedReleaseRevision: payload.expectedReleaseRevision,
           taskId: payload.taskId, expectedTaskRevision: payload.expectedTaskRevision, afterId: payload.afterId ?? null })
         void notifyBoardChange(payload.taskId, { type:'release-assign', value:{ releaseId: payload.releaseId } }, payload.releaseId).catch(error => rt.warn?.('ds-bot: board change not synced to release group: %s', error))
@@ -893,6 +902,7 @@ export function install(rt) {
       }
       case 'board-release-remove': {
         api.list(scope, principal)
+        if (store.getRelease(payload.releaseId)?.scope !== `${scope.kind}:${scope.id}`) throw new Error('Release is unavailable')
         const result = store.removeFromRelease({ operationId: payload.operationId, actor: 'user', releaseId: payload.releaseId, expectedReleaseRevision: payload.expectedReleaseRevision,
           taskId: payload.taskId, expectedTaskRevision: payload.expectedTaskRevision })
         // The task left this release, so name it explicitly instead of reading the task's

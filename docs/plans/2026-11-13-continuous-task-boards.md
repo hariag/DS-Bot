@@ -34,6 +34,10 @@ Image attachments are authorized per task, not exposed as public file paths. Val
 
 ## Continuing work safely
 
+Deleting a group leaves its durable task board available to the instance owner from My task board. The retained board preserves the cards, attachments, revisions and operation history. The owner can record comments and manage the remaining cards through the journal. Dispatch requires an active group.
+
+The owner can move an eligible card and its child items into an active group with the required participants. The move preserves task IDs and records the source and destination in the task journal. It cancels unused dispatches and leaves the moved work awaiting scheduling in the new group. Tasks with unresolved delivery or links that require the original board stay available for inspection there.
+
 Once authorization, dependencies, ownership and capacity are established, a durable action can be admitted as soon as the relevant event occurs. Periodic inspection is a fallback to find missed changes, not a prerequisite for every action. Work with conflicting write scopes or ordering requirements remains serial; unrelated work may proceed independently. A long task should leave a durable checkpoint and continue in bounded turns, with a target of at most 30 model steps per turn. A hard limit is not provided until the runtime enforces and tests a safe continuation boundary.
 
 The task ledger and DSH session log are separate stores. Their writes must not be described as one atomic transaction. Reserve the full immutable intent and identity before attempting admission; require a fenced, synchronous claim against current task permissions and dependency state. If a process stops or a commit result cannot be established, retain the original intent as uncertain and do not automatically replay it. Reconciliation must identify the same target session, message and action, and verify durable evidence before deciding whether to continue.

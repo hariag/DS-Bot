@@ -11,6 +11,10 @@ const canClearUserBlock = task => task?.blocked?.owner === 'user' && !task.stale
 const string = (value, max) => typeof value === 'string' && value.trim() !== '' && value.length <= max
 const fail = message => Object.assign(new Error(message), { code: 'bot/invalid' })
 const liveAction = action => ['pending','claimed','accepted','uncertain'].includes(action.state)
+const isRetiredTask = (task, rooms) => task?.scope?.startsWith('room:') && !has(rooms, task.scope.slice(5))
+const retiredCommands = new Set(['card-comment', 'card-comment-edit', 'card-comment-delete', 'card-details', 'cancel', 'archive', 'unarchive', 'restore', 'recover-to-room', 'release-assign'])
+const canDetachRetiredRelease = (task, release) => !task.parentTaskId && task.releaseId && release?.scope === task.scope
+  && ['draft','queued'].includes(release.status)
 
 // `principal` comes from the authenticated route, never from a request body.
 // The current browser principal represents the instance owner, not a Bot.
@@ -23,7 +27,11 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
   const view = (scope, principal) => {
     const state = current()
     const tasks = store.list()
-    const board = boardList({ scope, principal, rooms: state.rooms, bots: state.bots, tasks, revision: state.revision ?? null, verifyShare, verifyDependency })
+    const key = `${scope?.kind}:${scope?.id}`
+    const releaseOnly = principal?.kind === 'user' && scope?.kind === 'room' && nonempty(scope.id)
+      && !has(state.rooms, scope.id) && !tasks.some(task => task.scope === key)
+    const hasRetiredRelease = releaseOnly && (store.listReleases?.(key, { summary:true })?.length ?? 0) > 0
+    const board = boardList({ scope, principal, rooms: state.rooms, bots: state.bots, tasks, revision: state.revision ?? null, hasRetiredRelease, verifyShare, verifyDependency })
     const addLegacy = () => {
       const ids = new Set(board.tasks.map(task => task.id))
       const visibleParents = new Set(board.tasks.filter(task => !task.shared).map(task => task.id))
@@ -33,13 +41,13 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
       }
       return board
     }
-    addLegacy()
+    if (!board.retired) addLegacy()
     if (principal?.kind !== 'user') return board
     const byId = new Map(tasks.map(task => [task.id, task]))
     const isPublic = id => has(state.bots, id) && state.bots[id]?.private !== true
     const publicBots = Object.keys(state.bots).filter(isPublic)
-    const ids = scope.kind === 'room'
-      ? ['user', ...(state.rooms[scope.id].members ?? []).filter(isPublic)]
+    const ids = scope.kind === 'room' && !board.retired
+      ? ['user', ...(state.rooms[scope.id]?.members ?? []).filter(isPublic)]
       : ['user', ...publicBots]
     const actors = [...new Set(ids)].map(id => id === 'user'
       ? { id, name: 'You' }
@@ -47,6 +55,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
     let writable = false
     try { assertWritable(); writable = true } catch { /* read-only host still shows its board */ }
     const availableTargets = Object.create(null)
+    const recoveryTargets = Object.create(null)
     const releases = store.listReleases?.(`${scope.kind}:${scope.id}`) ?? []
     const releaseById = new Map(releases.map(release => [release.id, release]))
     const commands = Object.fromEntries(board.tasks.map(task => {
@@ -71,6 +80,22 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
           ...(scope.kind === 'room' && task.parentTaskId ? [{type:'move-goal-item',label:'Move to card'}] : []),
           ...(task.legacy.useOverlay?[{type:'goal-history-title',label:'Correct card title'}]:[]),
           {type:'goal-card-details',label:'Edit card details'},{type:'goal-card-comment',label:'Add comment'}, ...(images ? [{type:'upload',label:'Add images'},{type:'goal-image-remove',label:'Remove image'}] : [])] : []]
+      if (isRetiredTask(source, state.rooms)) {
+        const openAction = (store.listActions?.(source.id) ?? []).some(action => ['claimed','accepted','uncertain'].includes(action.state))
+        const release = source.releaseId ? (releaseById.get(source.releaseId) ?? store.getRelease?.(source.releaseId)) : undefined
+        const canArchive = !source.archivedAt && !['ready','working','reported'].includes(source.status)
+          && (!release || ['published','cancelled'].includes(release.status))
+        const targets = board.retired && !source.parentTaskId ? store.recoveryTargetRooms?.(source.id, state.rooms, state.bots, tasks) ?? [] : []
+        if (targets.length) recoveryTargets[task.id] = targets
+        return [task.id, [
+          { type:'card-details', label:'Edit card details' }, { type:'card-comment', label:'Add comment' },
+          ...(source.comments?.length ? [{ type:'card-comment-edit', label:'Edit comment' }, { type:'card-comment-delete', label:'Delete comment' }] : []),
+          ...(source.status === 'cancelled' ? [{ type:'restore', label:'Restore card' }] : !openAction && source.status !== 'done' ? [{ type:'cancel', label:'Cancel card' }] : []),
+          ...(source.archivedAt ? [{ type:'unarchive', label:'Restore from archive' }] : canArchive ? [{ type:'archive', label:'Archive card' }] : []),
+          ...(targets.length ? [{ type:'recover-to-room', label:'Move to active group' }] : []),
+          ...(board.retired && canDetachRetiredRelease(source, release) ? [{ type:'release-assign', label:'Remove from release' }] : []),
+        ]]
+      }
       const grants = source?.shares?.filter(grant => !grant.revoked) ?? []
       const targets = (source?.scope?.startsWith('room:') ? shareTargets(source) : []).filter(target => !grants.some(grant => grant.targetRoomId === target.id))
       if (targets.length) availableTargets[task.id] = targets
@@ -101,10 +126,28 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
     }))
     const taskLimit = store.limits?.().tasks
     const taskLimitReached = Number.isSafeInteger(taskLimit) && tasks.length >= taskLimit
-    board.capabilities = { commands, create: writable && !taskLimitReached, upload: writable && !!images, actors, shareTargets:availableTargets,
+    board.capabilities = { commands, create: writable && !board.retired && !taskLimitReached, upload: writable && !board.retired && !!images, actors, shareTargets:availableTargets,
+      ...(board.retired ? { recoveryTargets } : {}),
       ...(Number.isSafeInteger(taskLimit) ? { taskCount:tasks.length, taskLimit, taskLimitReached } : {}) }
     if (principal?.kind === 'user') {
-      board.releases = releases.map(({ items, ...release }) => ({ ...release, canConfigureTeam:writable && scope.kind === 'room' && canConfigureReleaseTeam(release, scope.id), itemCount:items.length, doneCount:items.filter(item => item.status === 'done').length }))
+      board.releases = releases.map(({ items, ...release }) => ({ ...release, canConfigureTeam:writable && !board.retired && scope.kind === 'room' && canConfigureReleaseTeam(release, scope.id), itemCount:items.length, doneCount:items.filter(item => item.status === 'done').length }))
+      if (scope.kind === 'personal' && scope.id === 'user') {
+        const counts = new Map()
+        const entryFor = id => {
+          if (!counts.has(id)) counts.set(id, { id, taskCount:0, openCount:0 })
+          return counts.get(id)
+        }
+        for (const task of tasks) {
+          if (!isRetiredTask(task, state.rooms)) continue
+          const entry = entryFor(task.scope.slice(5))
+          entry.taskCount++
+          if (!task.archivedAt && !['done','cancelled'].includes(task.status)) entry.openCount++
+        }
+        for (const roomScope of store.listRoomReleaseScopes?.() ?? []) {
+          if (roomScope.startsWith('room:') && !has(state.rooms, roomScope.slice(5))) entryFor(roomScope.slice(5))
+        }
+        board.retiredBoards = [...counts.values()].sort((a,b) => a.id.localeCompare(b.id))
+      }
       board.proposals = (store.listProposals?.(`${scope.kind}:${scope.id}`) ?? []).filter(proposal => proposal.status === 'pending')
         .map(proposal => ({ ...proposal, taskTitle: byId.get(proposal.taskId)?.title ?? proposal.after?.title }))
       board.releaseRoles = RELEASE_ROLES
@@ -175,8 +218,12 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
     },
     operation(scope, principal, operationId) {
       if (!nonempty(operationId)) throw fail('Invalid operation ID')
-      const board = view(scope, principal)
       const record = store.operation(operationId)
+      if (principal?.kind === 'user' && scope?.kind === 'room' && nonempty(scope.id)
+        && record?.status === 'committed' && record.result?.recoveredFromRoomId === scope.id && !has(current().rooms, scope.id)) {
+        return { state:'committed', result:record.result }
+      }
+      const board = view(scope, principal)
       if (!record || (principal?.kind !== 'user' && !board.tasks.some(task => task.id === record.taskId))) return { state: 'unknown' }
       if (record.status === 'rejected') return { state: 'rejected', message: record.message || 'Task change rejected' }
       if (record.status !== 'committed' && record.status !== undefined) return { state: 'unknown' }
@@ -241,8 +288,12 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
       assertWritable()
       if (!input || !nonempty(input.operationId) || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) throw fail('Invalid task command')
       const { board, task } = visibleTask(scope, principal, input.taskId)
+      const retired = isRetiredTask(task, current().rooms)
+      if (retired && !retiredCommands.has(input.type)) throw fail('This action requires an active group')
       let value = input.value
-      if (input.type === 'edit') {
+      if (input.type === 'recover-to-room') {
+        if (!retired || !board.retired || !value || !nonempty(value.roomId) || Object.keys(value).length !== 1) throw fail('Choose an active group for this orphaned task')
+      } else if (input.type === 'edit') {
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw fail('Invalid task edit')
         const original = view(taskScope(task), principal)
         const allowed = new Set(original.capabilities.actors.map(actor => actor.id))
@@ -273,6 +324,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
           (Object.hasOwn(value,'description') && value.description !== (task.description??''))
           || (Object.hasOwn(value,'type') && value.type !== (task.type ?? 'other')))
           && ['working','reported','done'].includes(task.status)) {
+          if (retired) throw fail('Recover this task before proposing a change to its definition')
           const proposal=store.proposeChange({operationId:input.operationId,taskId:task.id,expectedRevision:input.expectedRevision,actor:'user',value:{
             title:task.title,owner:task.owner,reviewer:task.reviewer,acceptance:task.acceptance,dependencies:task.dependencies,
             dependencyGrants:task.dependencyGrants??[],description:value.description ?? task.description ?? '',type:value.type ?? task.type ?? 'other',
@@ -292,6 +344,8 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
         if (!value || typeof value !== 'object' || Array.isArray(value) || !Object.hasOwn(value, 'releaseId')
           || (value.releaseId !== null && !nonempty(value.releaseId))
           || (value.releasePosition !== undefined && value.releasePosition !== null && !nonempty(value.releasePosition))) throw fail('Invalid release assignment')
+        if (retired && (!board.retired || !task.releaseId || value.releaseId !== null || value.releasePosition != null
+          || !canDetachRetiredRelease(task, store.getRelease?.(task.releaseId)))) throw fail('This action requires an active group')
         value = { releaseId:value.releaseId, ...(Object.hasOwn(value, 'releasePosition') ? { releasePosition:value.releasePosition } : {}) }
       } else if (input.type === 'participants') {
         if (!value || typeof value !== 'object' || Array.isArray(value)
@@ -336,6 +390,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
       assertWritable()
       if (!input || !nonempty(input.operationId) || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) throw fail('Invalid image request')
       const { task } = visibleTask(scope, principal, input.taskId)
+      if (isRetiredTask(task, current().rooms)) throw fail('This action requires an active group')
       // Reject a stale edit before writing any content; the journal checks again.
       if (!store.operation(input.operationId) && task.revision !== input.expectedRevision) throw fail('Task changed; refresh the board')
       const references = images.stage(task.id, input.images)
@@ -347,6 +402,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
       assertWritable()
       if (!input || !nonempty(input.operationId) || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1 || !Array.isArray(references)) throw fail('Invalid image request')
       const { task } = visibleTask(scope, principal, input.taskId)
+      if (isRetiredTask(task, current().rooms)) throw fail('This action requires an active group')
       if (task.revision !== input.expectedRevision) throw fail('Task changed; refresh the board')
       return store.command({ operationId: input.operationId, taskId: task.id, expectedRevision: input.expectedRevision,
         actor: 'user', type: 'attach', value: { images: references } })

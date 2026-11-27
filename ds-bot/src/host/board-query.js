@@ -27,8 +27,8 @@ function canSeeTask(task, principal, rooms) {
   return !!room && Array.isArray(room.members) && room.members.includes(principal.id)
 }
 
-function permitsBoard(scope, principal, rooms, bots) {
-  if (principal.kind === 'user') return scope.kind === 'room' ? !!own(rooms, scope.id) : scope.id === 'user' || !!own(bots, scope.id)
+function permitsBoard(scope, principal, rooms, bots, retired) {
+  if (principal.kind === 'user') return scope.kind === 'room' ? !!own(rooms, scope.id) || retired : scope.id === 'user' || !!own(bots, scope.id)
   if (principal.kind !== 'bot' || !text(principal.id) || !own(bots, principal.id)) return false
   if (scope.kind === 'personal') return scope.id === principal.id
   const room = own(rooms, scope.id)
@@ -36,16 +36,18 @@ function permitsBoard(scope, principal, rooms, bots) {
 }
 
 /** Return only tasks visible to the authenticated actor in the selected board. */
-export function boardList({ scope, principal, rooms = {}, bots = {}, tasks = [], revision = null, verifyShare = () => false, verifyDependency = () => false }) {
+export function boardList({ scope, principal, rooms = {}, bots = {}, tasks = [], revision = null, hasRetiredRelease = false, verifyShare = () => false, verifyDependency = () => false }) {
   const key = parseScope(scope)
-  if (!principal || !permitsBoard(scope, principal, rooms, bots)) throw new Error('Board is not available')
+  const retired = scope.kind === 'room' && !own(rooms, scope.id)
+    && (hasRetiredRelease || tasks.some(task => task?.scope === key || task?.recoveredFromRoomId === scope.id))
+  if (!principal || !permitsBoard(scope, principal, rooms, bots, retired)) throw new Error('Board is not available')
   const visible = tasks.filter(task => canSeeTask(task, principal, rooms))
   const selected = visible.filter(task => scope.kind === 'room'
     ? task.scope === key
     : scope.id === 'user'
       ? task.scope === key || task.owner === 'user' || task.reviewer === 'user'
       : task.scope === key || task.owner === scope.id || task.reviewer === scope.id || task.acceptor === scope.id).sort(byPositionThenId)
-  const shares = scope.kind !== 'room' ? [] : tasks.flatMap(task => (task.shares ?? [])
+  const shares = scope.kind !== 'room' || retired ? [] : tasks.flatMap(task => (task.shares ?? [])
     .filter(grant => grant && !grant.revoked && grant.targetRoomId === scope.id && grant.taskId === task.id && verifyShare(task, grant, scope, principal) === true)
     .map(grant => ({ id:task.id, title:grant.fields.includes('title') ? grant.titleSnapshot : 'Shared task', status:task.stale ? 'shared-stale' : task.blocked ? 'shared-blocked' : task.status, shared:true })))
   const selectedIds = new Set(selected.map(task => task.id))
@@ -63,6 +65,7 @@ export function boardList({ scope, principal, rooms = {}, bots = {}, tasks = [],
   })
   return {
     scope: { kind: scope.kind, id: scope.id }, revision,
+    ...(retired ? { retired: true } : {}),
     tasks: [...selected.map(task => ({
       id: task.id, revision: task.revision, title: task.title, status: task.status,
       owner: task.owner, reviewer: task.reviewer,
@@ -94,7 +97,8 @@ export function boardList({ scope, principal, rooms = {}, bots = {}, tasks = [],
       ...(task.evidence ? { evidence: task.evidence } : {}),
       ...(task.authority ? { authority: task.authority } : {}),
       ...(principal.kind === 'user' && Array.isArray(task.shares) ? { shares: task.shares.filter(share => !share.revoked).map(({ id, targetRoomId, fields }) => ({ id, targetRoomId, fields })) } : {}),
-      ...(task.scope.startsWith('room:') ? { originRoomId: task.scope.slice(5) } : {}),
+      ...(task.scope.startsWith('room:') ? { originRoomId: task.scope.slice(5), ...(!own(rooms, task.scope.slice(5)) ? { retiredRoom:true } : {}) } : {}),
+      ...(principal.kind === 'user' && task.recoveredFromRoomId ? { recoveredFromRoomId:task.recoveredFromRoomId } : {}),
     })), ...shares.filter(task => !selectedIds.has(task.id))],
     // Command exposure is opt-in; a view alone never grants mutation authority.
     capabilities: { commands: {} },

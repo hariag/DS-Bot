@@ -37,6 +37,17 @@ test('the authenticated instance user can view a room or a Bot, never by changin
   assert.equal(list({ kind: 'personal', id: 'one' }, { kind: 'user' }).tasks.length, 3)
 })
 
+test('retired boards use persisted room tasks as an owner-only recovery scope', () => {
+  const scope = { kind:'room', id:'a' }, survivingRooms = { b:rooms.b }
+  const result = list(scope, { kind:'user' }, survivingRooms)
+  assert.equal(result.retired, true)
+  assert.deepEqual(result.tasks.map(task => task.id), ['a1', 'a2'])
+  assert.ok(result.tasks.every(task => task.retiredRoom === true))
+  assert.throws(() => list(scope, { kind:'bot', id:'one' }, survivingRooms), /not available/)
+  assert.throws(() => list({kind:'room',id:'never-existed'}, {kind:'user'}, survivingRooms), /not available/)
+  assert.deepEqual(list({kind:'personal',id:'one'}, {kind:'bot',id:'one'}, survivingRooms).tasks.map(task => task.id), ['mine'])
+})
+
 test('object prototype keys are not valid roster identities', () => {
   assert.throws(() => list({ kind: 'room', id: '__proto__' }, { kind: 'user' }), /not available/)
   assert.throws(() => list({ kind: 'personal', id: '__proto__' }, { kind: 'user' }), /not available/)

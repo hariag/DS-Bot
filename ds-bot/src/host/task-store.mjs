@@ -192,7 +192,7 @@ const applyCardDetails = (target, value) => {
 }
 
 /** Open a private task journal. The containing directory must be private. */
-export function openTaskStore(path, { conversationKind = () => 'group', onProjectEvent, onTaskCommit, authorize = () => false, verifyRegistration = () => false, verifyEvidence = () => false, verifyGoalItems = () => false, verifyReceipt = () => false, verifyReviewRecovery = () => false, verifyInvalidation = () => false, verifyAttachment = () => false, verifyShare = () => false, verifyDependency = () => false, verifyAdmission = () => false, assertWriteLock = () => { throw new Error('write lock required') } } = {}) {
+export function openTaskStore(path, { conversationKind = () => 'group', onProjectEvent, onTaskCommit, authorize = () => false, verifyRegistration = () => false, verifyEvidence = () => false, verifyGoalItems = () => false, verifyReceipt = () => false, verifyReviewRecovery = () => false, verifyInvalidation = () => false, verifyAttachment = () => false, verifyShare = () => false, verifyDependency = () => false, verifyAdmission = () => false, recoveryRoster = () => undefined, assertWriteLock = () => { throw new Error('write lock required') } } = {}) {
   if (!isAbsolute(path)) throw new Error('database path must be absolute')
   const dir = lstatSync(dirname(path))
   if (!isPrivateDirectory(dirname(path), dir)) throw new Error('database directory must be private')
@@ -391,6 +391,37 @@ const releaseIsDone = release => {
   const insertEdges = task => { const grants = new Map((task.dependencyGrants ?? []).map(entry => [entry.taskId, entry.grantId])); for (const id of task.dependencies) insertEdge.run(task.id, id, grants.get(id) ?? null) }
   const reverseEdges = db.prepare('SELECT task_id FROM task_dependencies WHERE dependency_id=? ORDER BY task_id')
   const dependents = id => reverseEdges.all(id).map(row => row.task_id)
+  const recoveryHasDelivery = db.prepare(`SELECT 1 FROM actions a WHERE a.task_id=? AND
+    (a.state IN ('claimed','accepted','uncertain') OR (a.state='pending' AND
+      (a.receipt IS NOT NULL OR EXISTS (SELECT 1 FROM admission_intents i WHERE i.action_id=a.id)))) LIMIT 1`)
+  const cancelRecoveryActions = db.prepare("UPDATE actions SET state='cancelled' WHERE task_id=? AND state='pending'")
+
+  function recoveryCards(taskId, rooms, tasks) {
+    const task = tasks.find(card => card.id === taskId)
+    if (!task?.scope.startsWith('room:') || Object.hasOwn(rooms, task.scope.slice(5)) || task.parentTaskId) return
+    const cards = [task]
+    const included = new Set([taskId])
+    for (let i = 0; i < cards.length; i++) {
+      for (const child of tasks.filter(card => card.parentTaskId === cards[i].id)) {
+        if (included.has(child.id)) return
+        cards.push(child)
+        included.add(child.id)
+      }
+    }
+    if (cards.some(card => card.scope !== task.scope || !['draft','proposed','waiting','ready'].includes(card.status)
+      || card.archivedAt || card.evidence || card.workSessionId || card.review || card.change || card.stale || card.blocked
+      || card.releaseId || card.goalItemIds?.length || card.shares?.some(share => !share.revoked)
+      || card.dependencyGrants?.length || card.dependencies.some(id => !included.has(id))
+      || dependents(card.id).some(id => !included.has(id)) || recoveryHasDelivery.get(card.id))) return
+    return cards
+  }
+
+  function recoveryDestination(cards, room, bots) {
+    if (!Array.isArray(room?.members)) return false
+    const eligible = id => id === 'user' || (Object.hasOwn(bots, id) && bots[id]?.private !== true && room.members.includes(id))
+    return cards.every(card => (isUnassignedItemDraft(card) || (eligible(card.owner) && eligible(card.reviewer)))
+      && (card.acceptor === undefined || eligible(card.acceptor)) && (card.participants ?? []).every(eligible))
+  }
   let audit
   const addHistory = db.prepare('INSERT INTO history(operation_id,actor,task_id,before,after) VALUES(?,?,?,?,?)')
   const historyHead = db.prepare('SELECT COALESCE(MAX(sequence), 0) AS sequence FROM history')
@@ -882,6 +913,14 @@ const releaseIsDone = release => {
     },
     get(id) { return getTask(requireId(id, 'task id')) },
     list() { return getAll() },
+    listRoomReleaseScopes() {
+      return [...new Set(getAllReleases().map(release => release.scope).filter(scope => scope.startsWith('room:')))]
+    },
+    recoveryTargetRooms(taskId, rooms, bots, tasks = getAll()) {
+      const cards = recoveryCards(taskId, rooms, tasks)
+      return cards ? Object.entries(rooms).filter(([, room]) => recoveryDestination(cards, room, bots))
+        .map(([id, room]) => ({ id, name:room.name ?? id })) : []
+    },
     listUncertainDeliveries() { return uncertainDeliveries.all() },
     listSchedule() {
       const releases = new Map(getAllReleases().map(release => [release.id, release]))
@@ -1277,15 +1316,22 @@ const releaseIsDone = release => {
             OR (d.operation_id LIKE 'execute-consumed:%' AND d.reason='verified original execute input was consumed'))
         WHERE h.task_id=? ORDER BY h.sequence DESC LIMIT 51`).all(requireId(id, 'task id'))
       const fields = ['title', 'owner', 'reviewer', 'acceptance', 'dependencies', 'description', 'stage', 'dueDate', 'dueComplete', 'labels', 'checklist', 'coverImageId', 'progress']
-      const project = value => {
-        if (!value) return null
-        const record = JSON.parse(value), result = { revision:record.revision }
+      const project = (record, moved) => {
+        if (!record) return null
+        const result = { revision:record.revision }
         for (const field of fields) if (Object.hasOwn(record, field)) result[field] = record[field]
+        if (moved) result.scope = record.scope
         return result
       }
-      return { truncated:rows.length > 50, entries:rows.slice(0, 50).map(row => ({ before:project(row.before), after:project(row.after),
-        ...(row.confirmed_at ? { deliveryConfirmedAt:Date.parse(row.confirmed_at) } : {}),
-        ...(row.consumed_at ? { deliveryConsumedAt:Date.parse(row.consumed_at) } : {}) })) }
+      return { truncated:rows.length > 50, entries:rows.slice(0, 50).map(row => {
+        const before = row.before && JSON.parse(row.before), after = JSON.parse(row.after)
+        const origin = after.recoveredFromRoomId
+        const moved = typeof origin === 'string' && before?.scope === `room:${origin}` && before.scope !== after.scope
+        return { before:project(before,moved), after:project(after,moved),
+          ...(moved ? { recoveredFromRoomId:origin } : {}),
+          ...(row.confirmed_at ? { deliveryConfirmedAt:Date.parse(row.confirmed_at) } : {}),
+          ...(row.consumed_at ? { deliveryConsumedAt:Date.parse(row.consumed_at) } : {}) }
+      }) }
     },
     create({ operationId, actor, task, intake }) {
       if (!task || typeof task !== 'object') throw new Error('invalid task')
@@ -1391,6 +1437,25 @@ const releaseIsDone = release => {
       return transact(operationId, actor, payload, () => ({ type, actor, task: getTask(taskId) }), () => {
         const old = getTask(taskId); if (!old) throw new Error('unknown task')
         if (old.revision !== expectedRevision) throw new Error('revision conflict')
+        if (type === 'recover-to-room') {
+          keysOnly(value, ['roomId']); requireId(value.roomId, 'target room id')
+          const roster = recoveryRoster()
+          const cards = actor === 'user' && roster?.rooms && roster?.bots && recoveryCards(taskId, roster.rooms, getAll())
+          if (!cards || !Object.hasOwn(roster.rooms, value.roomId) || !recoveryDestination(cards, roster.rooms[value.roomId], roster.bots)) {
+            throw new Error('Task cannot move to this group. Check participants, links and original delivery.')
+          }
+          const scope = `room:${value.roomId}`
+          let recovered
+          for (const card of cards) {
+            cancelRecoveryActions.run(card.id)
+            const activity = [...(card.boardActivity ?? []), { id:operationId, actor, type, at:Date.now() }].slice(-50)
+            const next = { ...card, scope, recoveredFromRoomId:old.scope.slice(5), revision:card.revision + 1, authority:null, actionRevision:null,
+              status:card.status === 'draft' ? 'draft' : 'proposed', position:appendPosition(scope), boardActivity:activity }
+            save(card, next)
+            recovered ??= next
+          }
+          return recovered
+        }
         if (old.change && ['edit','card-details'].includes(type)) throw new Error('change proposal is immutable')
         const manual = isManualBoardTask(old)
         if (['start','progress','report','review'].includes(type)) {

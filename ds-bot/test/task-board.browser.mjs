@@ -78,6 +78,17 @@ async function request(endpoint,payload){
   return state.projectReceipt;
  }
  if(endpoint==='board-list'){
+  if(state.mode==='retired'){
+   const capabilities={create:false,upload:false,actors,commands:{},recoveryTargets:{}};
+   if(payload.scope.kind==='personal'&&payload.scope.id==='user')return {tasks:[],retiredBoards:state.retiredMoved?[]:[{id:'deleted-room',taskCount:1,openCount:1}],capabilities};
+   if(payload.scope.kind==='room'&&payload.scope.id==='deleted-room'){
+    const task={id:'T-OLD',title:'Outstanding group task',revision:state.retiredDetached?5:4,status:'proposed',owner:'a',reviewer:'b',acceptance:'Original acceptance',dependencies:[],releaseId:state.retiredDetached?null:'old-release'};
+    capabilities.commands[task.id]=[{type:state.retiredDetached?'recover-to-room':'release-assign'}];
+    if(state.retiredDetached)capabilities.recoveryTargets[task.id]=[{id:'g2',name:'Current group'}];
+    return {retired:true,tasks:state.retiredMoved?[]:[task],releases:[{id:'old-release',name:'Archived release history',status:'draft',revision:3,itemCount:state.retiredDetached?0:1}],capabilities};
+   }
+   throw Error('unexpected retired board scope');
+  }
   if(state.mode==='phase2'){
    const tasks=state.phase2Tasks.map(task=>({...task}));
    const releases=state.releases.map(release=>({...release,itemCount:tasks.filter(task=>task.releaseId===release.id).length,doneCount:tasks.filter(task=>task.releaseId===release.id&&task.status==='done').length}));
@@ -143,6 +154,16 @@ async function request(endpoint,payload){
  }
  if(endpoint==='board-image')return images[payload.imageId];
   if(endpoint==='board-command'||endpoint==='board-upload'){
+  if(state.mode==='retired'&&endpoint==='board-command'&&payload.type==='release-assign'){
+   state.retiredDetached=true;
+   state.retiredReceipt={operationId:payload.operationId,state:'committed'};
+   return {};
+  }
+  if(state.mode==='retired'&&endpoint==='board-command'&&payload.type==='recover-to-room'){
+   state.retiredReceipt={operationId:payload.operationId,state:state.retiredReject?'rejected':'committed',message:'Destination group membership changed'};
+   if(!state.retiredReject)state.retiredMoved=true;
+   return {};
+  }
   if(state.mode==='lost')throw Error('network lost');
   if(endpoint==='board-upload'&&state.mode==='invalid-image')throw Error('rejected by host');
   if(state.mode==='hang'){
@@ -233,6 +254,7 @@ async function request(endpoint,payload){
   state.sealed.add(payload.operationId);return {state:'rejected',message:'safely cancelled'};
  }
  if(endpoint==='board-operation'){
+  if(state.mode==='retired'&&state.retiredReceipt?.operationId===payload.operationId)return state.retiredReceipt;
   if(state.teamMode==='lost' && state.teamRequest?.operationId===payload.operationId)return {state:'unknown'};
   const plan=state.receiptPlans[payload.operationId];
   if(plan){delete state.receiptPlans[payload.operationId];state.receiptStarted.push(plan.id);await new Promise(resolve=>{state.resolvers['receipt:'+plan.id]=resolve})}
@@ -296,6 +318,49 @@ async function runBrowserCases() {
   await page.addScriptTag({ path: react })
   await page.addScriptTag({ path: reactDom })
   await page.addScriptTag({ content: bundle.outputFiles[0].text })
+
+  {
+  await page.evaluate(() => {
+    globalThis.fixture.retiredReject=true
+    globalThis.renderFixture({kind:'personal',id:'user'},'retired',true)
+  })
+  const deletedBoards = page.getByRole('region',{name:'Deleted group boards'})
+  await deletedBoards.getByRole('button',{name:/deleted-room/}).click()
+  const deletedBoard = page.getByRole('dialog',{name:'Deleted group task board'})
+  await deletedBoard.getByText('Deleted group · deleted-room · 1 cards').waitFor()
+  assert.equal(await deletedBoard.getByRole('button',{name:'Project coordination',exact:true}).count(),0)
+  await deletedBoard.getByRole('button',{name:'Release',exact:true}).click()
+  await deletedBoard.getByText('Archived release history',{exact:true}).waitFor()
+  assert.equal(await deletedBoard.getByRole('button',{name:/^(New release|Queue|Start)$/}).count(),0)
+  await deletedBoard.getByRole('button',{name:'Status',exact:true}).click()
+  await deletedBoard.getByText('Outstanding group task',{exact:true}).click()
+  const recovery = page.getByRole('button',{name:'Move task to group'})
+  assert.equal(await recovery.count(),0)
+  await page.getByRole('button',{name:'Remove from release'}).click()
+  await recovery.waitFor()
+  assert.equal(await recovery.isDisabled(),true)
+  await page.getByLabel('Destination group').selectOption('g2')
+  await recovery.click()
+  await page.locator('.bt-card-banner').getByText('Destination group membership changed').waitFor()
+  await page.evaluate(() => { globalThis.fixture.retiredReject=false })
+  await recovery.click()
+  await deletedBoard.getByText('Task moved to the destination group').waitFor()
+  const commands = await page.evaluate(() => globalThis.fixture.calls.filter(x=>x.endpoint==='board-command').map(x=>x.payload))
+  assert.equal(commands.length,3)
+  const [detach,...moves] = commands
+  assert.deepEqual({scope:detach.scope,type:detach.type,taskId:detach.taskId,expectedRevision:detach.expectedRevision,value:detach.value},
+    {scope:{kind:'room',id:'deleted-room'},type:'release-assign',taskId:'T-OLD',expectedRevision:4,value:{releaseId:null}})
+  assert.equal(moves.length,2)
+  for(const move of moves) assert.deepEqual({scope:move.scope,type:move.type,taskId:move.taskId,expectedRevision:move.expectedRevision,value:move.value},
+    {scope:{kind:'room',id:'deleted-room'},type:'recover-to-room',taskId:'T-OLD',expectedRevision:5,value:{roomId:'g2'}})
+  assert.equal(await deletedBoard.getByText('Outstanding group task',{exact:true}).count(),0)
+  await deletedBoard.getByRole('button',{name:'Back to my task board'}).click()
+  await page.getByRole('dialog',{name:'Board',exact:true}).waitFor()
+  assert.equal(await deletedBoards.count(),0)
+  assert.deepEqual(errors,[])
+  }
+  if(process.env.BOARD_RETIRED_ONLY==='1')return
+  await page.evaluate(() => { globalThis.fixture.calls=[] })
 
   await page.evaluate(() => globalThis.renderFixture({kind:'room',id:'g1'}, 'normal', true))
   await page.getByRole('button',{name:'Project coordination',exact:true}).click()
