@@ -33,7 +33,7 @@ const started = new Map()
 
 // The durable logs DSH keeps, by Session: what a Session's turns did and said.
 // `inspect` stands in for DSH reading that log, when a test cannot read it.
-async function start(home, logs, inspect) {
+async function start(home, logs, inspect, { initAgent } = {}) {
   const ctx = fakeContext()
   const agents = new Map()
   const agentOf = (sessionId) => {
@@ -41,11 +41,14 @@ async function start(home, logs, inspect) {
       const calls = []
       const inbox = { nextStep: [], nextTurn: [], remove: () => false }
       const keep = (message) => { calls.push(message) }
-      agents.set(sessionId, { session: { id: sessionId }, calls, inbox, followup: keep, steer: keep, cancel() {} })
+      const agent = { session: { id: sessionId }, calls, inbox, followup: keep, steer: keep, cancel() {} }
+      initAgent?.(agent)
+      agents.set(sessionId, agent)
     }
     return agents.get(sessionId)
   }
   Object.assign(ctx, {
+    agents: { get: id => agents.get(id) },
     llm: { listProviders: () => [], listModels: async () => [], resolveModelInfo: async () => ({}) },
     workspaceRegistry: { get: () => undefined, resolveByPath: async () => undefined, create: async path => ({ id: 'w1', path }), archiveSession: async () => {} },
     sessionController: {
@@ -74,7 +77,7 @@ async function start(home, logs, inspect) {
   const askApproval = sessionId => ctx.listeners.get('approval/request')[0]({ agent: { session: { id: sessionId } }, toolName: 'pwsh', reason: 'escalate sandbox' }, () => 'from-dsh')
   const call = async (endpoint, payload) => (await route.fetch(new Request('http://localhost/api/bot', { method: 'POST', body: JSON.stringify({ endpoint, payload }) }))).json()
   await tool('list_bots', {}, 'a')
-  const host = { ctx, agentOf, emit, tool, call, askApproval, stop: () => ctx.dispose() }
+  const host = { ctx, agentOf, hasAgent: id => agents.has(id), emit, tool, call, askApproval, stop: () => ctx.dispose() }
   started.set(home, [...(started.get(home) ?? []), host])
   return host
 }
@@ -1031,7 +1034,44 @@ test('startup recovery compacts stacked plain room inbox messages and coalesces 
     })
   assert.equal(inbox.nextTurn[0].id, 'in-11')
   assert.equal(notes(home).queued[roomSess][0].args.exchangeId, 'ex-room-11')
+  assert.equal(host.hasAgent('ga-compact'), false, 'recovery must leave unrelated group members cold')
+  const later = host.agentOf('ga-compact')
+  later.inbox.nextTurn.push(
+    { id: 'cold-old', source: { kind: 'bot', role: 'room', roomId } },
+    { id: 'review', source: { kind: 'bot', role: 'room', roomId, reviewId: 'review' } },
+    { id: 'cold-latest', source: { kind: 'bot', role: 'room', roomId } },
+  )
+  later.inbox.remove = id => {
+    later.inbox.nextTurn.splice(later.inbox.nextTurn.findIndex(message => message.id === id), 1)
+    return true
+  }
+  for (const listener of host.ctx.listeners.get('agent/created') ?? []) await listener({ agent: later, source: 'resume' })
+  assert.deepEqual(later.inbox.nextTurn.map(message => message.id), ['review', 'cold-latest'])
   // Recovery can schedule another atomic write after the compacted queue first appears.
   await host.stop()
   assert.equal(readdirSync(home).some(name => name.startsWith('inflight.json.') && name.endsWith('.tmp')), false)
+})
+
+test('startup recovery does not replay a room receipt discarded when a cold member opens', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const home = freshHome(t)
+  const args = { toId: 'b', sessionId: 'gb', role: 'room', roomId: 'r1', note: 'turn', text: 'old', exchangeId: 'old' }
+  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ turns: {}, queued: { gb: [{ at: 100, args }] } }))
+  const host = await start(home, undefined, undefined, { initAgent: ({ session, inbox }) => {
+    if (session.id !== 'gb') return
+    const message = exchangeId => ({ id: exchangeId, source: { kind: 'bot', role: 'room', roomId: 'r1', exchangeId } })
+    inbox.nextTurn.push(message('old'), message('durable-newer'))
+    inbox.remove = id => {
+      const at = inbox.nextTurn.findIndex(entry => entry.id === id)
+      if (at < 0) return false
+      inbox.nextTurn.splice(at, 1)
+      return true
+    }
+  } })
+  assert.equal(host.hasAgent('gb'), false)
+  t.mock.timers.tick(3000)
+  await settle(() => host.hasAgent('gb') && (notes(home).queued.gb ?? []).length === 0)
+  const agent = host.agentOf('gb')
+  assert.deepEqual(agent.inbox.nextTurn.map(entry => entry.id), ['durable-newer'])
+  assert.deepEqual(agent.calls, [])
 })

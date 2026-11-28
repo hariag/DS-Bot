@@ -3997,7 +3997,7 @@ export const TASK_BOARD_CSS = `
 .bt-release-row-meta{display:flex;flex-direction:column;gap:4px;min-width:0;position:relative;padding-right:30px}
 .bt-release-open{display:flex;align-items:baseline;gap:6px;min-width:0;padding:0;border:0;background:none;color:var(--bt-ink);text-align:start;cursor:pointer;font:inherit}
 .bt-release-open strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.bt-release-version{flex:none;padding:1px 6px;border-radius:5px;background:var(--bt-tag-bg);color:var(--bt-ink-2);font:11px ui-monospace,SFMono-Regular,Menlo,monospace}
+.bt-release-version{flex:none;padding:1px 6px;border-radius:6px;background:var(--bt-tag-bg);color:var(--bt-ink-2);font:11px ui-monospace,SFMono-Regular,Menlo,monospace}
 .bt-release-row-facts{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0;font-size:11px;color:var(--bt-ink-2)}
 .bt-release-range{color:var(--bt-ink-3);white-space:nowrap}.bt-release-toggle{position:absolute;right:0;top:0}
 .bt-release-track{position:relative;height:30px;min-width:0;background:var(--bt-sidebar);border-radius:6px;overflow:hidden}

@@ -2,16 +2,24 @@ import assert from 'node:assert/strict'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import { install, bookFile, parseBook } from '../src/host/ledger.js'
 import { writeManifestAtomic } from '../src/host/sqlite-shard-store.mjs'
 import { compressedRelayPreview, parseReplies, relayRange } from '../src/shared/group-replies.js'
 
+const tempDirs = new Set()
+after(() => {
+  for (const home of tempDirs) rmSync(home, { recursive: true, force: true, maxRetries: 5 })
+})
+
 const host = (t, { home = mkdtempSync(join(tmpdir(), 'ds-bot-ledger-')), readOnly, config } = {}) => {
   const warnings = []
-  const rt = { home, config, readOnly: () => readOnly?.(), warn: (...args) => warnings.push(args) }
+  let drain
+  const rt = { home, config, readOnly: () => readOnly?.(), warn: (...args) => warnings.push(args),
+    onHomeDrain: callback => { drain = callback } }
+  tempDirs.add(home)
   install(rt)
-  t.after(() => rmSync(home, { recursive: true, force: true, maxRetries: 5 }))
+  t.after(() => drain())
   return { rt, home, warnings, file: book => join(home, 'ledger', bookFile(book)) }
 }
 
@@ -288,7 +296,7 @@ test('oversized ledger books compact older records into sealed SQLite shards and
 
 test('startup auto-compacts legacy oversized jsonl and recovers pendingTrim cleanly', async (t) => {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-ledger-legacy-'))
-  t.after(() => rmSync(home, { recursive: true, force: true, maxRetries: 5 }))
+  tempDirs.add(home)
   const config = { ledgerMaxActiveBytes: 300, ledgerMaxActiveRecords: 12, ledgerKeepTailRecords: 4, ledgerMaxShardRows: 10 }
   const dir = join(home, 'ledger')
   mkdirSync(dir, { recursive: true })
