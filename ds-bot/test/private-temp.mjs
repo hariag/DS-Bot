@@ -40,8 +40,9 @@ export function setPrivateTempAcl(path, { shared = false } = {}) {
   const systemRoot = process.env.SystemRoot
   if (!systemRoot) throw new Error('Windows test temp ACL unavailable')
   const executable = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  // Cold PowerShell startup can take several seconds on hosted runners.
   const result = spawnSync(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', WINDOWS_PRIVATE_ACL], {
-    encoding: 'utf8', timeout: 5_000, maxBuffer: 32 * 1024, windowsHide: true,
+    encoding: 'utf8', timeout: 15_000, maxBuffer: 32 * 1024, windowsHide: true,
     env: { ...process.env, DSBOT_TEST_PRIVATE_PATH: path, DSBOT_TEST_SHARED_ACCESS: shared ? '1' : '0' },
   })
   if (result.error || result.status !== 0) {
