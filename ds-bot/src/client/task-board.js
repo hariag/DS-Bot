@@ -2239,7 +2239,7 @@ function releaseTimeInfo(release, now) {
   return { start, end }
 }
 
-function MajorVersionCard({ name, releases, tasks, onOpen, onOpenTask, onCreate, disabled }) {
+function MajorVersionCard({ name, releases, tasks, onOpen, onOpenTask, onDropTask, canDropTask, onCreate, disabled }) {
   const features = tasks.filter(task => !task.archivedAt && !task.shared && !task.legacy && !task.parentTaskId && ['feature','bugfix'].includes(task.type))
   const parentIds = new Set(features.map(task => task.id))
   const itemCount = tasks.filter(task => !task.archivedAt && parentIds.has(task.parentTaskId)).length
@@ -2252,6 +2252,13 @@ function MajorVersionCard({ name, releases, tasks, onOpen, onOpenTask, onCreate,
   const span = rangeStart === undefined || rangeEnd === undefined ? 1 : Math.max(rangeEnd - rangeStart, 1)
   const ticks = rangeStart === undefined ? [] : Array.from({ length: 5 }, (_, index) => rangeStart + span * index / 4)
   const [collapsed, setCollapsed] = useState(() => new Set())
+  const [dragging, setDragging] = useState('')
+  const [dropTarget, setDropTarget] = useState('')
+  const parentById = new Map(tasks.map(task => [task.id, task]))
+  const subjectOf = task => (task.parentTaskId ? parentById.get(task.parentTaskId) : undefined) ?? task
+  const effectiveRelease = task => task.releaseId ?? subjectOf(task).releaseId ?? null
+  const unassigned = tasks.filter(task => !task.archivedAt && !task.shared && !task.legacy
+    && effectiveRelease(task) === null && !['done', 'cancelled'].includes(subjectOf(task).status))
   const toggle = id => setCollapsed(current => {
     const next = new Set(current)
     if (next.has(id)) next.delete(id); else next.add(id)
@@ -2273,6 +2280,24 @@ function MajorVersionCard({ name, releases, tasks, onOpen, onOpenTask, onCreate,
   }
   const cardsFor = release => tasks.filter(task => task.releaseId === release.id && !task.parentTaskId
     && !task.archivedAt && !task.shared && !task.legacy && ['feature','bugfix'].includes(task.type))
+  const dragStart = (task, event) => {
+    if (disabled) return
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('application/x-ds-bot-card', task.id)
+    setDragging(task.id)
+  }
+  const dragEnd = () => { setDragging(''); setDropTarget('') }
+  const canDrop = releaseId => {
+    if (disabled || !dragging) return false
+    const task = tasks.find(item => item.id === dragging)
+    return !!task && canDropTask?.(task, releaseId) === true
+  }
+  const drop = (event, releaseId) => {
+    event.preventDefault()
+    const id = event.dataTransfer.getData('application/x-ds-bot-card') || dragging
+    setDragging(''); setDropTarget('')
+    if (id) onDropTask?.(id, releaseId)
+  }
   return h('section', { className:'bt-major-version', 'aria-label':t('Major version') },
     h('header', { className:'bt-board-section-heading bt-board-section-heading-row' },
       h('div', null, h('h3', null, t('Major version'), ' · ', name),
@@ -2287,11 +2312,28 @@ function MajorVersionCard({ name, releases, tasks, onOpen, onOpenTask, onCreate,
             ticks.length
               ? ticks.map((tick, index) => h('span', { key:index, className:'bt-release-axis-tick' }, tickLabel(tick)))
               : h('span', { className:'bt-release-axis-empty' }, t('Dates not recorded')))),
+        unassigned.length ? h('div', {
+          className:'bt-release-unassigned' + (dropTarget === 'unassigned' ? ' bt-release-unassigned-drop' : ''),
+          onDragOver: event => { if (!canDrop(null)) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTarget('unassigned') },
+          onDragLeave: event => { if (!event.currentTarget.contains(event.relatedTarget)) setDropTarget('') },
+          onDrop: event => { if (canDrop(null)) drop(event, null); else { event.preventDefault(); setDragging(''); setDropTarget('') } },
+        },
+          h('h4', null, t('Unassigned'), h('span', { className:'bt-board-count' }, unassigned.length)),
+          h('div', { className:'bt-release-unassigned-cards' }, unassigned.map(task => h('button', {
+            key:task.id, type:'button', className:'bt-release-card-chip', draggable:!disabled,
+            onDragStart: event => dragStart(task, event), onDragEnd: dragEnd,
+            onClick: () => onOpenTask?.(task.id),
+          },
+            h('span', null, textValue(task.title) || task.id),
+            h('small', null, t(STATUS_LABELS[task.status] ?? 'Status unknown')))))) : null,
         releases.length ? h('ul', { className:'bt-release-rows' }, rows.map(row => {
           const release = row.release
           const open = !collapsed.has(release.id)
           const cards = cardsFor(release)
-          return h('li', { key:release.id, className:'bt-release-row', 'data-timeline-release-id':release.id },
+          return h('li', { key:release.id, className:'bt-release-row' + (dropTarget === release.id ? ' bt-release-row-drop' : ''), 'data-timeline-release-id':release.id,
+            onDragOver: event => { if (!canDrop(release.id)) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTarget(release.id) },
+            onDragLeave: event => { if (!event.currentTarget.contains(event.relatedTarget)) setDropTarget('') },
+            onDrop: event => { if (canDrop(release.id)) drop(event, release.id); else { event.preventDefault(); setDragging(''); setDropTarget('') } } },
             h('div', { className:'bt-release-row-main' },
               h('div', { className:'bt-release-row-meta' },
                 h('button', { type:'button', className:'bt-release-open', onClick:() => onOpen(release.id) },
@@ -2310,7 +2352,8 @@ function MajorVersionCard({ name, releases, tasks, onOpen, onOpenTask, onCreate,
                 release.publishedAt ? h('span', { className:'bt-release-milestone bt-release-milestone-end', style:{ left:`calc(${bar(row).left} + ${bar(row).width})` } }) : null)),
             open ? h('div', { className:'bt-release-row-cards' },
               cards.length
-                ? cards.map(task => h('button', { key:task.id, type:'button', className:'bt-release-card-chip', onClick:() => onOpenTask?.(task.id) },
+                ? cards.map(task => h('button', { key:task.id, type:'button', className:'bt-release-card-chip', draggable:!disabled,
+                  onDragStart: event => dragStart(task, event), onDragEnd: dragEnd, onClick:() => onOpenTask?.(task.id) },
                   h('span', null, textValue(task.title) || task.id),
                   h('small', null, t(STATUS_LABELS[task.status] ?? 'Status unknown'))))
                 : h('p', { className:'bt-card-muted' }, t('No cards in this release.'))) : null)
@@ -3292,37 +3335,40 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
   }
   const assignInRelease = async (task, release, laneTasks, dropIndex) => {
     if (releaseBusy || !window.crypto?.randomUUID) return
-    const previousReleaseId = task.releaseId
-    setReleaseBusy(task.id); setReleaseError('')
+    const subject = releaseSubject(task)
+    if (!subject) return
+    const previousReleaseId = subject.releaseId
+    setReleaseBusy(subject.id); setReleaseError('')
     try {
       if (!release) {
-        const source = task.releaseId ? releaseById.get(task.releaseId) : null
+        const source = previousReleaseId ? releaseById.get(previousReleaseId) : null
         if (!source) return
         await request('board-release-remove', { scope, operationId: window.crypto.randomUUID(), releaseId: source.id,
-          expectedReleaseRevision: source.revision, taskId: task.id, expectedTaskRevision: task.revision })
+          expectedReleaseRevision: source.revision, taskId: subject.id, expectedTaskRevision: subject.revision })
       } else {
-        const without = laneTasks.filter(item => item.id !== task.id)
-        const originalIndex = laneTasks.findIndex(item => item.id === task.id)
+        const normalized = [...new Map(laneTasks.map(item => { const itemSubject = releaseSubject(item); return [itemSubject.id, itemSubject] })).values()]
+        const without = normalized.filter(item => item.id !== subject.id)
+        const originalIndex = normalized.findIndex(item => item.id === subject.id)
         const target = Math.max(0, Math.min(without.length, dropIndex - (originalIndex >= 0 && originalIndex < dropIndex ? 1 : 0)))
         const afterId = target > 0 ? without[target - 1].id : null
         await request('board-release-assign', { scope, operationId: window.crypto.randomUUID(), releaseId: release.id,
-          expectedReleaseRevision: release.revision, taskId: task.id, expectedTaskRevision: task.revision, afterId })
+          expectedReleaseRevision: release.revision, taskId: subject.id, expectedTaskRevision: subject.revision, afterId })
       }
       await load(generation.current, true)
       notify(t('Card moved'), async () => {
         const latest = await request('board-list', { scope, includeRecovery:false })
-        const currentTask = (latest?.tasks ?? []).find(item => item.id === task.id)
+        const currentTask = (latest?.tasks ?? []).find(item => item.id === subject.id)
         if (!currentTask) return
         if (previousReleaseId) {
           const target = (latest.releases ?? []).find(item => item.id === previousReleaseId)
           if (!target || !['draft','queued'].includes(target.status)) return
           await request('board-release-assign', { scope, operationId:window.crypto.randomUUID(), releaseId:target.id,
-            expectedReleaseRevision:target.revision, taskId:task.id, expectedTaskRevision:currentTask.revision, afterId:null })
+            expectedReleaseRevision:target.revision, taskId:subject.id, expectedTaskRevision:currentTask.revision, afterId:null })
         } else if (currentTask.releaseId) {
           const target = (latest.releases ?? []).find(item => item.id === currentTask.releaseId)
           if (!target) return
           await request('board-release-remove', { scope, operationId:window.crypto.randomUUID(), releaseId:target.id,
-            expectedReleaseRevision:target.revision, taskId:task.id, expectedTaskRevision:currentTask.revision })
+            expectedReleaseRevision:target.revision, taskId:subject.id, expectedTaskRevision:currentTask.revision })
         }
         await load()
       })
@@ -3441,6 +3487,12 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
     setLanePrefs(current => ({ ...current, order:keys }))
   }
   const commandsFor = task => !task.shared && Array.isArray(commandMap[task.id]) ? commandMap[task.id].filter(command => command && typeof command.type === 'string') : []
+  const parentTaskOf = task => task?.parentTaskId ? taskById.get(task.parentTaskId) : undefined
+  // Task items inherit their parent card's release. Resolve the card that owns
+  // the release membership so an item drag changes the whole card instead of
+  // sending an unsupported release-assign for the child.
+  const releaseSubject = task => (task?.parentTaskId ? parentTaskOf(task) : task) ?? task
+  const effectiveReleaseId = task => task?.releaseId ?? parentTaskOf(task)?.releaseId ?? null
   const cancellableIds = selectedIds.size ? allTasks.filter(task => selectedIds.has(task.id) && canCancelTask(task, commandsFor(task))).map(task => task.id) : []
   const memberOptions = [...new Set((Array.isArray(actors) ? actors : []).map(actor => actor.id).filter(Boolean))]
   const labelOptions = [...new Set(allTasks.flatMap(labelsOf))].sort((a, b) => a.localeCompare(b))
@@ -3453,13 +3505,16 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
     if (kind === 'personal') return commandOf(commands, 'personal-progress')
     if (kind === 'type') return commandOf(commands, 'card-details') && taskType(task) !== stage
     if (kind === 'release') {
-      if (['done', 'cancelled'].includes(task.status)) return false
+      const subject = releaseSubject(task)
+      if (!subject || ['done', 'cancelled'].includes(subject.status)) return false
+      const subjectCommands = commandsFor(subject)
+      const currentReleaseId = effectiveReleaseId(task)
       if (stage === 'unassigned') {
-        const source = task.releaseId ? releaseById.get(task.releaseId) : null
+        const source = currentReleaseId ? releaseById.get(currentReleaseId) : null
         return !!source && ['draft', 'queued'].includes(source.status)
       }
       const release = releaseById.get(stage)
-      return !!release && ['draft', 'queued'].includes(release.status) && commandOf(commands, 'release-assign')
+      return !!release && ['draft', 'queued'].includes(release.status) && commandOf(subjectCommands, 'release-assign')
     }
     if (laneOf(task) === stage && commandOf(commands, 'reorder')) return true
     if (stage === 'cancelled') return canCancelTask(task, commands)
@@ -3502,7 +3557,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
           const id = event.dataTransfer.getData('application/x-ds-bot-card') || dragId
           const task = taskById.get(id)
           if (!task) { setDragId(''); setDrop(null); return }
-          if (stage === 'unassigned' && !task.releaseId) { setDragId(''); setDrop(null); return }
+          if (stage === 'unassigned' && !effectiveReleaseId(task)) { setDragId(''); setDrop(null); return }
           if (!canDropOn(task, kind, stage)) { event.preventDefault(); notify(t('This card cannot be moved to {lane}.', { lane: labelText })); setDragId(''); setDrop(null); return }
           event.preventDefault()
           const dropIndex = drop && drop.kind === kind && drop.stage === stage ? drop.index : laneTasks.length
@@ -3654,20 +3709,32 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
   const releaseSection = () => h('section', { className: 'bt-board-section', 'aria-label': t('Releases') },
     retired ? h('div', { className:'bt-board-section-heading' }, h('h3', null, t('Releases')))
     : scope.kind === 'room' ? h(MajorVersionCard, {name:textValue(title) || textValue(goal?.title) || scope.id,
-      releases:orderedReleases, tasks:allTasks, onOpen:openReleaseDetails, onOpenTask:id => setSelectedCard({ key, id }), onCreate:() => setNewRelease(true), disabled:!canAct}) :
+      releases:orderedReleases, tasks:allTasks, onOpen:openReleaseDetails, onOpenTask:id => setSelectedCard({ key, id }),
+      canDropTask:(task, releaseId) => canDropOn(task, 'release', releaseId ?? 'unassigned'),
+      onDropTask:(taskId, releaseId) => {
+        const task = taskById.get(taskId)
+        if (!task) return
+        if (!canDropOn(task, 'release', releaseId ?? 'unassigned')) {
+          notify(t('This card cannot be moved to {lane}.', { lane: releaseId ? textValue(releaseById.get(releaseId)?.name) || t('Untitled release') : t('Unassigned') }))
+          return
+        }
+        const laneTasks = releaseId ? activeFiltered.filter(item => effectiveReleaseId(item) === releaseId) : []
+        void assignInRelease(task, releaseId ? releaseById.get(releaseId) : null, laneTasks, laneTasks.length)
+      },
+      onCreate:() => setNewRelease(true), disabled:!canAct}) :
     h('div', { className: 'bt-board-section-heading bt-board-section-heading-row' },
       h('div', null, h('h3', null, t('Releases')), h('p', null, t('Drag cards between release lanes. Arrow controls reorder draft and queued releases.'))),
       h('button', { type: 'button', className: 'bt-btn bt-btn-ghost', disabled: !canAct, onClick: () => setNewRelease(true) }, h(PlusIcon), t('New release'))),
     h(ColumnRail, { label: t('Releases') }, [
       ...orderedReleases.map(release => {
         const label = textValue(release.name) || textValue(release.version) || t('Untitled release')
-        return renderLane('release', release.id, label, activeFiltered.filter(task => task.releaseId === release.id), {
+        return renderLane('release', release.id, label, activeFiltered.filter(task => effectiveReleaseId(task) === release.id), {
           noCreate: true, laneLabel: label, releaseId: release.id, focus: releaseFocus === release.id,
           meta: releaseMeta(release),
           actions: releaseActions(release),
         })
       }),
-      renderLane('release', 'unassigned', t('Unassigned'), activeFiltered.filter(task => !task.releaseId), { noCreate: true, laneLabel: t('Unassigned') }),
+      renderLane('release', 'unassigned', t('Unassigned'), activeFiltered.filter(task => effectiveReleaseId(task) === null), { noCreate: true, laneLabel: t('Unassigned') }),
     ]))
   if (!visible) return null
   return createPortal(h('div', { className: 'bt-board-backdrop' },
@@ -3992,7 +4059,8 @@ export const TASK_BOARD_CSS = `
 .bt-release-timeline{min-width:720px;padding-bottom:4px}
 .bt-release-axis{display:grid;grid-template-columns:200px minmax(420px,1fr);gap:12px;align-items:end;padding:8px 0 4px;border-bottom:1px solid var(--bt-line);color:var(--bt-ink-3);font-size:11px}
 .bt-release-axis-track{display:flex;justify-content:space-between;min-width:0}.bt-release-axis-tick{white-space:nowrap}.bt-release-axis-empty{color:var(--bt-ink-3)}
-.bt-release-rows{list-style:none;margin:0;padding:0}.bt-release-row{border-bottom:1px solid var(--bt-line)}.bt-release-row:last-child{border-bottom:0}
+.bt-release-rows{list-style:none;margin:0;padding:0}.bt-release-row{border-bottom:1px solid var(--bt-line)}.bt-release-row:last-child{border-bottom:0}.bt-release-row-drop{background:color-mix(in srgb,var(--bt-accent) 7%,transparent)}
+.bt-release-unassigned{margin:8px 0;padding:8px 10px;border:1px dashed var(--bt-line-2);border-radius:8px;background:var(--bt-sidebar)}.bt-release-unassigned-drop{border-color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 8%,var(--bt-card))}.bt-release-unassigned h4{display:flex;align-items:center;gap:6px;margin:0 0 6px;font-size:12px;line-height:18px}.bt-release-unassigned-cards{display:flex;flex-wrap:wrap;gap:6px}
 .bt-release-row-main{display:grid;grid-template-columns:200px minmax(420px,1fr);gap:12px;align-items:center;padding:8px 0}
 .bt-release-row-meta{display:flex;flex-direction:column;gap:4px;min-width:0;position:relative;padding-right:30px}
 .bt-release-open{display:flex;align-items:baseline;gap:6px;min-width:0;padding:0;border:0;background:none;color:var(--bt-ink);text-align:start;cursor:pointer;font:inherit}
