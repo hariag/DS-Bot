@@ -12,13 +12,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 1de80384fbe43b1e3c9189c48b9485690e12fa80
+          ref: 223352cf7680175febbd9f7598b87779e8fc41d8
       - uses: actions/setup-node@v4
         with:
           node-version: 24
       - name: Record the installed payload and its source
         env:
-          CANDIDATE: 1de80384fbe43b1e3c9189c48b9485690e12fa80
+          CANDIDATE: 223352cf7680175febbd9f7598b87779e8fc41d8
         shell: bash
         run: |
           set -euo pipefail
@@ -53,11 +53,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     env:
-      EXPECTED_CANDIDATE: 1de80384fbe43b1e3c9189c48b9485690e12fa80
+      EXPECTED_CANDIDATE: 223352cf7680175febbd9f7598b87779e8fc41d8
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 1de80384fbe43b1e3c9189c48b9485690e12fa80
+          ref: 223352cf7680175febbd9f7598b87779e8fc41d8
       - uses: actions/setup-node@v4
         with:
           node-version: 24
