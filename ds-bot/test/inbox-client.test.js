@@ -77,7 +77,6 @@ async function openPage(t) {
       opened.push(id)
       ui.set(state => ({ ...state, inbox: false, inboxTarget: state.inbox ? id : null }))
     },
-    openPersonalBoard: () => ui.set(state => ({ ...state, personalBoard: true })),
     reportError: (error) => { throw error },
   }
   const completions = createSource({})
