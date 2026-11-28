@@ -222,6 +222,7 @@ async function request(endpoint,payload){
     if('reviewer' in value)task.reviewer=value.reviewer;
     if('acceptance' in value)task.acceptance=value.acceptance;
    }
+   if(type==='card-comment')task.comments=[...(task.comments??[]),{id:'comment-'+(++state.commentSeq),author:'user',at:1700000000000,text:value.text}];
    task.revision++;
    return {};
   }
