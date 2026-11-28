@@ -350,7 +350,6 @@ const ZH = {
   'Goal ID': '目标 ID',
   'Review ID': '巡检 ID',
   'Group status': '群状态',
-  'Refresh status': '刷新状态',
   'Review recovery is unavailable in this view.': '当前界面无法处理巡检恢复。',
   'Group status is unavailable.': '无法读取群状态。',
   'Review identity is unavailable.': '无法确认原巡检的身份。',
