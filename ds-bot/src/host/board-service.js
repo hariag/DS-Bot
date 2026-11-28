@@ -37,6 +37,9 @@ const response = (body, status = 200) => new Response(JSON.stringify(body), { st
 const rejectedMessages = new Set(['revision conflict', 'operation id conflict', 'task id exists', 'item cannot move between these cards', 'task limit reached', 'unknown task', 'unknown dependency', 'dependency cycle', 'dependency graph too large', 'reviewer must be independent', 'invalid fields', 'invalid card details', 'invalid card comment', 'unknown card comment', 'card comment limit reached', 'invalid reorder', 'reorder target unavailable', 'cards must be in the same lane', 'invalid position', 'invalid position order', 'invalid dependencies', 'invalid dependency grants', 'dependency grant unavailable', 'invalid attachments', 'invalid attachment reference', 'attachment unverified', 'attachment id conflict', 'too many attachments', 'unknown attachment', 'empty edit', 'responsibility or acceptance change requires separate reconciliation', 'share not authorized', 'share unavailable', 'share already exists or limit reached', 'personal progress unavailable', 'invalid personal progress', 'authority evidence unverified', 'task authority unavailable', 'task is not schedulable', 'task is not scheduled', 'finish or cancel active work before archiving', 'remove the card from its release before archiving', 'task action unavailable', 'invalid state', 'invalid draft state', 'invalid cancellation reason', 'task action unresolved', 'invalid release', 'release id exists', 'invalid release position', 'invalid release update', 'empty release update', 'release revision conflict', 'release is not editable', 'release is not startable', 'release is not queueable', 'release is not cancellable', 'release has active work', 'invalid release queue', 'release has no items', 'release unavailable', 'release task unavailable', 'another release is running in this scope', 'invalid release assignment', 'invalid release removal', 'invalid proposal', 'invalid proposal kind', 'invalid proposal status', 'proposal id exists', 'proposal limit reached', 'proposal revision conflict', 'proposal decision is not authorized', 'Proposal is unavailable', 'Task changed after this proposal was made', 'Invalid proposal decision'])
 const rejected = error => error?.code === 'bot/invalid' || (!error?.code && typeof error?.message === 'string' && (rejectedMessages.has(error.message) || ['change proposal unavailable','change proposal already exists','change proposal is immutable'].includes(error.message) || /^invalid (task id|operation id|actor|owner|reviewer|scope|title|acceptance|attachment id|image id|revision)$/.test(error.message)))
 rejectedMessages.add('Task cannot move to this group. Check participants, links and original delivery.')
+for (const message of ['Proposal target is unavailable', 'The proposing Bot is no longer authorized to change this task', 'invalid proposal note']) {
+  rejectedMessages.add(message)
+}
 const requestKey = (endpoint, payload) => {
   if (endpoint !== 'board-upload' || !Array.isArray(payload?.images)) return { endpoint, payload }
   return { endpoint, payload: { ...payload, images: payload.images.map(image => image && typeof image === 'object' && typeof image.data === 'string'
@@ -559,6 +562,11 @@ export function install(rt) {
     }
     const goalEditor=createGoalBoardEditor(rt)
     const api = createBoardApi({ store, images, assertWritable: writable, roster: () => rt.state, verifyDependency: dependencyAllowed,
+      reviewProposal: proposal => {
+        const review = store.proposalReview(proposal)
+        return ['ready','comments-only'].includes(review.state) && !proposerStillAuthorized(proposal)
+          ? { ...review, state:'unavailable' } : review
+      },
       canVerifyOriginal: action => {
         const target = store.admission(action.id)?.targetSessionId
         return !!target && isRecipientSession(action.actor, target, true)
@@ -856,10 +864,17 @@ export function install(rt) {
           const result = api.operation(scope, principal, payload.operationId)
           if (result.state !== 'unknown') return result
           const record = store.operation(payload.operationId)
-          if (!record) return result
           const boardScope = `${scope.kind}:${scope.id}`
+          const proposals = store.listProposals(boardScope)
+          if (!record) {
+            // Before proposal decisions used board_requests, the operation ID
+            // was persisted only in the finalized proposal itself.
+            const matches = proposals.filter(item => ['confirmed','rejected'].includes(item.status)
+              && item.decisionOperationId === payload.operationId)
+            return matches.length === 1 ? { state:'committed', result:{ proposal:matches[0] } } : result
+          }
           const release = store.listReleases(boardScope).find(item => item.id === record.taskId)
-          const proposal = store.listProposals(boardScope).find(item => item.id === record.taskId)
+          const proposal = proposals.find(item => item.id === record.taskId)
           if (!release && !proposal) return result
           return record.status === 'rejected' ? { state:'rejected', message:record.message || 'Release action rejected' }
             : { state:'committed', result:record.result }
@@ -979,36 +994,40 @@ export function install(rt) {
         if(typeof payload.operationId==='string'&&payload.operationId.startsWith('goal:'))return goalEditor.cancel(scope,payload.operationId)
         return store.cancelRequest({ operationId: payload.operationId, actor: 'user' })
       }
-      case 'board-proposal-list':
-        api.list(scope, principal)
-        return store.listProposals(`${scope.kind}:${scope.id}`).map(proposal => ({
+      case 'board-proposal-list': {
+        const board = api.list(scope, principal)
+        const pending = new Map(board.proposals.map(proposal => [proposal.id, proposal]))
+        return store.listProposals(`${scope.kind}:${scope.id}`).map(proposal => pending.get(proposal.id) ?? {
           ...proposal,
           taskTitle: proposal.taskId ? store.get(proposal.taskId)?.title ?? proposal.after?.title : proposal.after?.title,
-        }))
+        })
+      }
       case 'board-proposal-decide': {
         api.list(scope, principal)
         const proposal = store.listProposals(`${scope.kind}:${scope.id}`).find(item => item.id === payload.proposalId)
         if (!proposal) throw new Error('Proposal is unavailable')
         if (!payload.operationId || !Number.isSafeInteger(payload.expectedRevision) || !['confirm','reject'].includes(payload.decision)) throw new Error('Invalid proposal decision')
-        // Rechecked before the decision transaction: a deleted, private or removed
-        // proposing Bot must not gain a change through the user's confirmation.
-        if (payload.decision === 'confirm' && !proposerStillAuthorized(proposal)) throw new Error('The proposing Bot is no longer authorized to change this task')
-        const result = store.decideProposal({ operationId: payload.operationId, actor:'user', proposalId:payload.proposalId, expectedRevision:payload.expectedRevision,
-          decision:payload.decision, note:payload.note, apply: current => {
-            if (current.kind === 'create') {
-              const value = current.command?.value
-              if (!value || typeof value !== 'object') throw new Error('Proposal target is unavailable')
-              return api.create(scope, { kind:'user' }, { operationId:`${payload.operationId}:apply`, taskId:current.taskId, ...value })
-            }
-            if (current.taskId) {
-              const task = store.get(current.taskId)
-              if (!task || task.revision !== current.baseRevision) throw new Error('Task changed after this proposal was made')
-              return api.command(scope, principal, { operationId:`${payload.operationId}:apply`, taskId:current.taskId,
-                expectedRevision:current.baseRevision, type:current.command.type, ...(current.command.value === undefined ? {} : { value:current.command.value }) })
-            }
-            throw new Error('Proposal target is unavailable')
-          } })
-        if (payload.decision === 'confirm' && proposal.taskId) {
+        let appliedHere = false
+        const outcome = store.request({ operationId:payload.operationId, actor:'user', taskId:proposal.id,
+          payload:requestKey(endpoint, payload), isRejection:rejected }, () => store.decideProposal({
+          operationId:payload.operationId, actor:'user', proposalId:payload.proposalId, expectedRevision:payload.expectedRevision,
+          decision:payload.decision, note:payload.note, apply: (current, review) => {
+            // A replay only reads the result. A fresh approval must recheck the
+            // proposed change, roster and current task from the same transaction.
+            if (!proposerStillAuthorized(current)) throw new Error('The proposing Bot is no longer authorized to change this task')
+            const value = current.command?.value
+            if (current.kind === 'create' && (!value || typeof value !== 'object' || Array.isArray(value))) throw new Error('Proposal target is unavailable')
+            const operationId = `${payload.operationId}:apply`
+            const applied = current.kind === 'create'
+              ? api.create(scope, principal, { operationId, taskId:current.taskId, ...value })
+              : api.command(scope, principal, { operationId, taskId:current.taskId, expectedRevision:review.currentRevision,
+                type:current.command.type, ...(value === undefined ? {} : { value }) })
+            appliedHere = true
+            return applied
+          } }))
+        if (outcome.state === 'rejected') throw Object.assign(new Error(outcome.message), { code:'bot/invalid' })
+        const result = outcome.value
+        if (appliedHere && proposal.taskId) {
           const applied = result?.applied
           const change = applied?.change
             ? { type:'change-request', value:{ changeTaskId: applied.id, sourceTaskId: applied.change.sourceTaskId, fields: Object.keys(applied.change.after ?? {}) } }
@@ -1016,7 +1035,7 @@ export function install(rt) {
           void notifyBoardChange(proposal.taskId, change)
             .catch(error => rt.warn?.('ds-bot: board change not synced to release group: %s', error))
         }
-        if (payload.decision === 'confirm') notifyDriver()
+        if (appliedHere) notifyDriver()
         return result
       }
       case 'board-command': {

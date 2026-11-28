@@ -1125,6 +1125,8 @@ test('an assigned Bot proposes title, description and acceptance together on an 
   await rt.boardCall('board-command', { scope, operationId:'schedule-revised-card', taskId:original.id, expectedRevision:board.tasks[0].revision, type:'schedule' })
   const current = (await rt.boardCall('board-list', { scope })).tasks[0]
   await assert.rejects(decide('apply-stale-definition', toBecomeStale), /Task changed after this proposal/)
+  assert.deepEqual(await rt.boardCall('board-operation', { scope, operationId:'apply-stale-definition' }),
+    { state:'rejected', message:'Task changed after this proposal was made' })
   await assert.rejects(call('chat-one', 'scheduled-definition', current.revision, fields), /before scheduling/i)
   await assert.rejects(rt.boardCall('board-command', { scope, operationId:'edit-scheduled-definition', taskId:original.id,
     expectedRevision:current.revision, type:'card-details', value:fields }), /before scheduling/i)
@@ -1132,6 +1134,56 @@ test('an assigned Bot proposes title, description and acceptance together on an 
   assert.equal(after.revision, current.revision)
   assert.equal(after.acceptance, fields.acceptance)
   assert.equal((await rt.boardCall('board-proposal-list', { scope })).find(row => row.id === toBecomeStale.id).status, 'pending')
+  const stale = (await rt.boardCall('board-list', { scope })).proposals.find(row => row.id === toBecomeStale.id)
+  assert.deepEqual(stale.review, { state:'conflict', currentRevision:current.revision, currentStatus:current.status })
+  const reject = { scope, operationId:'close-stale-definition', proposalId:stale.id, expectedRevision:stale.revision, decision:'reject', note:'Replace with review against the current card.' }
+  const closed = await rt.boardCall('board-proposal-decide', reject)
+  assert.equal(closed.proposal.status, 'rejected')
+  assert.equal(closed.proposal.decisionNote, reject.note)
+  assert.deepEqual(await rt.boardCall('board-proposal-decide', reject), closed)
+  await assert.rejects(rt.boardCall('board-proposal-decide', { ...reject, note:'different request' }), /operation id conflict/)
+  assert.deepEqual(await rt.boardCall('board-operation', { scope, operationId:reject.operationId }), { state:'committed', result:closed })
+  const readback = await rt.boardCall('board-list', { scope })
+  assert.equal(readback.tasks[0].revision, current.revision)
+  assert.equal(readback.proposals.some(row => row.id === stale.id), false)
+})
+
+test('a content proposal survives only comment changes and commits against the exact current card revision', async t => {
+  const { rt } = fixture(t)
+  const base = await rt.boardCall('board-command', create)
+  const tool = rt.teamTools.find(definition => definition.name === 'board_task')
+  const invoke = async args => JSON.parse(await tool.execute({ room_id:scope.id, task_id:base.id, ...args }, { agent:{ id:'chat-one' } }))
+  const { proposal } = await invoke({ action:'propose', operation_id:'proposal-before-comments', expected_revision:base.revision,
+    change:{ kind:'update', value:{ acceptance:'Approved requirement' } } })
+  const cardCommand = (operationId, type, expectedRevision, value) => rt.boardCall('board-command', {
+    scope, operationId, type, taskId:base.id, expectedRevision, value,
+  })
+  const first = await cardCommand('new-comment', 'card-comment', base.revision, { text:'Preserve this comment' })
+  const comment = first.comments[0]
+  const latest = await cardCommand('edit-comment', 'card-comment-edit', first.revision, { commentId:comment.id, text:'Preserve this edited comment' })
+  const out = (await rt.boardCall('board-list', { scope })).proposals[0]
+  assert.deepEqual(out.review, { state:'comments-only', currentRevision:latest.revision, currentStatus:latest.status })
+  assert.deepEqual((await invoke({ action:'proposal', proposal_id:proposal.id })).proposal.review, out.review)
+  const input = { scope, operationId:'confirm-after-comments', proposalId:proposal.id, expectedRevision:proposal.revision, decision:'confirm' }
+  const unsentId = 'cancelled-proposal-request'
+  assert.equal((await rt.boardCall('board-operation-cancel', { scope, operationId:unsentId })).state, 'rejected')
+  await assert.rejects(rt.boardCall('board-proposal-decide', { ...input, operationId:unsentId }), /Request cancelled before commit/)
+  const confirmed = await rt.boardCall('board-proposal-decide', input)
+  assert.equal(confirmed.proposal.baseRevision, base.revision)
+  assert.equal(confirmed.proposal.reviewedTaskRevision, latest.revision)
+  assert.equal(confirmed.applied.revision, latest.revision + 1)
+  assert.equal(confirmed.applied.comments[0].text, 'Preserve this edited comment')
+  assert.equal(confirmed.applied.acceptance, 'Approved requirement')
+  assert.deepEqual(await rt.boardCall('board-proposal-decide', input), confirmed)
+  assert.deepEqual(await rt.boardCall('board-operation', { scope, operationId:input.operationId }), { state:'committed', result:confirmed })
+
+  const { proposal: superseded } = await invoke({ action:'propose', operation_id:'proposal-before-real-edit',
+    expected_revision:confirmed.applied.revision, change:{ kind:'update', value:{ acceptance:'Later draft' } } })
+  const edited = await cardCommand('different-acceptance', 'card-details', confirmed.applied.revision, { acceptance:'Different requirement' })
+  await cardCommand('restore-acceptance', 'card-details', edited.revision, { acceptance:confirmed.applied.acceptance })
+  await assert.rejects(rt.boardCall('board-proposal-decide', {
+    ...input, operationId:'confirm-after-reverted-edit', proposalId:superseded.id,
+  }), /Task changed after this proposal/)
 })
 
 test('board_task validates blocker IDs and recognizes an unambiguous legacy owner in scope', async t => {

@@ -430,6 +430,36 @@ const releaseIsDone = release => {
   let audit
   const addHistory = db.prepare('INSERT INTO history(operation_id,actor,task_id,before,after) VALUES(?,?,?,?,?)')
   const historyHead = db.prepare('SELECT COALESCE(MAX(sequence), 0) AS sequence FROM history')
+  const proposalTaskHistory = db.prepare(`SELECT before,after FROM history
+    WHERE task_id=? AND json_extract(after,'$.id')=?
+      AND json_extract(after,'$.revision')>? AND json_extract(after,'$.revision')<=?
+    ORDER BY sequence LIMIT 101`)
+  const commentMetadata = new Set(['revision', 'comments', 'boardActivity'])
+  const proposalReview = proposal => {
+    if (!validId(proposal.taskId)) return { state:'unavailable' }
+    const task = getTask(proposal.taskId)
+    if (proposal.kind === 'create') return { state:task ? 'unavailable' : 'ready' }
+    if (!task || task.scope !== proposal.scope || task.archivedAt) return { state:'unavailable' }
+    const current = { currentRevision:task.revision, currentStatus:task.status }
+    const result = state => ({ state, ...current })
+    const base = proposal.baseRevision
+    if (task.revision === base) return result('ready')
+    if (proposal.kind !== 'update' || proposal.command?.type !== 'card-details'
+      || !Number.isSafeInteger(base) || base < 1 || task.revision < base || task.revision - base > 100) return result('conflict')
+    // Verify every intervening revision. Comparing endpoints alone would miss a
+    // semantic change followed by a reversal, or a comment recording a review.
+    let last, revision = base
+    for (const row of proposalTaskHistory.all(task.id, task.id, base, task.revision)) {
+      const before = row.before && JSON.parse(row.before), after = JSON.parse(row.after)
+      if (before?.id !== task.id || before.revision !== revision || after.revision !== revision + 1
+        || (last && !isDeepStrictEqual(before, last))) return result('conflict')
+      revision = after.revision
+      const keys = new Set([...Object.keys(before), ...Object.keys(after)])
+      if ([...keys].some(key => !commentMetadata.has(key) && !isDeepStrictEqual(before[key], after[key]))) return result('conflict')
+      last = after
+    }
+    return result(isDeepStrictEqual(last, task) ? 'comments-only' : 'conflict')
+  }
   const roomTaskChanges = db.prepare(`SELECT sequence,operation_id,before,after FROM history
     WHERE sequence>? AND sequence<=? AND json_extract(after,'$.scope')=?
       AND json_extract(after,'$.type') IN ('feature','bugfix') AND json_extract(after,'$.parentTaskId') IS NULL
@@ -515,6 +545,7 @@ const releaseIsDone = release => {
     if (actor !== 'user' && actor !== 'scheduler') coordination.requireAcknowledged(subject.parentTaskId ? {...subject.task,parentTaskId:subject.parentTaskId} : subject.task,actor)
     audit = { operationId: op, actor }; try { const result = work(); addOp.run(op, fingerprint, result.id, JSON.stringify(result)); return result } finally { audit = undefined }
   })
+  const getRequest = db.prepare('SELECT * FROM board_requests WHERE operation_id=?')
   const getSubjectOp = db.prepare('SELECT * FROM operations WHERE operation_id=?')
   const addSubjectOp = db.prepare('INSERT INTO operations(operation_id,fingerprint,subject_id,result) VALUES(?,?,?,?)')
   // Releases and proposals are not task rows, so their durable operation
@@ -1228,18 +1259,24 @@ const releaseIsDone = release => {
         saveProposal(null, record); return record
       })
     },
+    proposalReview,
     decideProposal({ operationId, actor, proposalId, expectedRevision, decision, note, apply }) {
-      requireId(actor, 'actor'); requireId(proposalId, 'proposal id')
+      requireId(operationId, 'operation id'); requireId(actor, 'actor'); requireId(proposalId, 'proposal id')
       if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1 || !['confirm','reject'].includes(decision) || typeof apply !== 'function') throw new Error('invalid proposal decision')
       if (note !== undefined && (typeof note !== 'string' || Buffer.byteLength(note) > 2000)) throw new Error('invalid proposal note')
       return tx(() => {
         if (actor !== 'user') throw new Error('proposal decision is not authorized')
         const old = getProposal(proposalId)
         if (!old || old.revision !== expectedRevision || old.status !== 'pending') throw new Error('proposal revision conflict')
-        const applied = decision === 'confirm' ? apply(old) : undefined
-        const next = { ...old, revision: old.revision + 1, status: decision === 'confirm' ? 'confirmed' : 'rejected', decidedAt: Date.now(), decidedBy: actor, decisionOperationId: operationId, ...(note ? { decisionNote: note } : {}) }
+        const review = decision === 'confirm' ? proposalReview(old) : undefined
+        if (review?.state === 'unavailable') throw new Error('Proposal target is unavailable')
+        if (review?.state === 'conflict') throw new Error('Task changed after this proposal was made')
+        const applied = decision === 'confirm' ? apply(old, review) : undefined
+        const next = { ...old, revision:old.revision + 1, status:decision === 'confirm' ? 'confirmed' : 'rejected',
+          decidedAt:Date.now(), decidedBy:actor, decisionOperationId:operationId, ...(note ? { decisionNote:note } : {}),
+          ...(review?.currentRevision === undefined ? {} : { reviewedTaskRevision:review.currentRevision }) }
         saveProposal(old, next)
-        return { proposal: next, ...(applied === undefined ? {} : { applied }) }
+        return { proposal:next, ...(applied === undefined ? {} : { applied }) }
       })
     },
     admission(id) { return admission(requireId(id, 'action id')) },
@@ -1283,7 +1320,7 @@ const releaseIsDone = release => {
     },
     operation(id) {
       requireId(id, 'operation id')
-      const request = db.prepare('SELECT * FROM board_requests WHERE operation_id=?').get(id)
+      const request = getRequest.get(id)
       if (request) return { taskId: request.task_id, fingerprint: request.fingerprint, status: request.status, ...(request.status === 'committed' ? { result: JSON.parse(request.result) } : { message: request.message }) }
       const subject = getSubjectOp.get(id)
       if (subject) return { taskId: subject.subject_id, fingerprint: subject.fingerprint, status: 'committed', result: JSON.parse(subject.result) }
@@ -1294,12 +1331,13 @@ const releaseIsDone = release => {
       if (typeof execute !== 'function' || typeof isRejection !== 'function') throw new Error('invalid request handler')
       const fingerprint = digest(payload)
       return tx(() => {
-        const found = db.prepare('SELECT * FROM board_requests WHERE operation_id=?').get(operationId)
+        const found = getRequest.get(operationId)
         if (found) {
           if (found.fingerprint === '!cancelled') return { state: 'rejected', message: found.message }
           if (found.fingerprint !== fingerprint || found.task_id !== taskId) throw new Error('operation id conflict')
           return found.status === 'committed' ? { state: 'committed', value: JSON.parse(found.result) } : { state: 'rejected', message: found.message }
         }
+        const previousCommits = new Map(committed)
         db.exec('SAVEPOINT board_request')
         let outcome
         try {
@@ -1308,6 +1346,7 @@ const releaseIsDone = release => {
           db.exec('RELEASE board_request'); outcome = { state: 'committed', value }
         } catch (error) {
           db.exec('ROLLBACK TO board_request'); db.exec('RELEASE board_request')
+          committed = previousCommits
           if (isRejection(error) !== true) throw error
           outcome = { state: 'rejected', message: String(error.message).slice(0, 500) }
         }
@@ -1319,7 +1358,7 @@ const releaseIsDone = release => {
       requireId(operationId, 'operation id'); requireId(actor, 'actor')
       return tx(() => {
         if (authorize({ type: 'cancel', actor }) !== true) throw new Error('not authorized')
-        const found = db.prepare('SELECT * FROM board_requests WHERE operation_id=?').get(operationId)
+        const found = getRequest.get(operationId)
         if (found) return found.status === 'committed' ? { state:'committed', result:JSON.parse(found.result) } : { state:'rejected', message:found.message }
         const existing = getOp.get(operationId)
         if (existing) return { state:'committed', result:JSON.parse(existing.result) }

@@ -58,7 +58,7 @@ state.images=images;
 function record(scope){const status=state.mode==='schedule'?(state.boardStatus??'proposed'):state.mode==='manual'?'proposed':'reported';const card=state.card;return {id:'T1',title:state.boardTitles[scope.kind+':'+scope.id]??(scope.id==='g1'?'Group task':'Personal task'),description:card.description||'',labels:card.labels,checklist:card.checklist,dueDate:card.dueDate||'',dueComplete:card.dueComplete===true,...(card.coverImageId?{coverImageId:card.coverImageId}:{}),comments:card.comments,owner:state.mode==='manual'?'user':'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:state.revision,status,...(state.mode==='schedule'&&status==='ready'?{dispatchState:'accepted'}:{}),...(state.mode==='manual'?{personalProgress:state.progress??'todo'}:{}),shares:state.shares,images:state.gallery}}
 globalThis.resetBoardState=()=>{state.calls=[];state.revision=1;state.progress='todo';state.boardStatus='proposed';state.card={description:'',labels:[],checklist:[],dueDate:'',dueComplete:false,comments:[],coverImageId:null};state.shares=[{id:'grant-old',targetRoomId:'g2',fields:['status']}];state.gallery=[{id:'png',name:'existing.png',mediaType:'image/png'},{id:'jpeg',name:'existing.jpg',mediaType:'image/jpeg'},{id:'bad',name:'broken.png',mediaType:'image/gif'}];state.created=[];state.commentSeq=0}
 function phase2Commands(task){const commands=[...(task.fixtureCommands??[]),{type:'edit'},{type:'card-details'},{type:'reorder'},{type:'card-comment'}];if(task.status==='draft'){if(!(task.parentTaskId&&!task.owner&&!task.reviewer))commands.push({type:'submit'});commands.push({type:'cancel'})}else if(task.status==='cancelled')commands.push({type:'restore'});else commands.push({type:'cancel'});if(task.archivedAt)commands.push({type:'unarchive'});else commands.push({type:'archive'});if(!['done','cancelled'].includes(task.status)&&(state.releases??[]).some(release=>['draft','queued'].includes(release.status)))commands.push({type:'release-assign'});return commands}
-globalThis.initPhase2=()=>{state.phase2Tasks=[{id:'T1',title:'Phase task',type:'feature',owner:'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:1,status:'proposed',comments:[]}];state.releases=[{id:'rel-1',name:'Release one',version:'1.0',status:'draft',revision:1,position:0},{id:'rel-2',name:'Release two',version:'2.0',status:'queued',revision:1,position:1}];state.proposals=[{id:'p1',revision:1,kind:'update',status:'pending',taskId:'T1',taskTitle:'Phase task',proposer:'a',createdAt:1700000000000,note:'Confirm change',before:{title:'Phase task'},after:{title:'Phase task renamed'}}];state.calls=[];state.phase2Reject={id:'p2',revision:1,kind:'update',status:'pending',taskId:'T1',taskTitle:'Phase task',proposer:'b',createdAt:1700000001000,note:'Reject change',before:{type:'bugfix'},after:{type:'test'}}}
+globalThis.initPhase2=()=>{state.phase2Tasks=[{id:'T1',title:'Phase task',type:'feature',owner:'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:1,status:'proposed',comments:[]}];state.releases=[{id:'rel-1',name:'Release one',version:'1.0',status:'draft',revision:1,position:0},{id:'rel-2',name:'Release two',version:'2.0',status:'queued',revision:1,position:1}];state.proposals=[{id:'p1',revision:1,kind:'update',status:'pending',taskId:'T1',taskTitle:'Phase task',proposer:'a',createdAt:1700000000000,note:'Confirm change',before:{title:'Phase task'},after:{title:'Phase task renamed'},baseRevision:1,review:{state:'ready'}}];state.calls=[];state.phase2Reject={id:'p2',revision:1,kind:'update',status:'pending',taskId:'T1',taskTitle:'Phase task',proposer:'b',createdAt:1700000001000,note:'Reject change',before:{type:'bugfix'},after:{type:'test'},baseRevision:1,review:{state:'ready'}}}
 async function request(endpoint,payload){
  state.calls.push({endpoint,payload});
  if(endpoint==='board-project'){
@@ -100,7 +100,7 @@ async function request(endpoint,payload){
    }
    return {tasks:[task],capabilities:{actors,commands:{[task.id]:state.heldClosed?[]:commands}}};
   }
-  if(state.mode==='phase2'){
+  if(state.mode==='phase2'||state.mode==='proposal-conflicts'){
    const tasks=state.phase2Tasks.map(task=>({...task}));
    const releases=state.releases.map(release=>({...release,itemCount:tasks.filter(task=>task.releaseId===release.id).length,doneCount:tasks.filter(task=>task.releaseId===release.id&&task.status==='done').length}));
    const proposals=state.proposals.map(proposal=>({...proposal,taskTitle:tasks.find(task=>task.id===proposal.taskId)?.title}));
@@ -271,6 +271,18 @@ async function request(endpoint,payload){
   if(endpoint==='board-proposal-decide'){
    const proposal=state.proposals.find(item=>item.id===payload.proposalId);
    if(!proposal)throw Error('Proposal is unavailable');
+   if(state.mode==='proposal-conflicts'&&payload.decision==='confirm'){
+    if(proposal.id==='race'){
+     const task=state.phase2Tasks.find(item=>item.id===proposal.taskId);
+     task.revision++;task.title='Changed during confirmation';
+     proposal.review={state:'conflict',currentRevision:task.revision,currentStatus:task.status};
+     throw Error('Task changed after this proposal was made');
+    }
+    if(proposal.id==='lost'||proposal.id==='unreceived'){
+     state.lostProposalDecision=payload;
+     throw Error('network lost');
+    }
+   }
    state.proposals=state.proposals.filter(item=>item.id!==payload.proposalId);
    if(payload.proposalId==='p1'&&payload.decision==='confirm'&&state.phase2Reject)state.proposals=[state.phase2Reject];
    return {proposal:{...proposal,status:payload.decision==='confirm'?'confirmed':'rejected'}};
@@ -280,6 +292,11 @@ async function request(endpoint,payload){
   state.sealed.add(payload.operationId);return {state:'rejected',message:'safely cancelled'};
  }
  if(endpoint==='board-operation'){
+  if(state.mode==='proposal-conflicts'&&state.lostProposalDecision?.operationId===payload.operationId){
+   if(!state.deliverProposalReceipt||state.lostProposalDecision.proposalId==='unreceived')return {state:'unknown'};
+   state.proposals=state.proposals.filter(item=>item.id!==state.lostProposalDecision.proposalId);
+   return {state:'committed'};
+  }
   if(state.mode==='retired'&&state.retiredReceipt?.operationId===payload.operationId)return state.retiredReceipt;
   if(state.mode==='held-task'&&state.heldCommandReceipt?.operationId===payload.operationId)return state.heldCommandReceipt;
   if(state.teamMode==='lost' && state.teamRequest?.operationId===payload.operationId)return {state:'unknown'};
@@ -487,6 +504,91 @@ async function runBrowserCases() {
     assert.deepEqual(errors,[])
   }
   if(process.env.BOARD_LARGE_ONLY==='1')return
+
+  {
+    await page.evaluate(() => {
+      const state = globalThis.fixture
+      globalThis.initPhase2()
+      const task = state.phase2Tasks[0]
+      Object.assign(task, { title:'Current task title', revision:4 })
+      state.phase2Tasks.push({...task,id:'race-task',title:'Task before race'})
+      const update = {kind:'update',status:'pending',taskId:task.id,proposer:'a',revision:2,baseRevision:2,createdAt:1700000000000,
+        before:{title:'Title at submission'},after:{title:'Proposed title'}}
+      state.proposals = [
+        {...update,id:'stale',review:{state:'conflict',currentRevision:4,currentStatus:'proposed'}},
+        {...update,id:'comments',baseRevision:3,review:{state:'comments-only',currentRevision:4,currentStatus:'proposed'}},
+        {...update,id:'unavailable',taskId:'missing',review:{state:'unavailable'}},
+        {...update,id:'legacy-stale'},
+        {...update,id:'new',kind:'create',baseRevision:0,taskId:'new-task'},
+        {...update,id:'race',baseRevision:4,taskId:'race-task',review:{state:'ready',currentRevision:4}},
+        {...update,id:'lost',baseRevision:4,review:{state:'ready',currentRevision:4}},
+        {...update,id:'unreceived',baseRevision:4,review:{state:'ready',currentRevision:4}},
+      ]
+      globalThis.renderFixture({kind:'room',id:'proposal-conflicts'},'proposal-conflicts',true)
+    })
+    const portal = page.getByRole('dialog',{name:'Board',exact:true})
+    await portal.getByRole('button',{name:/^Changes/}).click()
+    const panel = portal.getByRole('region',{name:'Changes'})
+    const entry = id => panel.locator('[data-proposal-id="'+id+'"]')
+    const confirm = id => entry(id).getByRole('button',{name:'Confirm',exact:true})
+    const closeOld = id => entry(id).getByRole('button',{name:'Close outdated proposal',exact:true})
+    assert.equal(await confirm('stale').isDisabled(),true)
+    assert.equal(await confirm('legacy-stale').isDisabled(),true)
+    assert.equal(await confirm('unavailable').isDisabled(),true)
+    assert.equal(await confirm('comments').isEnabled(),true)
+    assert.equal(await confirm('new').isEnabled(),true)
+    assert.match(await entry('comments').innerText(),/Only comments have changed/)
+    assert.match(await entry('stale').innerText(),/Base revision 2 · Current revision 4/)
+    assert.match(await entry('stale').locator('.bt-board-proposal-diff').innerText(),/Before: Title at submission[\s\S]*Current value: Current task title[\s\S]*After: Proposed title/)
+    assert.equal(await entry('unavailable').getByRole('button',{name:'View current card'}).count(),0)
+
+    const viewCard = entry('stale').getByRole('button',{name:'View current card'})
+    await viewCard.click()
+    await page.getByRole('dialog',{name:'Current task title',exact:true}).getByRole('button',{name:'Close card'}).click()
+    assert.equal(await viewCard.evaluate(node=>node===document.activeElement),true)
+    await closeOld('stale').click()
+    const reason = entry('stale').getByLabel('Reason for closure')
+    const submit = entry('stale').getByRole('button',{name:'Confirm closure'})
+    await reason.fill(' ')
+    assert.equal(await submit.isDisabled(),true)
+    await reason.fill('The newer task title is authoritative.')
+    await submit.click()
+    await entry('stale').waitFor({state:'detached'})
+    const decisions = () => page.evaluate(() => globalThis.fixture.calls.filter(call=>call.endpoint==='board-proposal-decide').map(call=>call.payload))
+    const [closed] = await decisions()
+    assert.deepEqual({proposalId:closed.proposalId,decision:closed.decision,expectedRevision:closed.expectedRevision,note:closed.note},
+      {proposalId:'stale',decision:'reject',expectedRevision:2,note:'The newer task title is authoritative.'})
+
+    await confirm('race').click()
+    await entry('race').getByText(/Current revision 5/).waitFor()
+    assert.equal(await confirm('race').isDisabled(),true)
+    assert.equal((await decisions()).filter(decision=>decision.proposalId==='race').length,1,'reload never applies another confirmation after the conflict')
+
+    await confirm('lost').click()
+    const read = entry('lost').getByRole('button',{name:'Check action'})
+    await read.waitFor()
+    assert.equal(await confirm('lost').isDisabled(),true)
+    await page.evaluate(() => { globalThis.fixture.deliverProposalReceipt=true })
+    await read.click()
+    await entry('lost').waitFor({state:'detached'})
+    const lost = (await decisions()).filter(decision=>decision.proposalId==='lost')
+    assert.equal(lost.length,1)
+    const readIds = await page.evaluate(() => globalThis.fixture.calls.filter(call=>call.endpoint==='board-operation').map(call=>call.payload.operationId))
+    assert.deepEqual(readIds,[lost[0].operationId,lost[0].operationId])
+
+    await confirm('unreceived').click()
+    const cancel = entry('unreceived').getByRole('button',{name:'Safely cancel pending request'})
+    await cancel.waitFor()
+    await cancel.click()
+    await cancel.waitFor({state:'detached'})
+    assert.equal(await confirm('unreceived').isEnabled(),true)
+    const unreceived = (await decisions()).filter(decision=>decision.proposalId==='unreceived')
+    assert.equal(unreceived.length,1)
+    const cancelIds = await page.evaluate(() => globalThis.fixture.calls.filter(call=>call.endpoint==='board-operation-cancel').map(call=>call.payload.operationId))
+    assert.equal(cancelIds.at(-1),unreceived[0].operationId)
+    assert.deepEqual(errors,[])
+  }
+  if(process.env.BOARD_PROPOSAL_ONLY==='1')return
   await page.evaluate(() => { globalThis.fixture.calls=[] })
 
   await page.evaluate(() => globalThis.renderFixture({kind:'room',id:'g1'}, 'normal', true))

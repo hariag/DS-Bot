@@ -20,7 +20,7 @@ const canDetachRetiredRelease = (task, release) => !task.parentTaskId && task.re
 
 // `principal` comes from the authenticated route, never from a request body.
 // The current browser principal represents the instance owner, not a Bot.
-export function createBoardApi({ store, roster, assertWritable, images, goalImageReference, goalCardSnapshot, verifyShare = () => false, verifyDependency = () => false, shareTargets = () => [], canVerifyOriginal = () => true, canInspectClosedDelivery = () => false }) {
+export function createBoardApi({ store, roster, assertWritable, images, goalImageReference, goalCardSnapshot, verifyShare = () => false, verifyDependency = () => false, shareTargets = () => [], canVerifyOriginal = () => true, canInspectClosedDelivery = () => false, reviewProposal = proposal => store.proposalReview?.(proposal) }) {
   const current = () => {
     const value = roster()
     if (!value || !value.rooms || !value.bots) throw fail('Team is unavailable')
@@ -165,7 +165,7 @@ export function createBoardApi({ store, roster, assertWritable, images, goalImag
         board.retiredBoards = [...counts.values()].sort((a,b) => a.id.localeCompare(b.id))
       }
       board.proposals = (store.listProposals?.(`${scope.kind}:${scope.id}`) ?? []).filter(proposal => proposal.status === 'pending')
-        .map(proposal => ({ ...proposal, taskTitle: byId.get(proposal.taskId)?.title ?? proposal.after?.title }))
+        .map(proposal => ({ ...proposal, taskTitle: byId.get(proposal.taskId)?.title ?? proposal.after?.title, review:reviewProposal(proposal) }))
       board.releaseRoles = RELEASE_ROLES
       board.releaseCandidates = Object.fromEntries(RELEASE_ROLES.map(role => [role.key,
         (scope.kind === 'room' ? ids.filter(id => id !== 'user') : publicBots).map(id => state.bots[id]).filter(bot => roleForBot(bot)?.key === role.key)

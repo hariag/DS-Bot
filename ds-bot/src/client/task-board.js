@@ -807,31 +807,48 @@ const confirmationRows = (task, command, value, actors, tasks) => {
     after: displayFieldValue(value[field], field, task, actors, tasks),
   })).filter(row => row.before !== row.after)
 }
-const proposalRows = (proposal, actors, tasks, releases = []) => {
-  const task = (Array.isArray(tasks) ? tasks : []).find(item => item.id === proposal?.taskId)
+const proposalReviewStates = new Set(['ready', 'comments-only', 'conflict', 'unavailable'])
+const canConfirmProposal = review => review.state === 'ready' || review.state === 'comments-only'
+const reviewForProposal = (proposal, task) => {
+  if (proposalReviewStates.has(proposal.review?.state)) return proposal.review
+  if (proposal.kind === 'create') return { state:'ready' }
+  if (!Number.isSafeInteger(task?.revision) || !Number.isSafeInteger(proposal.baseRevision)) return { state:'unavailable' }
+  return { state:task.revision === proposal.baseRevision ? 'ready' : 'conflict', currentRevision:task.revision, currentStatus:task.status }
+}
+const proposalReviewError = error => {
+  const review = error?.details?.review
+  if (review?.state === 'conflict' || review?.state === 'unavailable') return review
+  const message = error?.message
+  const changed = 'Task changed after this proposal was made'
+  if (message === changed || message === hostText(changed)) return { state:'conflict' }
+  const missing = 'Proposal is unavailable'
+  if (message === missing || message === hostText(missing)) return { state:'unavailable' }
+  return undefined
+}
+const proposalRows = (proposal, actors, task, tasks, releases = []) => {
   const releaseName = id => {
     const release = releases.find(item => item.id === id)
     return release ? [textValue(release.name), textValue(release.version)].filter(Boolean).join(' · ') : textValue(id) || t('None')
   }
   if (proposal?.kind === 'status') {
     const action = proposal.command?.type ?? proposal.after?.type
-    return [{ field:'status', label:'Status', before: task ? statusValueLabel(task.status) : t('Unknown'),
+    return [{ field:'status', label:'Status', current: task ? statusValueLabel(task.status) : t('Unknown'),
       after: t(({submit:'Submit card',cancel:'Cancel card',restore:'Restore card'})[action] ?? 'Status unknown') }]
   }
   if (proposal?.kind === 'release') {
     const target = proposal.command?.value?.releaseId ?? proposal.after?.releaseId
-    return [{ field:'releaseId', label:'Release', before: task?.releaseId ? releaseName(task.releaseId) : t('Unassigned'), after: releaseName(target) }]
+    return [{ field:'releaseId', label:'Release', current:task ? task.releaseId ? releaseName(task.releaseId) : t('Unassigned') : t('Unknown'), after:releaseName(target) }]
   }
   const before = proposal?.before && typeof proposal.before === 'object' ? proposal.before : {}
   const after = proposal?.after && typeof proposal.after === 'object' ? proposal.after : {}
   return [...new Set([...Object.keys(before), ...Object.keys(after)])]
     .filter(field => JSON.stringify(before[field] ?? null) !== JSON.stringify(after[field] ?? null))
-    .map(field => ({
-      field,
-      label: CONFIRM_FIELD_LABELS[field] ?? field,
-      before: displayFieldValue(before[field], field, task, actors, tasks),
-      after: displayFieldValue(after[field], field, task, actors, tasks),
-    }))
+    .map(field => {
+      const original = displayFieldValue(before[field], field, task, actors, tasks)
+      const latest = task && proposal.kind === 'update' ? displayFieldValue(task[field], field, task, actors, tasks) : original
+      return { field, label:CONFIRM_FIELD_LABELS[field] ?? field, before:original,
+        ...(latest === original ? {} : { current:latest }), after:displayFieldValue(after[field], field, task, actors, tasks) }
+    })
 }
 
 function DueChip({ task }) {
@@ -2433,31 +2450,64 @@ function ReleaseReportDialog({ release, report, onClose, onBack }) {
 }
 
 const PROPOSAL_KIND_LABELS = { create:'Create', update:'Update', status:'Status', release:'Release' }
-function ProposalPanel({ proposals, actors, tasks, releases, disabled, busy, error, onDecide, onClose }) {
+function ProposalEntry({ proposal, task, tasks, actors, releases, disabled, issue, onDecide, onCheck, onCancel, onOpenCard }) {
+  const [note, setNote] = useState(null)
+  const review = issue?.review ?? reviewForProposal(proposal, task)
+  const blocked = !canConfirmProposal(review)
+  const currentRevision = review.currentRevision ?? task?.revision
+  const title = textValue(proposal.taskTitle) || textValue(task?.title) || textValue(proposal.taskId) || t('Unknown')
+  const rows = proposalRows(proposal, actors, task, tasks, releases)
+  const closeReason = review.state === 'conflict'
+    ? 'The task changed after submission. Close this proposal and review any new proposal against the current card.'
+    : 'The proposal target or its authorization is unavailable. Close this proposal for the audit record.'
+  const closeOld = event => {
+    event.preventDefault()
+    if (!disabled && !issue?.operationId && note?.trim() && byteLength(note.trim()) <= 2000) onDecide(proposal, 'reject', note.trim())
+  }
+  return h('article', { className:'bt-board-proposal', 'data-proposal-id':proposal.id },
+    h('div', { className:'bt-board-proposal-head' },
+      h('strong', null, title),
+      h('span', { className:'bt-board-proposal-kind' }, t(PROPOSAL_KIND_LABELS[proposal.kind] ?? 'Update'))),
+    h('p', { className:'bt-board-proposal-meta' }, t('Proposed by {name}', { name:actorName(proposal.proposer, actors) }), ' · ', relativeTime(proposal.createdAt)),
+    proposal.kind !== 'create' && Number.isSafeInteger(proposal.baseRevision) ? h('p', { className:'bt-board-proposal-meta' },
+      t('Base revision {base} · Current revision {current}', { base:proposal.baseRevision, current:currentRevision ?? t('Unknown') }),
+      review.currentStatus ? ' · ' + statusValueLabel(review.currentStatus) : '') : null,
+    review.state === 'comments-only' ? h('p', { className:'bt-card-note', role:'status' }, t('Only comments have changed since this proposal. Review the proposed changes before confirming.')) : null,
+    blocked ? h('p', { className:'bt-card-warning', role:issue?.review ? 'alert' : 'status' }, t(closeReason)) : null,
+    issue?.message ? h('p', { className:'bt-form-error', role:'alert' }, issue.message) : null,
+    proposal.note ? h('p', { className:'bt-board-proposal-note' }, proposal.note) : null,
+    rows.length ? h('div', { className:'bt-board-proposal-diff' }, rows.map(row => h('div', { key:row.field, className:'bt-card-diff-row' },
+      h('strong', null, t(row.label)),
+      h('div', { className:'bt-card-diff-values' },
+        row.before !== undefined ? h('span', null, h('b', null, t('Before') + ': '), row.before) : null,
+        row.current !== undefined ? h('span', null, h('b', null, t('Current value') + ': '), row.current) : null,
+        h('span', null, h('b', null, t('After') + ': '), row.after))))) : null,
+    note !== null && blocked ? h('form', { className:'bt-card-form', onSubmit:closeOld },
+      h('label', { className:'bt-field' }, h('span', null, t('Reason for closure')),
+        h('textarea', { rows:2, value:note, maxLength:2000, disabled:disabled || !!issue?.operationId, onChange:event => setNote(event.target.value) })),
+      h('div', { className:'bt-board-proposal-actions' },
+        h('button', { type:'button', className:'bt-btn bt-btn-ghost', onClick:() => setNote(null) }, t('Go back')),
+        h('button', { type:'submit', className:'bt-btn bt-btn-primary', disabled:disabled || !!issue?.operationId || !note.trim() || byteLength(note.trim()) > 2000 }, t('Confirm closure')))) : null,
+    h('div', { className:'bt-board-proposal-actions' },
+      blocked && task ? h('button', { type:'button', className:'bt-btn bt-btn-ghost', onClick:event => onOpenCard(task.id, event.currentTarget) }, t('View current card')) : null,
+      issue?.operationId ? h('button', { type:'button', className:'bt-btn bt-btn-ghost', disabled, onClick:() => onCheck(proposal, issue.operationId) }, t('Check action')) : null,
+      issue?.operationId && proposalReviewStates.has(proposal.review?.state) ? h('button', { type:'button', className:'bt-btn bt-btn-ghost', disabled, onClick:() => onCancel(proposal, issue.operationId) }, t('Safely cancel pending request')) : null,
+      blocked ? note === null ? h('button', { type:'button', className:'bt-btn bt-btn-ghost', disabled:disabled || !!issue?.operationId,
+        onClick:() => setNote(t(closeReason)) }, t('Close outdated proposal')) : null
+        : h('button', { type:'button', className:'bt-btn bt-btn-ghost', disabled:disabled || !!issue?.operationId, onClick:() => onDecide(proposal, 'reject') }, t('Reject')),
+      h('button', { type:'button', className:'bt-btn bt-btn-primary', disabled:disabled || blocked || !!issue?.operationId,
+        onClick:() => onDecide(proposal, 'confirm') }, t('Confirm'))))
+}
+
+function ProposalPanel({ proposals, actors, tasks, releases, disabled, issues, onDecide, onCheck, onCancel, onOpenCard, onClose }) {
+  const taskById = new Map(tasks.map(task => [task.id, task]))
   return h('section', { className: 'bt-board-proposals', role: 'region', 'aria-label': t('Changes') },
     h('div', { className: 'bt-board-proposals-head' },
       h('h3', null, t('Changes')),
       h('span', { className: 'bt-board-count' }, proposals.length),
       h('button', { type: 'button', className: 'bt-card-mini', onClick: onClose }, t('Close'))),
-    error ? h('p', { className: 'bt-form-error', role: 'alert' }, error) : null,
-    proposals.length ? proposals.map(proposal => {
-      const title = textValue(proposal.taskTitle) || textValue((Array.isArray(tasks) ? tasks : []).find(task => task.id === proposal.taskId)?.title) || textValue(proposal.taskId) || t('Unknown')
-      const rows = proposalRows(proposal, actors, tasks, releases)
-      return h('article', { key: proposal.id, className: 'bt-board-proposal' },
-        h('div', { className: 'bt-board-proposal-head' },
-          h('strong', null, title),
-          h('span', { className: 'bt-board-proposal-kind' }, t(PROPOSAL_KIND_LABELS[proposal.kind] ?? 'Update'))),
-        h('p', { className: 'bt-board-proposal-meta' }, t('Proposed by {name}', { name: actorName(proposal.proposer, actors) }), ' · ', relativeTime(proposal.createdAt)),
-        proposal.note ? h('p', { className: 'bt-board-proposal-note' }, proposal.note) : null,
-        rows.length ? h('div', { className: 'bt-board-proposal-diff' }, rows.map(row => h('div', { key: row.field, className: 'bt-card-diff-row' },
-          h('strong', null, t(row.label)),
-          h('div', { className: 'bt-card-diff-values' },
-            h('span', null, h('b', null, t('Before') + ': '), row.before),
-            h('span', null, h('b', null, t('After') + ': '), row.after))))) : null,
-        h('div', { className: 'bt-board-proposal-actions' },
-          h('button', { type: 'button', className: 'bt-btn bt-btn-ghost', disabled: disabled || busy === proposal.id, onClick: () => onDecide(proposal, 'reject') }, t('Reject')),
-          h('button', { type: 'button', className: 'bt-btn bt-btn-primary', disabled: disabled || busy === proposal.id, onClick: () => onDecide(proposal, 'confirm') }, t('Confirm'))))
-    }) : h('p', { className: 'bt-card-muted' }, t('No pending changes.')))
+    proposals.length ? proposals.map(proposal => h(ProposalEntry, { key:proposal.id, proposal, actors, task:taskById.get(proposal.taskId), tasks,
+      releases, disabled, issue:issues.get(proposal.id), onDecide, onCheck, onCancel, onOpenCard })) : h('p', { className:'bt-card-muted' }, t('No pending changes.')))
 }
 
 /** A server-authorized group or personal board. */
@@ -2510,7 +2560,8 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
   const [releaseBusy, setReleaseBusy] = useState('')
   const [releaseError, setReleaseError] = useState('')
   const [proposalBusy, setProposalBusy] = useState('')
-  const [proposalError, setProposalError] = useState('')
+  const [proposalIssues, setProposalIssues] = useState(() => new Map())
+  const proposalFlight = useRef(null)
   const [selectedCard, setSelectedCard] = useState(null)
   const [createFor, setCreateFor] = useState(null)
   const [notice, setNotice] = useState('')
@@ -2645,7 +2696,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
     const previousFocus = document.activeElement
     store.current = pendingStore(scope)
     fetching.current = null; cancelling.current = null
-    setBusy(false); setCancelBusy(false); setData(null); setError(''); setSearch(''); setMemberFilter(''); setLabelFilter(''); setDueFilter(''); setTypeFilter(''); setView(initialProject ? 'project' : 'status'); setReleaseFocus(''); setChangesOpen(false); setNewRelease(false); setReleasePanel(null); setReleaseReport(null); setReleaseBusy(''); setReleaseError(''); setProposalBusy(''); setProposalError(''); setCreateFor(null); setSelectedCard(initialCardId ? {key,id:initialCardId} : null); setDragId(''); setDrop(null); setBoardConfirm(null); boardConfirmRef.current = null
+    setBusy(false); setCancelBusy(false); setData(null); setError(''); setSearch(''); setMemberFilter(''); setLabelFilter(''); setDueFilter(''); setTypeFilter(''); setView(initialProject ? 'project' : 'status'); setReleaseFocus(''); setChangesOpen(false); setNewRelease(false); setReleasePanel(null); setReleaseReport(null); setReleaseBusy(''); setReleaseError(''); setProposalBusy(''); setProposalIssues(new Map()); proposalFlight.current = null; setCreateFor(null); setSelectedCard(initialCardId ? {key,id:initialCardId} : null); setDragId(''); setDrop(null); setBoardConfirm(null); boardConfirmRef.current = null
     const operation = store.current?.current ?? ''
     pendingRef.current = operation; setPending(operation)
     void load(epoch)
@@ -3209,17 +3260,54 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
       await load(generation.current, true)
     } finally { setReleaseBusy('') }
   }
-  const decideProposal = async (proposal, decision) => {
-    if (proposalBusy || !canAct || !window.crypto?.randomUUID) return
-    const operationId = window.crypto.randomUUID()
-    setProposalBusy(proposal.id); setProposalError('')
+  const proposalAction = async (proposal, decision, note, checkId, cancel = false) => {
+    if (proposalFlight.current || !canAct || !window.crypto?.randomUUID) return
+    const previous = proposalIssues.get(proposal.id)
+    if (!checkId && previous?.operationId) return
+    const task = data?.tasks?.find(item => item.id === proposal.taskId)
+    if (decision === 'confirm' && !canConfirmProposal(previous?.review ?? reviewForProposal(proposal, task))) return
+    const operationId = checkId ?? window.crypto.randomUUID()
+    const epoch = generation.current
+    proposalFlight.current = operationId
+    setProposalBusy(proposal.id)
     try {
-      await request('board-proposal-decide', { scope, operationId, proposalId: proposal.id, expectedRevision: proposal.revision, decision })
-      await load(generation.current, true)
-    } catch (caught) {
-      setProposalError(caught?.message || t('The proposal decision failed.'))
-      await load(generation.current, true)
-    } finally { setProposalBusy('') }
+      let issue, check = Boolean(checkId)
+      if (!check) {
+        try {
+          await request('board-proposal-decide', { scope, operationId, proposalId:proposal.id,
+            expectedRevision:proposal.revision, decision, ...(note ? { note } : {}) })
+        } catch (error) {
+          const review = proposalReviewError(error)
+          if (review) issue = { review }
+          else if (['bot/invalid', 'bot/refused', 'bot/read-only', 'bot/not-found'].includes(error?.code)) {
+            issue = { message:hostText(error.message) || t('The proposal decision failed.') }
+          } else check = true
+        }
+      }
+      if (check && current(epoch)) {
+        const endpoint = cancel ? 'board-operation-cancel' : 'board-operation'
+        const receipt = await Promise.resolve().then(() => request(endpoint, { scope, operationId })).catch(() => null)
+        if (receipt?.state === 'rejected') {
+          const review = proposalReviewError(receipt)
+          issue = review ? { review } : { message:hostText(receipt.message) || t('The proposal decision failed.') }
+        } else if (receipt?.state !== 'committed') {
+          issue = { ...previous, operationId, message:t('Decision outcome is unknown. Refresh before trying again.') }
+        }
+      }
+      if (!current(epoch)) return
+      setProposalIssues(issues => {
+        const next = new Map(issues)
+        if (issue) next.set(proposal.id, issue)
+        else next.delete(proposal.id)
+        return next
+      })
+      await load(epoch, true)
+    } finally {
+      if (proposalFlight.current === operationId) {
+        proposalFlight.current = null
+        if (current(epoch)) setProposalBusy('')
+      }
+    }
   }
   const hasLegacy = data?.tasks?.some(task => task.legacy) === true
   const allTasks = data?.tasks ?? []
@@ -3593,8 +3681,11 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
             h('div', { className:'bt-board-activity' }, retiredBoards.map(board => h('button', { key:board.id, type:'button', className:'bt-board-activity-row', onClick:() => visitRetired(board.id) },
               h('span', { className:'bt-board-activity-text' }, h('strong', null, t('Deleted group')), h('span', null, board.id)),
               h('span', { className:'bt-board-activity-by' }, t('{count} cards', { count:board.taskCount }), ' · ', t('{count} open cards', { count:board.openCount })))))) : null,
-          changesOpen && proposalSupported ? h(ProposalPanel, { proposals, actors, tasks: data.tasks, releases, disabled: !canAct || !!proposalBusy,
-            busy: proposalBusy, error: proposalError, onDecide: decideProposal, onClose: () => setChangesOpen(false) }) : null,
+          changesOpen && proposalSupported ? h(ProposalPanel, { proposals, actors, tasks:data.tasks, releases, disabled:!canAct || !!proposalBusy,
+            issues:proposalIssues, onDecide:proposalAction,
+            onCheck:(proposal, operationId) => proposalAction(proposal, undefined, undefined, operationId),
+            onCancel:(proposal, operationId) => proposalAction(proposal, undefined, undefined, operationId, true),
+            onOpenCard:openCard, onClose:() => setChangesOpen(false) }) : null,
           releaseError ? h('div', { className: 'bt-board-release-error', role: 'alert' }, releaseError) : null,
           releaseBar,
           view === 'status' && personal ? h('section', { className: 'bt-board-section', 'aria-label': t('Personal progress') },

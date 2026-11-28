@@ -308,7 +308,7 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       const targetScope = caller.roomId ? `room:${caller.roomId}` : `personal:${caller.actor}`
       const proposal = store.listProposals(targetScope).find(item => item.id === args.proposalId)
       if (!proposal || proposal.proposer !== caller.actor) throw refused()
-      return { proposal }
+      return { proposal:proposal.status === 'pending' ? { ...proposal, review:store.proposalReview(proposal) } : proposal }
     }
     if (!args || typeof args.action !== 'string') throw refused()
     if (!id(args.taskId)) throw invalid(`board_task ${args.action} requires the original task_id from the card.`)
@@ -368,7 +368,7 @@ export function createBotWorkflow({ rt, store, verifyBinding = () => false, veri
       if (!direct(task, caller) || !id(args.proposalId)) throw refused()
       const proposal = store.listProposals(task.scope).find(item => item.id === args.proposalId)
       if (!proposal || proposal.proposer !== caller.actor) throw refused()
-      return { proposal }
+      return { proposal:proposal.status === 'pending' ? { ...proposal, review:store.proposalReview(proposal) } : proposal }
     }
     if (args.action === 'propose') {
       if (!canMutate(task, caller, 'propose')) throw refused()

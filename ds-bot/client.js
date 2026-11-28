@@ -21193,6 +21193,17 @@ var ZH = {
   "The release could not be created. Check the fields and try again.": "无法创建发布，请检查字段后重试。",
   "Unable to update release": "无法更新发布，请刷新后重试。",
   "The proposal decision failed.": "变更处理失败，请刷新后重试。",
+  "Task changed after this proposal was made": "任务在提案提交后已更新",
+  "Proposal is unavailable": "提案当前不可用",
+  "Base revision {base} · Current revision {current}": "提案基于修订 {base} · 当前修订 {current}",
+  "Only comments have changed since this proposal. Review the proposed changes before confirming.": "提案提交后仅评论有变化。请核对提案内容后确认。",
+  "The task changed after submission. Close this proposal and review any new proposal against the current card.": "任务在提案提交后已更新。请关闭旧提案，如仍需变更，由提案人根据当前卡片重提。",
+  "The proposal target or its authorization is unavailable. Close this proposal for the audit record.": "当前无法核对目标卡片或提案权限，可关闭此提案并保留记录。",
+  "Current value": "当前值",
+  "View current card": "查看当前卡片",
+  "Close outdated proposal": "关闭旧提案",
+  "Reason for closure": "关闭原因",
+  "Confirm closure": "确认关闭",
   "Drag a card to another type lane to change its type without changing its status.": "将卡片拖到其他类型列可修改类型，状态不变。",
   "Drag cards between release lanes. Arrow controls reorder draft and queued releases.": "在发布列之间拖动卡片；用箭头按钮调整起草和排队发布的顺序。",
   "Release team": "发布团队",
@@ -68467,8 +68478,25 @@ var confirmationRows = (task, command, value, actors, tasks) => {
     after: displayFieldValue(value[field3], field3, task, actors, tasks)
   })).filter((row) => row.before !== row.after);
 };
-var proposalRows = (proposal, actors, tasks, releases = []) => {
-  const task = (Array.isArray(tasks) ? tasks : []).find((item) => item.id === proposal?.taskId);
+var proposalReviewStates = /* @__PURE__ */ new Set(["ready", "comments-only", "conflict", "unavailable"]);
+var canConfirmProposal = (review) => review.state === "ready" || review.state === "comments-only";
+var reviewForProposal = (proposal, task) => {
+  if (proposalReviewStates.has(proposal.review?.state)) return proposal.review;
+  if (proposal.kind === "create") return { state: "ready" };
+  if (!Number.isSafeInteger(task?.revision) || !Number.isSafeInteger(proposal.baseRevision)) return { state: "unavailable" };
+  return { state: task.revision === proposal.baseRevision ? "ready" : "conflict", currentRevision: task.revision, currentStatus: task.status };
+};
+var proposalReviewError = (error) => {
+  const review = error?.details?.review;
+  if (review?.state === "conflict" || review?.state === "unavailable") return review;
+  const message = error?.message;
+  const changed = "Task changed after this proposal was made";
+  if (message === changed || message === hostText(changed)) return { state: "conflict" };
+  const missing = "Proposal is unavailable";
+  if (message === missing || message === hostText(missing)) return { state: "unavailable" };
+  return void 0;
+};
+var proposalRows = (proposal, actors, task, tasks, releases = []) => {
   const releaseName = (id) => {
     const release = releases.find((item) => item.id === id);
     return release ? [textValue(release.name), textValue(release.version)].filter(Boolean).join(" · ") : textValue(id) || t("None");
@@ -68478,22 +68506,27 @@ var proposalRows = (proposal, actors, tasks, releases = []) => {
     return [{
       field: "status",
       label: "Status",
-      before: task ? statusValueLabel(task.status) : t("Unknown"),
+      current: task ? statusValueLabel(task.status) : t("Unknown"),
       after: t({ submit: "Submit card", cancel: "Cancel card", restore: "Restore card" }[action] ?? "Status unknown")
     }];
   }
   if (proposal?.kind === "release") {
     const target = proposal.command?.value?.releaseId ?? proposal.after?.releaseId;
-    return [{ field: "releaseId", label: "Release", before: task?.releaseId ? releaseName(task.releaseId) : t("Unassigned"), after: releaseName(target) }];
+    return [{ field: "releaseId", label: "Release", current: task ? task.releaseId ? releaseName(task.releaseId) : t("Unassigned") : t("Unknown"), after: releaseName(target) }];
   }
   const before = proposal?.before && typeof proposal.before === "object" ? proposal.before : {};
   const after = proposal?.after && typeof proposal.after === "object" ? proposal.after : {};
-  return [.../* @__PURE__ */ new Set([...Object.keys(before), ...Object.keys(after)])].filter((field3) => JSON.stringify(before[field3] ?? null) !== JSON.stringify(after[field3] ?? null)).map((field3) => ({
-    field: field3,
-    label: CONFIRM_FIELD_LABELS[field3] ?? field3,
-    before: displayFieldValue(before[field3], field3, task, actors, tasks),
-    after: displayFieldValue(after[field3], field3, task, actors, tasks)
-  }));
+  return [.../* @__PURE__ */ new Set([...Object.keys(before), ...Object.keys(after)])].filter((field3) => JSON.stringify(before[field3] ?? null) !== JSON.stringify(after[field3] ?? null)).map((field3) => {
+    const original = displayFieldValue(before[field3], field3, task, actors, tasks);
+    const latest = task && proposal.kind === "update" ? displayFieldValue(task[field3], field3, task, actors, tasks) : original;
+    return {
+      field: field3,
+      label: CONFIRM_FIELD_LABELS[field3] ?? field3,
+      before: original,
+      ...latest === original ? {} : { current: latest },
+      after: displayFieldValue(after[field3], field3, task, actors, tasks)
+    };
+  });
 };
 function DueChip({ task }) {
   const info = dueInfo(task);
@@ -71085,7 +71118,89 @@ function ReleaseReportDialog({ release, report, onClose, onBack }) {
   );
 }
 var PROPOSAL_KIND_LABELS = { create: "Create", update: "Update", status: "Status", release: "Release" };
-function ProposalPanel({ proposals, actors, tasks, releases, disabled, busy, error, onDecide, onClose }) {
+function ProposalEntry({ proposal, task, tasks, actors, releases, disabled, issue, onDecide, onCheck, onCancel, onOpenCard }) {
+  const [note, setNote] = (0, import_react82.useState)(null);
+  const review = issue?.review ?? reviewForProposal(proposal, task);
+  const blocked = !canConfirmProposal(review);
+  const currentRevision = review.currentRevision ?? task?.revision;
+  const title = textValue(proposal.taskTitle) || textValue(task?.title) || textValue(proposal.taskId) || t("Unknown");
+  const rows2 = proposalRows(proposal, actors, task, tasks, releases);
+  const closeReason = review.state === "conflict" ? "The task changed after submission. Close this proposal and review any new proposal against the current card." : "The proposal target or its authorization is unavailable. Close this proposal for the audit record.";
+  const closeOld = (event) => {
+    event.preventDefault();
+    if (!disabled && !issue?.operationId && note?.trim() && byteLength(note.trim()) <= 2e3) onDecide(proposal, "reject", note.trim());
+  };
+  return (0, import_react82.createElement)(
+    "article",
+    { className: "bt-board-proposal", "data-proposal-id": proposal.id },
+    (0, import_react82.createElement)(
+      "div",
+      { className: "bt-board-proposal-head" },
+      (0, import_react82.createElement)("strong", null, title),
+      (0, import_react82.createElement)("span", { className: "bt-board-proposal-kind" }, t(PROPOSAL_KIND_LABELS[proposal.kind] ?? "Update"))
+    ),
+    (0, import_react82.createElement)("p", { className: "bt-board-proposal-meta" }, t("Proposed by {name}", { name: actorName(proposal.proposer, actors) }), " · ", relativeTime(proposal.createdAt)),
+    proposal.kind !== "create" && Number.isSafeInteger(proposal.baseRevision) ? (0, import_react82.createElement)(
+      "p",
+      { className: "bt-board-proposal-meta" },
+      t("Base revision {base} · Current revision {current}", { base: proposal.baseRevision, current: currentRevision ?? t("Unknown") }),
+      review.currentStatus ? " · " + statusValueLabel(review.currentStatus) : ""
+    ) : null,
+    review.state === "comments-only" ? (0, import_react82.createElement)("p", { className: "bt-card-note", role: "status" }, t("Only comments have changed since this proposal. Review the proposed changes before confirming.")) : null,
+    blocked ? (0, import_react82.createElement)("p", { className: "bt-card-warning", role: issue?.review ? "alert" : "status" }, t(closeReason)) : null,
+    issue?.message ? (0, import_react82.createElement)("p", { className: "bt-form-error", role: "alert" }, issue.message) : null,
+    proposal.note ? (0, import_react82.createElement)("p", { className: "bt-board-proposal-note" }, proposal.note) : null,
+    rows2.length ? (0, import_react82.createElement)("div", { className: "bt-board-proposal-diff" }, rows2.map((row) => (0, import_react82.createElement)(
+      "div",
+      { key: row.field, className: "bt-card-diff-row" },
+      (0, import_react82.createElement)("strong", null, t(row.label)),
+      (0, import_react82.createElement)(
+        "div",
+        { className: "bt-card-diff-values" },
+        row.before !== void 0 ? (0, import_react82.createElement)("span", null, (0, import_react82.createElement)("b", null, t("Before") + ": "), row.before) : null,
+        row.current !== void 0 ? (0, import_react82.createElement)("span", null, (0, import_react82.createElement)("b", null, t("Current value") + ": "), row.current) : null,
+        (0, import_react82.createElement)("span", null, (0, import_react82.createElement)("b", null, t("After") + ": "), row.after)
+      )
+    ))) : null,
+    note !== null && blocked ? (0, import_react82.createElement)(
+      "form",
+      { className: "bt-card-form", onSubmit: closeOld },
+      (0, import_react82.createElement)(
+        "label",
+        { className: "bt-field" },
+        (0, import_react82.createElement)("span", null, t("Reason for closure")),
+        (0, import_react82.createElement)("textarea", { rows: 2, value: note, maxLength: 2e3, disabled: disabled || !!issue?.operationId, onChange: (event) => setNote(event.target.value) })
+      ),
+      (0, import_react82.createElement)(
+        "div",
+        { className: "bt-board-proposal-actions" },
+        (0, import_react82.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", onClick: () => setNote(null) }, t("Go back")),
+        (0, import_react82.createElement)("button", { type: "submit", className: "bt-btn bt-btn-primary", disabled: disabled || !!issue?.operationId || !note.trim() || byteLength(note.trim()) > 2e3 }, t("Confirm closure"))
+      )
+    ) : null,
+    (0, import_react82.createElement)(
+      "div",
+      { className: "bt-board-proposal-actions" },
+      blocked && task ? (0, import_react82.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", onClick: (event) => onOpenCard(task.id, event.currentTarget) }, t("View current card")) : null,
+      issue?.operationId ? (0, import_react82.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled, onClick: () => onCheck(proposal, issue.operationId) }, t("Check action")) : null,
+      issue?.operationId && proposalReviewStates.has(proposal.review?.state) ? (0, import_react82.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled, onClick: () => onCancel(proposal, issue.operationId) }, t("Safely cancel pending request")) : null,
+      blocked ? note === null ? (0, import_react82.createElement)("button", {
+        type: "button",
+        className: "bt-btn bt-btn-ghost",
+        disabled: disabled || !!issue?.operationId,
+        onClick: () => setNote(t(closeReason))
+      }, t("Close outdated proposal")) : null : (0, import_react82.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled: disabled || !!issue?.operationId, onClick: () => onDecide(proposal, "reject") }, t("Reject")),
+      (0, import_react82.createElement)("button", {
+        type: "button",
+        className: "bt-btn bt-btn-primary",
+        disabled: disabled || blocked || !!issue?.operationId,
+        onClick: () => onDecide(proposal, "confirm")
+      }, t("Confirm"))
+    )
+  );
+}
+function ProposalPanel({ proposals, actors, tasks, releases, disabled, issues, onDecide, onCheck, onCancel, onOpenCard, onClose }) {
+  const taskById = new Map(tasks.map((task) => [task.id, task]));
   return (0, import_react82.createElement)(
     "section",
     { className: "bt-board-proposals", role: "region", "aria-label": t("Changes") },
@@ -71096,40 +71211,20 @@ function ProposalPanel({ proposals, actors, tasks, releases, disabled, busy, err
       (0, import_react82.createElement)("span", { className: "bt-board-count" }, proposals.length),
       (0, import_react82.createElement)("button", { type: "button", className: "bt-card-mini", onClick: onClose }, t("Close"))
     ),
-    error ? (0, import_react82.createElement)("p", { className: "bt-form-error", role: "alert" }, error) : null,
-    proposals.length ? proposals.map((proposal) => {
-      const title = textValue(proposal.taskTitle) || textValue((Array.isArray(tasks) ? tasks : []).find((task) => task.id === proposal.taskId)?.title) || textValue(proposal.taskId) || t("Unknown");
-      const rows2 = proposalRows(proposal, actors, tasks, releases);
-      return (0, import_react82.createElement)(
-        "article",
-        { key: proposal.id, className: "bt-board-proposal" },
-        (0, import_react82.createElement)(
-          "div",
-          { className: "bt-board-proposal-head" },
-          (0, import_react82.createElement)("strong", null, title),
-          (0, import_react82.createElement)("span", { className: "bt-board-proposal-kind" }, t(PROPOSAL_KIND_LABELS[proposal.kind] ?? "Update"))
-        ),
-        (0, import_react82.createElement)("p", { className: "bt-board-proposal-meta" }, t("Proposed by {name}", { name: actorName(proposal.proposer, actors) }), " · ", relativeTime(proposal.createdAt)),
-        proposal.note ? (0, import_react82.createElement)("p", { className: "bt-board-proposal-note" }, proposal.note) : null,
-        rows2.length ? (0, import_react82.createElement)("div", { className: "bt-board-proposal-diff" }, rows2.map((row) => (0, import_react82.createElement)(
-          "div",
-          { key: row.field, className: "bt-card-diff-row" },
-          (0, import_react82.createElement)("strong", null, t(row.label)),
-          (0, import_react82.createElement)(
-            "div",
-            { className: "bt-card-diff-values" },
-            (0, import_react82.createElement)("span", null, (0, import_react82.createElement)("b", null, t("Before") + ": "), row.before),
-            (0, import_react82.createElement)("span", null, (0, import_react82.createElement)("b", null, t("After") + ": "), row.after)
-          )
-        ))) : null,
-        (0, import_react82.createElement)(
-          "div",
-          { className: "bt-board-proposal-actions" },
-          (0, import_react82.createElement)("button", { type: "button", className: "bt-btn bt-btn-ghost", disabled: disabled || busy === proposal.id, onClick: () => onDecide(proposal, "reject") }, t("Reject")),
-          (0, import_react82.createElement)("button", { type: "button", className: "bt-btn bt-btn-primary", disabled: disabled || busy === proposal.id, onClick: () => onDecide(proposal, "confirm") }, t("Confirm"))
-        )
-      );
-    }) : (0, import_react82.createElement)("p", { className: "bt-card-muted" }, t("No pending changes."))
+    proposals.length ? proposals.map((proposal) => (0, import_react82.createElement)(ProposalEntry, {
+      key: proposal.id,
+      proposal,
+      actors,
+      task: taskById.get(proposal.taskId),
+      tasks,
+      releases,
+      disabled,
+      issue: issues.get(proposal.id),
+      onDecide,
+      onCheck,
+      onCancel,
+      onOpenCard
+    })) : (0, import_react82.createElement)("p", { className: "bt-card-muted" }, t("No pending changes."))
   );
 }
 function TaskBoard(props) {
@@ -71196,7 +71291,8 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
   const [releaseBusy, setReleaseBusy] = (0, import_react82.useState)("");
   const [releaseError, setReleaseError] = (0, import_react82.useState)("");
   const [proposalBusy, setProposalBusy] = (0, import_react82.useState)("");
-  const [proposalError, setProposalError] = (0, import_react82.useState)("");
+  const [proposalIssues, setProposalIssues] = (0, import_react82.useState)(() => /* @__PURE__ */ new Map());
+  const proposalFlight = (0, import_react82.useRef)(null);
   const [selectedCard, setSelectedCard] = (0, import_react82.useState)(null);
   const [createFor, setCreateFor] = (0, import_react82.useState)(null);
   const [notice, setNotice] = (0, import_react82.useState)("");
@@ -71397,7 +71493,8 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
     setReleaseBusy("");
     setReleaseError("");
     setProposalBusy("");
-    setProposalError("");
+    setProposalIssues(/* @__PURE__ */ new Map());
+    proposalFlight.current = null;
     setCreateFor(null);
     setSelectedCard(initialCardId ? { key, id: initialCardId } : null);
     setDragId("");
@@ -72177,19 +72274,59 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
       setReleaseBusy("");
     }
   };
-  const decideProposal = async (proposal, decision) => {
-    if (proposalBusy || !canAct || !window.crypto?.randomUUID) return;
-    const operationId = window.crypto.randomUUID();
+  const proposalAction = async (proposal, decision, note, checkId2, cancel2 = false) => {
+    if (proposalFlight.current || !canAct || !window.crypto?.randomUUID) return;
+    const previous = proposalIssues.get(proposal.id);
+    if (!checkId2 && previous?.operationId) return;
+    const task = data?.tasks?.find((item) => item.id === proposal.taskId);
+    if (decision === "confirm" && !canConfirmProposal(previous?.review ?? reviewForProposal(proposal, task))) return;
+    const operationId = checkId2 ?? window.crypto.randomUUID();
+    const epoch = generation.current;
+    proposalFlight.current = operationId;
     setProposalBusy(proposal.id);
-    setProposalError("");
     try {
-      await request("board-proposal-decide", { scope, operationId, proposalId: proposal.id, expectedRevision: proposal.revision, decision });
-      await load(generation.current, true);
-    } catch (caught) {
-      setProposalError(caught?.message || t("The proposal decision failed."));
-      await load(generation.current, true);
+      let issue, check2 = Boolean(checkId2);
+      if (!check2) {
+        try {
+          await request("board-proposal-decide", {
+            scope,
+            operationId,
+            proposalId: proposal.id,
+            expectedRevision: proposal.revision,
+            decision,
+            ...note ? { note } : {}
+          });
+        } catch (error2) {
+          const review = proposalReviewError(error2);
+          if (review) issue = { review };
+          else if (["bot/invalid", "bot/refused", "bot/read-only", "bot/not-found"].includes(error2?.code)) {
+            issue = { message: hostText(error2.message) || t("The proposal decision failed.") };
+          } else check2 = true;
+        }
+      }
+      if (check2 && current2(epoch)) {
+        const endpoint = cancel2 ? "board-operation-cancel" : "board-operation";
+        const receipt = await Promise.resolve().then(() => request(endpoint, { scope, operationId })).catch(() => null);
+        if (receipt?.state === "rejected") {
+          const review = proposalReviewError(receipt);
+          issue = review ? { review } : { message: hostText(receipt.message) || t("The proposal decision failed.") };
+        } else if (receipt?.state !== "committed") {
+          issue = { ...previous, operationId, message: t("Decision outcome is unknown. Refresh before trying again.") };
+        }
+      }
+      if (!current2(epoch)) return;
+      setProposalIssues((issues) => {
+        const next = new Map(issues);
+        if (issue) next.set(proposal.id, issue);
+        else next.delete(proposal.id);
+        return next;
+      });
+      await load(epoch, true);
     } finally {
-      setProposalBusy("");
+      if (proposalFlight.current === operationId) {
+        proposalFlight.current = null;
+        if (current2(epoch)) setProposalBusy("");
+      }
     }
   };
   const hasLegacy = data?.tasks?.some((task) => task.legacy) === true;
@@ -72870,9 +73007,11 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
           tasks: data.tasks,
           releases,
           disabled: !canAct || !!proposalBusy,
-          busy: proposalBusy,
-          error: proposalError,
-          onDecide: decideProposal,
+          issues: proposalIssues,
+          onDecide: proposalAction,
+          onCheck: (proposal, operationId) => proposalAction(proposal, void 0, void 0, operationId),
+          onCancel: (proposal, operationId) => proposalAction(proposal, void 0, void 0, operationId, true),
+          onOpenCard: openCard,
           onClose: () => setChangesOpen(false)
         }) : null,
         releaseError ? (0, import_react82.createElement)("div", { className: "bt-board-release-error", role: "alert" }, releaseError) : null,
