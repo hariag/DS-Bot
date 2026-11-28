@@ -34,11 +34,11 @@ If your OS warns about an unsigned app: on Windows select **More info** → **Ru
 First install DSH and configure at least one model in it. DS Bot uses the models from DSH.
 
 - **DSH Desktop**: In the sidebar, select **Plugins** → **Add plugin**, enter `ds-bot` (in mainland China, set **Registry** to **Mainland China mirror**), then select **Install** and **Enable now**.
-- **DSH Web** (needs Node.js `22.19` or later, and pnpm):
+- **DSH Web** (needs Node.js `24.22.3` or later in the 24.x series, or `26.13.1` or later, and pnpm):
 
 ```sh
-npx @deepseek-ai/dsh@0.2.2-rc.5 plugin --profile web add ds-bot
-npx @deepseek-ai/dsh@0.2.2-rc.5 web
+npx @deepseek-ai/dsh@0.2.3-alpha.2 plugin --profile web add ds-bot
+npx @deepseek-ai/dsh@0.2.3-alpha.2 web
 ```
 
 **Docker (NAS, Linux server)**

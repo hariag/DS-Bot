@@ -8,8 +8,7 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { after, before, describe, test } from 'node:test'
 import { setImmediate as nextTurn } from 'node:timers/promises'
-import { entryListSchema } from '@deepseek-ai/cordis-plugin-include'
-import { load } from 'js-yaml'
+import { parseEntryYaml } from '@deepseek-ai/cordis-plugin-include'
 import { parse } from 'yaml'
 import { disk } from '../src/copy-tree.mjs'
 import { copySessions, findTeam, importTeam, restoreSessions, sessionDirs, sessionIdsOf, teamInUse, teamSizes, userDshHome } from '../src/import.mjs'
@@ -758,7 +757,7 @@ describe('JS expressions in profile patches', () => {
     assert.deepEqual(warnings, [])
     const text = readFileSync(join(to, 'profiles', 'ds-bot', 'cordis.patch.yml'), 'utf8')
     assert.match(text, /!!js/u)
-    const rows = Object.fromEntries(load(text, { schema: entryListSchema }).map(row => [row.id, row]))
+    const rows = Object.fromEntries(parseEntryYaml(text).map(row => [row.id, row]))
     assert.deepEqual(rows['agent-default-model'].config.model, { __jsExpr: "process.env.X ?? 'deepseek-official/deepseek-flash'" })
     assert.deepEqual(rows['ui-settings-general'].config.welcomeNoticeVersion, { __jsExpr: "process.env.NOTICE ?? 'seen'" })
   })

@@ -4,8 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { after, describe, test } from 'node:test'
-import { entryListSchema } from '@deepseek-ai/cordis-plugin-include'
-import { load } from 'js-yaml'
+import { parseEntryYaml } from '@deepseek-ai/cordis-plugin-include'
 import { GOAL_PATCH_NAME, goalPatch, reconcileGoal } from '../src/goal-patch.mjs'
 
 const PRESETS = fileURLToPath(new URL('presets/', import.meta.resolve('@deepseek-ai/dsh-web-app/package.json')))
@@ -13,7 +12,7 @@ const GOAL_NAMES = new Set(['@deepseek-ai/dsh-command-goal', '@deepseek-ai/dsh-t
 
 // The dsh-web-app bundle's preset patches, as the app's own launch reads them.
 const realLayers = readdirSync(PRESETS).filter(name => name.endsWith('.patch.yml'))
-  .map(name => ({ packageName: '@deepseek-ai/dsh-web-app', packageDir: PRESETS, patchPaths: [], patches: load(readFileSync(join(PRESETS, name), 'utf8'), { schema: entryListSchema }) }))
+  .map(name => ({ packageName: '@deepseek-ai/dsh-web-app', packageDir: PRESETS, patchPaths: [], patches: parseEntryYaml(readFileSync(join(PRESETS, name), 'utf8')) }))
 
 const flat = (patches) => patches.flatMap(patch => patch.insert ?? [patch])
 
@@ -67,7 +66,7 @@ describe('goalPatch', () => {
     const content = readFileSync(file, 'utf8')
     assert.match(content, /!!js process\.platform === 'win32'/)
     assert.doesNotMatch(content, /__jsExpr/)
-    const parsed = load(content, { schema: entryListSchema })
+    const parsed = parseEntryYaml(content)
     const standard = parsed.find(row => row.id === 'preset-standard')
     const bash = standard.config.plugins.find(row => row.id === 'tool-bash')
     assert.deepEqual(bash.disabled, { __jsExpr: "process.platform === 'win32'" })
@@ -91,7 +90,7 @@ describe('goalPatch', () => {
     const files = readdirSync(engineDir).filter(name => name.startsWith('preset-') && name.endsWith('.patch.yml'))
     const ids = []
     for (const name of files) {
-      const patches = load(readFileSync(join(engineDir, name), 'utf8'), { schema: entryListSchema })
+      const patches = parseEntryYaml(readFileSync(join(engineDir, name), 'utf8'))
       for (const preset of flat(patches)) {
         ids.push(preset.config?.id)
         assert.equal(countGoalRows(preset.config?.plugins ?? []), 0, `${name} must not carry DSH goal rows`)

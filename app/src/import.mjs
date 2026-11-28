@@ -3,8 +3,7 @@ import { homedir, hostname } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 import { parseSessionFormatLogFilename } from '@deepseek-ai/dsh-session-format'
 import { sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
-import { entryListSchema } from '@deepseek-ai/cordis-plugin-include'
-import { dump, load } from 'js-yaml'
+import { parseEntryYaml, stringifyEntryYaml } from '@deepseek-ai/cordis-plugin-include'
 import { parse } from 'yaml'
 import { copyTree, disk, within } from './copy-tree.mjs'
 
@@ -68,7 +67,7 @@ function modelProfiles(from) {
     if (!existsSync(file)) return []
     let patch
     try {
-      patch = load(readFileSync(file, 'utf8'), { schema: entryListSchema })
+      patch = parseEntryYaml(readFileSync(file, 'utf8'))
     } catch (error) {
       // An unreadable profile has no model settings to copy; the team is still there.
       console.warn(`DS Bot: skipped the model settings in ${file}: ${error instanceof Error ? error.message : String(error)}`)
@@ -366,11 +365,11 @@ async function copyKey(from, to, name) {
 
 async function writeModelRows(to, rows) {
   const file = join(to, 'profiles', 'ds-bot', 'cordis.patch.yml')
-  const current = existsSync(file) ? load(await readFile(file, 'utf8'), { schema: entryListSchema }) : undefined
+  const current = existsSync(file) ? parseEntryYaml(await readFile(file, 'utf8')) : undefined
   const ids = new Set(rows.map(row => row.id))
   const kept = Array.isArray(current) ? current.filter(row => !ids.has(row?.id)) : []
   await mkdir(join(to, 'profiles', 'ds-bot'), { recursive: true })
-  await writeFile(file, dump([...kept, ...rows], { schema: entryListSchema }))
+  await writeFile(file, stringifyEntryYaml([...kept, ...rows]))
 }
 
 /**

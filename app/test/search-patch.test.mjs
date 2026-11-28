@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { entryListSchema } from '@deepseek-ai/cordis-plugin-include'
+import { parseEntryYaml } from '@deepseek-ai/cordis-plugin-include'
 import { composeEntries } from '@deepseek-ai/dsh-app-boot'
 import { load } from 'js-yaml'
 import { reconcileSearchSelector, SEARCH_PATCH_NAME, searchSelectorPatch } from '../src/search-patch.mjs'
@@ -52,7 +52,7 @@ describe('searchSelectorPatch', () => {
   })
 
   test('reconciles against the real shipped @deepseek-ai/dsh-base and ds-bot patches', () => {
-    const readPatch = pkg => load(readFileSync(fileURLToPath(new URL('cordis.patch.yml', import.meta.resolve(`${pkg}/package.json`))), 'utf8'), { schema: entryListSchema })
+    const readPatch = pkg => parseEntryYaml(readFileSync(fileURLToPath(new URL('cordis.patch.yml', import.meta.resolve(`${pkg}/package.json`))), 'utf8'))
     const dir = mkdtempSync(join(tmpdir(), 'ds-bot-search-real-'))
     made.push(dir)
     const p = {
