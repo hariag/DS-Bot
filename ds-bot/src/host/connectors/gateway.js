@@ -15,6 +15,28 @@ const loadUndici = () => undici ??= import('undici')
 const FORWARD_HEADERS = ['mcp-session-id', 'mcp-protocol-version', 'mcp-method', 'mcp-name', 'last-event-id', 'accept', 'content-type']
 const RETURN_HEADERS = ['content-type', 'mcp-session-id', 'mcp-protocol-version']
 const RETRYABLE = new Set(['GET', 'POST', 'DELETE'])
+const PRE_CONNECT_RETRY_DELAY_MS = 250
+const isPreConnectTransient = (error) => {
+  const code = error?.code ?? error?.cause?.code
+  if (code === 'UND_ERR_CONNECT_TIMEOUT') return true
+  return /before secure TLS connection was established/i.test(String(error?.message ?? ''))
+    || /before secure TLS connection was established/i.test(String(error?.cause?.message ?? ''))
+}
+const waitRetry = (ms, signal) => {
+  if (signal?.aborted) return Promise.resolve(false)
+  if (ms <= 0) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve(true)
+    }, ms)
+    function onAbort() {
+      clearTimeout(timer)
+      resolve(false)
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
 const mirroredNameMatches = (header, name) => typeof name === 'string' &&
   (header === name || header === `=?base64?${Buffer.from(name).toString('base64')}?=`)
 
@@ -46,7 +68,7 @@ const readAll = stream => new Promise((resolve, reject) => {
   stream.on('error', reject)
 })
 
-export function createGateway({ credential, readOnly, onUnauthorized, needsSignIn = () => true, log = () => {} }) {
+export function createGateway({ credential, readOnly, onUnauthorized, needsSignIn = () => true, log = () => {}, request: requestImpl, retryDelayMs = PRE_CONNECT_RETRY_DELAY_MS }) {
   const nonce = randomBytes(24).toString('base64url')
   let server = null
   let port = 0
@@ -106,7 +128,7 @@ export function createGateway({ credential, readOnly, onUnauthorized, needsSignI
   // old client spoke HTTP/1.1 only, so that is kept. The answer is a stream and is never buffered
   // here. `signal` ends the call when the client leaves.
   async function sendUpstream(id, entry, method, path, headers, body, signal) {
-    const { request } = await loadUndici()
+    const performRequest = requestImpl ?? (await loadUndici()).request
     const target = new URL(entry.url)
     const suffix = new URL(path, 'http://x')
     if (suffix.pathname !== '/') {
@@ -129,7 +151,20 @@ export function createGateway({ credential, readOnly, onUnauthorized, needsSignI
       target.username = ''
       target.password = ''
     }
-    const response = await request(target, { method, headers: outgoing, body, signal, headersTimeout: 0, bodyTimeout: 0, allowH2: false })
+    let response
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        response = await performRequest(target, { method, headers: outgoing, body, signal, headersTimeout: 0, bodyTimeout: 0, allowH2: false })
+        break
+      } catch (error) {
+        if (attempt === 0 && !signal?.aborted && isPreConnectTransient(error)) {
+          log('ds-bot: connector gateway %s pre-connect error (%s); retrying once', id, error?.message ?? error)
+          if (!await waitRetry(retryDelayMs, signal)) throw signal?.reason ?? error
+          continue
+        }
+        throw error
+      }
+    }
     const upstream = response.body
     // This listener must exist before refresh awaits: the response can fail
     // before the handler starts consuming it.

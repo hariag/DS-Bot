@@ -238,6 +238,87 @@ test('mid-turn condense uses compactRegion with retained tail instead of wiping 
   assert.equal(followUpFail.condensedLogged, 1, 'already-committed compactRegion must still finish partBase/log even if follow-up overflow fails')
 })
 
+test('condense returns false without throwing TypeError when the compaction engine disappears after steward decision', async (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'dsb-missing-engine-'))
+  writeFileSync(join(home, 'state.json'), JSON.stringify(TEAM))
+
+  const events = [
+    { seq: 0, type: 'system/message', data: { content: [{ type: 'text', text: 'sys' }] } },
+    { seq: 1, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'step 1' }] } },
+    { seq: 2, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'reply 1' }] } } },
+  ]
+  const compaction = {
+    async compactIfNeeded() { return null },
+    async compactNow() { return { ok: true } },
+    async compactRegion() { return { ok: true } },
+    async summarize() { return { summary: [{ type: 'text', text: 'ok' }] } },
+  }
+  const ctx = fakeContext({
+    services: {
+      compaction,
+      tokenMeter: {
+        ...meter,
+        measure: () => ({
+          totalTokens: 96_000,
+          nodes: [
+            { seq: 0, tokens: 10_000 },
+            { seq: 1, tokens: 43_000 },
+            { seq: 2, tokens: 43_000 },
+          ],
+        }),
+      },
+    },
+  })
+  let engineAvailable = true
+  const origGet = ctx.get.bind(ctx)
+  ctx.get = name => (name === 'compaction' && !engineAvailable ? undefined : origGet(name))
+
+  Object.assign(ctx, {
+    llm: {
+      listProviders: () => [{ id: 'deepseek', name: 'DeepSeek' }],
+      listModels: async () => [{ id: 'v4' }],
+      resolveModelInfo: async () => ({ context: { contextWindow: 100_000 }, defaultMaxTokens: 4_000 }),
+      stream: () => {
+        engineAvailable = false
+        return makeStream({ text: JSON.stringify({ action: 'compact', reason: 'still working' }) })()
+      },
+    },
+    sessions: { messageProjections: [] },
+    sessionController: {
+      resolveAgent: async sessionId => ({ agent: { id: sessionId, session: { id: sessionId, seq: events.length } } }),
+      page: async () => ({ records: events.map(event => ({ event })), hasMore: false }),
+      create: async () => ({ sessionId: 'b2-next', agent: { id: 'b2-next', session: { id: 'b2-next', seq: 0 } } }),
+    },
+    workspaceRegistry: { archiveSession: async () => {} },
+  })
+  const rt = createRuntime(ctx, { home })
+  const warnings = []
+  rt.warn = (...args) => warnings.push(args.join(' '))
+  t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
+
+  const agent = {
+    id: 'b2',
+    status: 'running',
+    inbox: { nextStep: [], nextTurn: [] },
+    session: {
+      id: 'b2',
+      seq: events.length,
+      surface: { nodes: events.map(e => e.seq) },
+      eventAt: seq => events[seq],
+      requestHeader: () => ({ config: { provider: 'deepseek', model: 'v4' } }),
+      deriveMessages: () => [],
+      toolHistory: () => [],
+    },
+  }
+  const adopt = ctx.listeners.get('agent/created').find(listener => /adoptCompaction/.test(String(listener)))
+  adopt({ agent })
+  const preStep = ctx.listeners.get('agent/pre-step').find(listener => /adoptCompaction/.test(String(listener)))
+  const result = await preStep({ agent, step: 2, messages: [], signal: new AbortController().signal }, async () => 'continued')
+  assert.equal(warnings.some(w => /Cannot read properties of undefined|compactRegion/.test(w)), false, `unexpected warnings: ${warnings.join(' | ')}`)
+  assert.equal(rt.liveOf('b2').switched, true, 'pre-step should fall back to part switch cleanly when engine becomes undefined')
+  assert.notEqual(result, 'continued')
+})
+
 test('idle writeCheckpoint preserves reasoning effort on attempt 1, retries without tools at lower effort on tool-call output, and keeps recent replies + redacted tool trail without duplicating tail', async (t) => {
   const home = mkdtempSync(join(tmpdir(), 'dsb-idle-ckpt-'))
   writeFileSync(join(home, 'state.json'), JSON.stringify(TEAM))

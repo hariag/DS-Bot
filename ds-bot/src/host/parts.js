@@ -1758,6 +1758,7 @@ export function install(rt) {
   async function condense(agent, lines, { inTurn, signal, outcome }) {
     if (localPart(agent.session)) return condenseLocal(agent, lines, signal)
     const engine = engineOf(agent)
+    if (engine === undefined) return false
     const before = tokensOf(agent.session)
     const sessionId = agent.session.id
     const target = inTurn ? lines.hard : lines.check

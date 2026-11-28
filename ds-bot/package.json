@@ -1,6 +1,6 @@
 {
   "name": "ds-bot",
-  "version": "0.4.2+aios.20261128.1",
+  "version": "0.4.2+aios.20261128.2",
   "description": "DS Bot: a team of long-lived Bots for DeepSeek Harness, with Main Bots, Bot-to-Bot messages and group chats",
   "keywords": [
     "dsh-plugin",
@@ -123,11 +123,13 @@
     "ds-bot-mcp": "./bin/ds-bot-mcp.mjs"
   },
   "dsBot": {
-    "build": "aios-20261128.1",
+    "build": "aios-20261128.2",
     "fork": "hariag/DS-Bot",
     "upstreamCommit": "4a31316bb5c45aa7408c7157d09fd5ad26f7ee50",
     "changes": [
       "upstream-v0.4.2",
+      "condense-missing-engine-guard",
+      "connector-gateway-preconnect-retry",
       "board-release-version-timeline",
       "lazy-cold-group-inbox-recovery",
       "resume-bot-navigation-after-late-session-list",

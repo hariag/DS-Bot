@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
+import { Readable } from 'node:stream'
 import { test } from 'node:test'
 import { createGateway } from '../src/host/connectors/gateway.js'
 
@@ -219,4 +220,90 @@ test('gateway preserves MCP POST headers and bodies and reports expired sessions
   assert.equal(refreshes, 0)
   assert.match(JSON.stringify(logs), /notion.*POST.*404/)
   assert.equal(JSON.stringify(logs).includes('private-'), false)
+})
+
+test('gateway retries once on pre-connect timeouts and TLS handshake disconnects even for POST', async (t) => {
+  for (const makeError of [
+    () => Object.assign(new Error('Connect Timeout Error (mcp.linear.app:443, timeout: 10000ms)'), { code: 'UND_ERR_CONNECT_TIMEOUT' }),
+    () => new Error('Client network socket disconnected before secure TLS connection was established'),
+  ]) {
+    let calls = 0
+    const logs = []
+    const gw = createGateway({
+      credential: () => ({ url: 'https://mcp.linear.app/mcp', headers: { Authorization: 'Bearer token' } }),
+      readOnly: () => false,
+      onUnauthorized: async () => false,
+      log: (...args) => logs.push(args),
+      retryDelayMs: 0,
+      request: async () => {
+        calls += 1
+        if (calls === 1) throw makeError()
+        return {
+          statusCode: 200,
+          headers: { 'content-type': 'application/json' },
+          body: Readable.from([JSON.stringify({ jsonrpc: '2.0', id: 1, result: { ok: true } })]),
+        }
+      },
+    })
+    await gw.listen()
+    t.after(() => gw.close())
+    const response = await fetch(gw.urlFor('linear'), {
+      method: 'POST',
+      headers: { ...gw.headers(), 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_issues' } }),
+    })
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), { jsonrpc: '2.0', id: 1, result: { ok: true } })
+    assert.equal(calls, 2)
+    assert.match(JSON.stringify(logs), /pre-connect error.*retrying once/)
+  }
+})
+
+test('gateway does not retry non-preconnect upstream errors or aborted requests', async (t) => {
+  let resetCalls = 0
+  const gw = createGateway({
+    credential: () => ({ url: 'https://mcp.linear.app/mcp', headers: {} }),
+    readOnly: () => false,
+    onUnauthorized: async () => false,
+    retryDelayMs: 0,
+    request: async () => {
+      resetCalls += 1
+      throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' })
+    },
+  })
+  await gw.listen()
+  t.after(() => gw.close())
+  const response = await fetch(gw.urlFor('linear'), {
+    method: 'POST',
+    headers: { ...gw.headers(), 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'save_issue' } }),
+  })
+  assert.equal(response.status, 502)
+  assert.deepEqual(await response.json(), { error: 'connector upstream failed' })
+  assert.equal(resetCalls, 1)
+
+  let abortedCalls = 0
+  const clientAbort = new AbortController()
+  const gwAborted = createGateway({
+    credential: () => ({ url: 'https://mcp.linear.app/mcp', headers: {} }),
+    readOnly: () => false,
+    onUnauthorized: async () => false,
+    retryDelayMs: 50,
+    request: async () => {
+      abortedCalls += 1
+      clientAbort.abort()
+      throw Object.assign(new Error('Connect Timeout Error'), { code: 'UND_ERR_CONNECT_TIMEOUT' })
+    },
+  })
+  await gwAborted.listen()
+  t.after(() => gwAborted.close())
+  await assert.rejects(
+    fetch(gwAborted.urlFor('linear'), {
+      method: 'POST',
+      headers: { ...gwAborted.headers(), 'content-type': 'application/json' },
+      body: '{}',
+      signal: clientAbort.signal,
+    }),
+  )
+  assert.equal(abortedCalls, 1)
 })
