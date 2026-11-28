@@ -2018,6 +2018,33 @@ async function runBrowserCases() {
   await timeline.locator('[data-timeline-release-id="rel-1"]').getByText('Phase task',{exact:true}).waitFor()
   assert.equal(await timeline.locator('.bt-release-unassigned').count(),0,'assigned cards leave the unassigned timeline section')
 
+  // Typing "n" in a create form or quick-add must not fire the board's
+  // new-card shortcut, including when an IME leaves the event target on body.
+  await page.evaluate(()=>{globalThis.initPhase2();globalThis.fixture.calls=[];globalThis.renderFixture({kind:'room',id:'g1'},'phase2',true)})
+  const shortcutLane=page.locator('[aria-label="Draft"]')
+  await shortcutLane.getByRole('button',{name:'Add card',exact:true}).click()
+  await shortcutLane.locator('.bt-board-quick-add').getByLabel('Card title').fill('Shortcut test')
+  await shortcutLane.locator('.bt-board-quick-add').getByRole('button',{name:'Add card'}).click()
+  const shortcutCreate=page.locator('.bt-create-modal')
+  await shortcutCreate.waitFor()
+  await shortcutCreate.getByLabel('Description').click()
+  await page.keyboard.type('nnn')
+  assert.equal(await shortcutCreate.getByLabel('Description').inputValue(),'nnn')
+  assert.equal(await page.locator('.bt-create-modal').count(),1,'typing n in the description must not open another create form')
+  await shortcutCreate.getByRole('button',{name:'Cancel'}).click()
+  const quickLane=page.locator('[aria-label="Draft"]')
+  await quickLane.getByRole('button',{name:'Add card',exact:true}).click()
+  const quickInput=quickLane.locator('.bt-board-quick-add textarea')
+  await quickInput.click()
+  await page.keyboard.type('n')
+  assert.equal(await quickInput.inputValue(),'n')
+  assert.equal(await page.locator('.bt-create-modal').count(),0,'typing n in quick add must not open a create form')
+  await quickLane.getByRole('button',{name:'Cancel'}).click()
+  await page.evaluate(()=>document.querySelector('.bt-board-dialog')?.focus())
+  await page.keyboard.press('n')
+  await page.locator('.bt-create-modal').waitFor()
+  await page.locator('.bt-create-modal').getByRole('button',{name:'Cancel'}).click()
+
   // An unassigned group task item can set its owner and reviewer inline, then
   // submit it without hunting through More actions.
   await page.evaluate(()=>{const s=globalThis.fixture;s.phase2Tasks=[

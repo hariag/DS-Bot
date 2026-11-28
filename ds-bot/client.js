@@ -72603,9 +72603,9 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
   (0, import_react82.useEffect)(() => {
     if (!visible) return;
     const onKey = (event) => {
-      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || selectedCard || createFor) return;
-      const target = event.target;
-      if (target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.isComposing || event.repeat || event.keyCode === 229 || selectedCard || createFor) return;
+      const editable = (node) => node instanceof HTMLElement && (node.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(node.tagName) || node.closest?.('[contenteditable="true"]') !== null);
+      if (editable(event.target) || editable(document.activeElement) || dialog.current?.querySelector('.bt-create-modal, .bt-card-modal, [role="dialog"], .bt-board-quick-add')) return;
       if (event.key === "/") {
         event.preventDefault();
         searchRef.current?.focus();
