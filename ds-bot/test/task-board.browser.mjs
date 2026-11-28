@@ -2004,6 +2004,20 @@ async function runBrowserCases() {
   const bulkUnarchive=await page.evaluate(()=>globalThis.fixture.calls.find(call=>call.endpoint==='board-command'&&call.payload.type==='unarchive'))
   assert.equal(bulkUnarchive.payload.taskId,'A1','Archive view restores selected archived cards')
 
+  // The group release timeline exposes unassigned cards and items and accepts
+  // a drop on a version row; an item moves its parent card into that version.
+  await page.evaluate(()=>{const s=globalThis.fixture;globalThis.initPhase2();const parent=s.phase2Tasks[0];
+    s.phase2Tasks.push({...parent,id:'I2',title:'Timeline item',type:'development',parentTaskId:parent.id,status:'proposed',comments:[]});
+    s.calls=[];globalThis.renderFixture({kind:'room',id:'g1'},'phase2',true)})
+  await page.locator('.bt-board-views').getByRole('button',{name:'Release',exact:true}).click()
+  const timeline=page.getByRole('region',{name:'Major version',exact:true})
+  const timelineUnassigned=timeline.locator('.bt-release-unassigned')
+  await timelineUnassigned.getByText('Timeline item',{exact:true}).waitFor()
+  await timelineUnassigned.getByText('Timeline item',{exact:true}).dragTo(timeline.locator('[data-timeline-release-id="rel-1"]'))
+  await page.waitForFunction(()=>globalThis.fixture.calls.some(call=>call.endpoint==='board-release-assign'&&call.payload.releaseId==='rel-1'))
+  await timeline.locator('[data-timeline-release-id="rel-1"]').getByText('Phase task',{exact:true}).waitFor()
+  assert.equal(await timeline.locator('.bt-release-unassigned').count(),0,'assigned cards leave the unassigned timeline section')
+
   // An unassigned group task item can set its owner and reviewer inline, then
   // submit it without hunting through More actions.
   await page.evaluate(()=>{const s=globalThis.fixture;s.phase2Tasks=[
