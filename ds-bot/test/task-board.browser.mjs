@@ -58,7 +58,7 @@ state.images=images;
 function record(scope){const status=state.mode==='schedule'?(state.boardStatus??'proposed'):state.mode==='manual'?'proposed':'reported';const card=state.card;return {id:'T1',title:state.boardTitles[scope.kind+':'+scope.id]??(scope.id==='g1'?'Group task':'Personal task'),description:card.description||'',labels:card.labels,checklist:card.checklist,dueDate:card.dueDate||'',dueComplete:card.dueComplete===true,...(card.coverImageId?{coverImageId:card.coverImageId}:{}),comments:card.comments,owner:state.mode==='manual'?'user':'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:state.revision,status,...(state.mode==='schedule'&&status==='ready'?{dispatchState:'accepted'}:{}),...(state.mode==='manual'?{personalProgress:state.progress??'todo'}:{}),shares:state.shares,images:state.gallery}}
 globalThis.resetBoardState=()=>{state.calls=[];state.revision=1;state.progress='todo';state.boardStatus='proposed';state.card={description:'',labels:[],checklist:[],dueDate:'',dueComplete:false,comments:[],coverImageId:null};state.shares=[{id:'grant-old',targetRoomId:'g2',fields:['status']}];state.gallery=[{id:'png',name:'existing.png',mediaType:'image/png'},{id:'jpeg',name:'existing.jpg',mediaType:'image/jpeg'},{id:'bad',name:'broken.png',mediaType:'image/gif'}];state.created=[];state.commentSeq=0}
 function phase2Commands(task){const commands=[...(task.fixtureCommands??[]),{type:'edit'},{type:'card-details'},{type:'reorder'},{type:'card-comment'}];if(task.status==='draft'){if(!(task.parentTaskId&&!task.owner&&!task.reviewer))commands.push({type:'submit'});commands.push({type:'cancel'})}else if(task.status==='cancelled')commands.push({type:'restore'});else commands.push({type:'cancel'});if(task.archivedAt)commands.push({type:'unarchive'});else commands.push({type:'archive'});if(!['done','cancelled'].includes(task.status)&&(state.releases??[]).some(release=>['draft','queued'].includes(release.status)))commands.push({type:'release-assign'});return commands}
-globalThis.initPhase2=()=>{state.phase2Tasks=[{id:'T1',title:'Phase task',type:'feature',owner:'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:1,status:'proposed',comments:[]}];state.releases=[{id:'rel-1',name:'Release one',version:'1.0',status:'draft',revision:1,position:0},{id:'rel-2',name:'Release two',version:'2.0',status:'queued',revision:1,position:1}];state.proposals=[{id:'p1',revision:1,kind:'update',status:'pending',taskId:'T1',taskTitle:'Phase task',proposer:'a',createdAt:1700000000000,note:'Confirm change',before:{title:'Phase task'},after:{title:'Phase task renamed'},baseRevision:1,review:{state:'ready'}}];state.calls=[];state.phase2Reject={id:'p2',revision:1,kind:'update',status:'pending',taskId:'T1',taskTitle:'Phase task',proposer:'b',createdAt:1700000001000,note:'Reject change',before:{type:'bugfix'},after:{type:'test'},baseRevision:1,review:{state:'ready'}}}
+globalThis.initPhase2=()=>{state.phase2Tasks=[{id:'T1',title:'Phase task',type:'feature',owner:'a',reviewer:'b',acceptance:'Evidence',dependencies:[],revision:1,status:'proposed',comments:[]}];state.releases=[{id:'rel-1',name:'Release one',version:'1.0',status:'draft',revision:1,position:0,createdAt:1700000000000,updatedAt:1700000000000},{id:'rel-2',name:'Release two',version:'2.0',status:'queued',revision:1,position:1,createdAt:1700100000000,updatedAt:1700200000000}];state.proposals=[{id:'p1',revision:1,kind:'update',status:'pending',taskId:'T1',taskTitle:'Phase task',proposer:'a',createdAt:1700000000000,note:'Confirm change',before:{title:'Phase task'},after:{title:'Phase task renamed'},baseRevision:1,review:{state:'ready'}}];state.calls=[];state.phase2Reject={id:'p2',revision:1,kind:'update',status:'pending',taskId:'T1',taskTitle:'Phase task',proposer:'b',createdAt:1700000001000,note:'Reject change',before:{type:'bugfix'},after:{type:'test'},baseRevision:1,review:{state:'ready'}}}
 async function request(endpoint,payload){
  state.calls.push({endpoint,payload});
  if(endpoint==='board-project'){
@@ -641,15 +641,15 @@ async function runBrowserCases() {
   })
   await page.locator('.bt-board-views').getByRole('button',{name:'Release',exact:true}).click()
   const teamReleases = page.getByRole('region',{name:'Major version',exact:true}).getByRole('listitem')
-  await teamReleases.nth(1).getByRole('button').click()
+  await teamReleases.nth(1).locator('.bt-release-open').click()
   const oldRelease = page.getByRole('dialog',{name:'Release details: Release two'})
   assert.equal(await oldRelease.getByRole('button',{name:'Configure release team'}).count(),0)
   await oldRelease.getByRole('button',{name:'Close',exact:true}).click()
-  await teamReleases.nth(2).getByRole('button').click()
+  await teamReleases.nth(2).locator('.bt-release-open').click()
   const published = page.getByRole('dialog',{name:'Release details: Published version'})
   assert.equal(await published.getByRole('button',{name:'Configure release team'}).count(),0)
   await published.getByRole('button',{name:'Close',exact:true}).click()
-  await teamReleases.first().getByRole('button').click()
+  await teamReleases.first().locator('.bt-release-open').click()
   const teamDetail = page.getByRole('dialog',{name:'Release details: Release one'})
   await teamDetail.getByRole('button',{name:'Configure release team'}).click()
   const teamForm = page.getByRole('dialog',{name:'Configure release team',exact:true})
@@ -686,7 +686,7 @@ async function runBrowserCases() {
   })
   await page.waitForFunction(() => !sessionStorage.getItem('ds-bot:board-pending:room:team-config'))
   await page.locator('.bt-board-views').getByRole('button',{name:'Release',exact:true}).click()
-  await teamReleases.first().getByRole('button').click()
+  await teamReleases.first().locator('.bt-release-open').click()
   await teamDetail.getByText('2 assigned').waitFor()
   assert.equal(await teamDetail.getByRole('button',{name:'Configure release team'}).count(),0)
   assert.equal(await page.evaluate(() => globalThis.fixture.calls.filter(call=>call.endpoint==='board-release-configure-team').length),2,'receipt checks never resend the lost write')
@@ -694,7 +694,7 @@ async function runBrowserCases() {
   await teamDetail.getByRole('button',{name:'Close',exact:true}).click()
   await page.evaluate(() => { globalThis.fixture.releases[1].canConfigureTeam=true })
   await page.getByRole('button',{name:'Refresh',exact:true}).click()
-  await teamReleases.nth(1).getByRole('button').click()
+  await teamReleases.nth(1).locator('.bt-release-open').click()
   await oldRelease.getByRole('button',{name:'Configure release team'}).click()
   await teamForm.getByRole('button',{name:'Auto-fill roles'}).click()
   await teamForm.getByRole('button',{name:'Save release team'}).click()
@@ -776,9 +776,18 @@ async function runBrowserCases() {
   assert.match(await major.innerText(), /1 feature or bugfix cards · 3 task items/)
   const releases = major.getByRole('listitem')
   assert.equal(await releases.count(),2)
-  assert.match(await releases.first().innerText(),/Release one[\s\S]*1.0[\s\S]*Draft/)
-  assert.match(await releases.nth(1).innerText(),/Release two[\s\S]*2.0[\s\S]*Queued/)
-  await releases.nth(1).getByRole('button').click()
+  assert.match(await releases.first().innerText(),/1\.0[\s\S]*Release one[\s\S]*Draft/)
+  assert.match(await releases.nth(1).innerText(),/2\.0[\s\S]*Release two[\s\S]*Queued/)
+  assert.equal(await major.getByText('Release timeline',{exact:true}).count(),1)
+  assert.equal(await major.locator('.bt-release-track').count(),2)
+  const firstVersionToggle=releases.first().locator('.bt-release-toggle')
+  assert.equal(await firstVersionToggle.getAttribute('aria-expanded'),'true')
+  assert.equal(await releases.first().locator('.bt-release-row-cards').count(),1)
+  await firstVersionToggle.click()
+  assert.equal(await firstVersionToggle.getAttribute('aria-expanded'),'false')
+  assert.equal(await releases.first().locator('.bt-release-row-cards').count(),0)
+  await firstVersionToggle.click()
+  await releases.nth(1).locator('.bt-release-open').click()
   await page.getByRole('dialog',{name:'Release details: Release two'}).waitFor()
   assert.equal(await boardReads(),beforeVersions)
 

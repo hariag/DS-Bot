@@ -2229,21 +2229,92 @@ function ReleaseChip({ release, onOpen }) {
   h('span', { className: 'bt-board-release-progress' }, `${done}/${total}`))
 }
 
-function MajorVersionCard({ name, releases, tasks, onOpen, onCreate, disabled }) {
+function releaseTimeInfo(release, now) {
+  const created = Number.isFinite(release.createdAt) ? release.createdAt : undefined
+  const started = Number.isFinite(release.startedAt) ? release.startedAt : undefined
+  const published = Number.isFinite(release.publishedAt) ? release.publishedAt : undefined
+  const updated = Number.isFinite(release.updatedAt) ? release.updatedAt : undefined
+  const start = created ?? started ?? published ?? updated
+  const end = published ?? started ?? (start === undefined ? undefined : Math.max(start, now))
+  return { start, end }
+}
+
+function MajorVersionCard({ name, releases, tasks, onOpen, onOpenTask, onCreate, disabled }) {
   const features = tasks.filter(task => !task.archivedAt && !task.shared && !task.legacy && !task.parentTaskId && ['feature','bugfix'].includes(task.type))
   const parentIds = new Set(features.map(task => task.id))
   const itemCount = tasks.filter(task => !task.archivedAt && parentIds.has(task.parentTaskId)).length
+  const now = Date.now()
+  const rows = releases.map(release => ({ release, ...releaseTimeInfo(release, now) }))
+  const starts = rows.map(row => row.start).filter(Number.isFinite)
+  const ends = rows.map(row => row.end).filter(Number.isFinite)
+  const rangeStart = starts.length ? Math.min(...starts) : undefined
+  const rangeEnd = ends.length ? Math.max(...ends) : undefined
+  const span = rangeStart === undefined || rangeEnd === undefined ? 1 : Math.max(rangeEnd - rangeStart, 1)
+  const ticks = rangeStart === undefined ? [] : Array.from({ length: 5 }, (_, index) => rangeStart + span * index / 4)
+  const [collapsed, setCollapsed] = useState(() => new Set())
+  const toggle = id => setCollapsed(current => {
+    const next = new Set(current)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    return next
+  })
+  const stamp = value => new Date(value).toLocaleDateString(undefined, span > 365 * 86400000
+    ? { year:'numeric', month:'short', day:'numeric' }
+    : { month:'short', day:'numeric' })
+  const tickLabel = value => new Date(value).toLocaleString(undefined, span < 2 * 86400000
+    ? { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }
+    : span > 365 * 86400000 ? { year:'numeric', month:'short', day:'numeric' } : { month:'short', day:'numeric' })
+  const rangeLabel = row => row.start === undefined ? t('Dates not recorded')
+    : `${stamp(row.start)} – ${row.release.publishedAt ? stamp(row.end) : t('now')}`
+  const bar = row => {
+    if (row.start === undefined) return { left:'0%', width:'100%' }
+    const left = Math.max(0, Math.min(98, (row.start - rangeStart) / span * 100))
+    const width = Math.max(2, Math.min(100 - left, (row.end - row.start) / span * 100))
+    return { left:left + '%', width:width + '%' }
+  }
+  const cardsFor = release => tasks.filter(task => task.releaseId === release.id && !task.parentTaskId
+    && !task.archivedAt && !task.shared && !task.legacy && ['feature','bugfix'].includes(task.type))
   return h('section', { className:'bt-major-version', 'aria-label':t('Major version') },
     h('header', { className:'bt-board-section-heading bt-board-section-heading-row' },
       h('div', null, h('h3', null, t('Major version'), ' · ', name),
         h('p', null, t('{cards} feature or bugfix cards · {items} task items', {cards:features.length, items:itemCount}))),
       h('button', { type:'button', className:'bt-btn bt-btn-ghost', disabled, onClick:onCreate }, h(PlusIcon), t('New release'))),
-    h('h4', null, t('Minor releases')),
-    releases.length ? h('ul', { className:'bt-minor-releases' }, releases.map(release =>
-      h('li', { key:release.id }, h('button', { type:'button', onClick:() => onOpen(release.id) },
-        h('span', null, textValue(release.name) || textValue(release.version) || t('Untitled release'),
-          release.version && release.name && release.name !== release.version ? h('small', null, release.version) : null),
-        h(ReleaseStatusChip, { status:release.status }))))) : h('p', { className:'bt-card-muted' }, t('No releases yet')))
+    h('h4', null, t('Release timeline')),
+    h('div', { className:'bt-release-timeline-scroll' },
+      h('div', { className:'bt-release-timeline' },
+        h('div', { className:'bt-release-axis', 'aria-hidden':'true' },
+          h('span', { className:'bt-release-axis-label' }, t('Version')),
+          h('div', { className:'bt-release-axis-track' },
+            ticks.length
+              ? ticks.map((tick, index) => h('span', { key:index, className:'bt-release-axis-tick' }, tickLabel(tick)))
+              : h('span', { className:'bt-release-axis-empty' }, t('Dates not recorded')))),
+        releases.length ? h('ul', { className:'bt-release-rows' }, rows.map(row => {
+          const release = row.release
+          const open = !collapsed.has(release.id)
+          const cards = cardsFor(release)
+          return h('li', { key:release.id, className:'bt-release-row', 'data-timeline-release-id':release.id },
+            h('div', { className:'bt-release-row-main' },
+              h('div', { className:'bt-release-row-meta' },
+                h('button', { type:'button', className:'bt-release-open', onClick:() => onOpen(release.id) },
+                  h('span', { className:'bt-release-version' }, textValue(release.version) || t('Untitled release')),
+                  h('strong', null, textValue(release.name) || release.id)),
+                h('div', { className:'bt-release-row-facts' },
+                  h(ReleaseStatusChip, { status:release.status }),
+                  h('span', { className:'bt-board-release-progress' }, `${release.doneCount ?? 0}/${release.itemCount ?? 0}`),
+                  h('span', { className:'bt-release-range' }, rangeLabel(row))),
+                h('button', { type:'button', className:'bt-icon-btn bt-release-toggle', 'aria-label':t(open ? 'Collapse version' : 'Expand version'),
+                  title:t(open ? 'Collapse version' : 'Expand version'), 'aria-expanded':open, onClick:() => toggle(release.id) },
+                  h(ChevronRightIcon, { className:'bt-lane-chevron' + (open ? '' : ' bt-lane-chevron-collapsed') }))),
+              h('div', { className:'bt-release-track', 'aria-hidden':'true', title:rangeLabel(row) },
+                h('span', { className:'bt-release-bar bt-release-bar-' + (RELEASE_STATUS_LABELS[release.status] ? release.status : 'unknown'), style:bar(row) }),
+                Number.isFinite(release.startedAt) ? h('span', { className:'bt-release-milestone bt-release-milestone-start', style:{ left:bar(row).left } }) : null,
+                release.publishedAt ? h('span', { className:'bt-release-milestone bt-release-milestone-end', style:{ left:`calc(${bar(row).left} + ${bar(row).width})` } }) : null)),
+            open ? h('div', { className:'bt-release-row-cards' },
+              cards.length
+                ? cards.map(task => h('button', { key:task.id, type:'button', className:'bt-release-card-chip', onClick:() => onOpenTask?.(task.id) },
+                  h('span', null, textValue(task.title) || task.id),
+                  h('small', null, t(STATUS_LABELS[task.status] ?? 'Status unknown'))))
+                : h('p', { className:'bt-card-muted' }, t('No cards in this release.'))) : null)
+        })) : h('p', { className:'bt-card-muted' }, t('No releases yet')))))
 }
 
 function ReleaseDialog({ release, stale, disabled, releaseRoles, releaseCandidates = {}, actors, pending, feedback, onCheck, onClose, onSave }) {
@@ -3514,7 +3585,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
   useEffect(() => {
     if (view !== 'release' || !releaseFocus) return undefined
     const frame = window.requestAnimationFrame(() => {
-      const node = [...(dialog.current?.querySelectorAll('[data-release-id]') ?? [])].find(item => item.dataset.releaseId === releaseFocus)
+      const node = [...(dialog.current?.querySelectorAll('[data-release-id], [data-timeline-release-id]') ?? [])].find(item => (item.dataset.releaseId ?? item.dataset.timelineReleaseId) === releaseFocus)
       node?.scrollIntoView({ block: 'nearest', inline: 'start' })
     })
     return () => window.cancelAnimationFrame(frame)
@@ -3583,7 +3654,7 @@ function ScopedTaskBoard({ scope, title, close, request = call, goal, resolveRev
   const releaseSection = () => h('section', { className: 'bt-board-section', 'aria-label': t('Releases') },
     retired ? h('div', { className:'bt-board-section-heading' }, h('h3', null, t('Releases')))
     : scope.kind === 'room' ? h(MajorVersionCard, {name:textValue(title) || textValue(goal?.title) || scope.id,
-      releases:orderedReleases, tasks:allTasks, onOpen:openReleaseDetails, onCreate:() => setNewRelease(true), disabled:!canAct}) :
+      releases:orderedReleases, tasks:allTasks, onOpen:openReleaseDetails, onOpenTask:id => setSelectedCard({ key, id }), onCreate:() => setNewRelease(true), disabled:!canAct}) :
     h('div', { className: 'bt-board-section-heading bt-board-section-heading-row' },
       h('div', null, h('h3', null, t('Releases')), h('p', null, t('Drag cards between release lanes. Arrow controls reorder draft and queued releases.'))),
       h('button', { type: 'button', className: 'bt-btn bt-btn-ghost', disabled: !canAct, onClick: () => setNewRelease(true) }, h(PlusIcon), t('New release'))),
@@ -3916,7 +3987,28 @@ export const TASK_BOARD_CSS = `
 .bt-board-card-count{display:inline-flex;align-items:center;gap:3px;color:var(--bt-ink-2);font-size:11px;line-height:16px;font-variant-numeric:tabular-nums}
 .bt-board-card-count svg{width:12px;height:12px}
 .bt-board-card-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px;min-width:0}
-.bt-major-version{border:1px solid var(--bt-line);border-radius:10px;padding:12px;margin-bottom:12px}.bt-major-version h4{margin:10px 0 4px}.bt-minor-releases{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr));gap:4px 12px}.bt-minor-releases button{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:7px 0;background:none;border:0;border-top:1px solid var(--bt-line);color:var(--bt-ink);text-align:start;cursor:pointer}.bt-minor-releases small{margin-inline-start:6px;color:var(--bt-ink-2)}
+.bt-major-version{border:1px solid var(--bt-line);border-radius:10px;padding:12px;margin-bottom:12px}.bt-major-version h4{margin:10px 0 4px}
+.bt-release-timeline-scroll{overflow-x:auto;overscroll-behavior-x:contain}
+.bt-release-timeline{min-width:720px;padding-bottom:4px}
+.bt-release-axis{display:grid;grid-template-columns:200px minmax(420px,1fr);gap:12px;align-items:end;padding:8px 0 4px;border-bottom:1px solid var(--bt-line);color:var(--bt-ink-3);font-size:11px}
+.bt-release-axis-track{display:flex;justify-content:space-between;min-width:0}.bt-release-axis-tick{white-space:nowrap}.bt-release-axis-empty{color:var(--bt-ink-3)}
+.bt-release-rows{list-style:none;margin:0;padding:0}.bt-release-row{border-bottom:1px solid var(--bt-line)}.bt-release-row:last-child{border-bottom:0}
+.bt-release-row-main{display:grid;grid-template-columns:200px minmax(420px,1fr);gap:12px;align-items:center;padding:8px 0}
+.bt-release-row-meta{display:flex;flex-direction:column;gap:4px;min-width:0;position:relative;padding-right:30px}
+.bt-release-open{display:flex;align-items:baseline;gap:6px;min-width:0;padding:0;border:0;background:none;color:var(--bt-ink);text-align:start;cursor:pointer;font:inherit}
+.bt-release-open strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-release-version{flex:none;padding:1px 6px;border-radius:5px;background:var(--bt-tag-bg);color:var(--bt-ink-2);font:11px ui-monospace,SFMono-Regular,Menlo,monospace}
+.bt-release-row-facts{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0;font-size:11px;color:var(--bt-ink-2)}
+.bt-release-range{color:var(--bt-ink-3);white-space:nowrap}.bt-release-toggle{position:absolute;right:0;top:0}
+.bt-release-track{position:relative;height:30px;min-width:0;background:var(--bt-sidebar);border-radius:6px;overflow:hidden}
+.bt-release-track::before{content:'';position:absolute;inset:0;background-image:linear-gradient(to right,var(--bt-line) 1px,transparent 1px);background-size:25% 100%;opacity:.55}
+.bt-release-bar{position:absolute;top:9px;height:12px;min-width:6px;border-radius:999px;background:var(--bt-ink-3)}
+.bt-release-bar-draft{background:var(--bt-ink-3)}.bt-release-bar-queued{background:color-mix(in srgb,var(--bt-accent) 62%,var(--bt-card))}
+.bt-release-bar-running,.bt-release-bar-published{background:var(--bt-green)}.bt-release-bar-failed,.bt-release-bar-cancelled{background:var(--bt-danger)}
+.bt-release-milestone{position:absolute;top:6px;width:2px;height:18px;background:var(--bt-ink);transform:translateX(-1px);opacity:.55}.bt-release-milestone-end{background:var(--bt-green)}
+.bt-release-row-cards{display:flex;flex-wrap:wrap;gap:6px;padding:0 0 10px 212px}.bt-release-card-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid var(--bt-line);border-radius:6px;background:var(--bt-card);color:var(--bt-ink);font-size:12px;cursor:pointer}.bt-release-card-chip small{color:var(--bt-ink-3);font-size:11px}.bt-release-card-chip:hover{border-color:var(--bt-accent)}
+.bt-release-row-cards .bt-card-muted{margin:0;padding:0}
+@media(max-width:760px){.bt-release-axis,.bt-release-row-main{grid-template-columns:120px minmax(420px,1fr)}.bt-release-row-cards{padding-left:0}}
 .bt-board-items{margin:0 9px 9px;border-top:1px solid var(--bt-line);padding:5px 0;font-size:11px}.bt-board-items>summary{cursor:pointer;font-weight:600}.bt-board-item-list{max-height:clamp(72px,24vh,200px);overflow-y:auto;overscroll-behavior-y:contain;scrollbar-gutter:stable}.bt-board-item-progress{grid-column:1/-1;color:var(--bt-ink-2);font-size:11px}
 .bt-board-card-owner{display:inline-flex;align-items:center;gap:6px;min-width:0;color:var(--bt-ink-2);font-size:11px;line-height:16px}
 .bt-board-card-owner>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
