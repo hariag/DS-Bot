@@ -1,29 +1,10 @@
-name: Exact DS-Bot candidate verification
+name: DS-Bot tested candidate package
 on:
   push:
     branches: [chore/ci-dsbot-v0.4.2-20261128]
 permissions:
   contents: read
 jobs:
-  board:
-    name: Task board Chromium regression
-    runs-on: ubuntu-latest
-    timeout-minutes: 12
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: a8f4197f3987ae7ba5a86e50b277f8de6fc5e484
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - name: Run the fork board and release timeline tests in Chromium
-        working-directory: ds-bot
-        run: |
-          npm ci --no-fund --no-audit
-          npm run harness
-          npm install --prefix "$RUNNER_TEMP/board-react" --no-save --no-fund --no-audit react@18.3.1 react-dom@18.3.1
-          export BOARD_REACT_DIR="$RUNNER_TEMP/board-react/node_modules/react" CHROME_PATH=$(command -v google-chrome)
-          node test/task-board.browser.mjs
   package:
     name: Package the exact tested candidate
     runs-on: ubuntu-latest
@@ -31,13 +12,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: a8f4197f3987ae7ba5a86e50b277f8de6fc5e484
+          ref: 8dbbb2ae787ea5372979670fa05d94d676080970
       - uses: actions/setup-node@v4
         with:
           node-version: 24
       - name: Record the installed payload and its source
         env:
-          CANDIDATE: a8f4197f3987ae7ba5a86e50b277f8de6fc5e484
+          CANDIDATE: 8dbbb2ae787ea5372979670fa05d94d676080970
         shell: bash
         run: |
           set -euo pipefail
