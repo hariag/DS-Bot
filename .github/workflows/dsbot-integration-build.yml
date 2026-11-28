@@ -1,49 +1,24 @@
-name: DS-Bot tested candidate package
+name: DS-Bot fork board regression
 on:
   push:
     branches: [chore/ci-dsbot-v0.4.2-20261128]
 permissions:
   contents: read
 jobs:
-  package:
-    name: Package the exact tested candidate
+  board:
+    name: Task board Chromium regression
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: 8dbbb2ae787ea5372979670fa05d94d676080970
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Record the installed payload and its source
-        env:
-          CANDIDATE: 8dbbb2ae787ea5372979670fa05d94d676080970
-        shell: bash
+      - name: Run the fork board and release timeline tests in Chromium
+        working-directory: ds-bot
         run: |
-          set -euo pipefail
-          shopt -s nullglob
-          temporary="$RUNNER_TEMP/pack"
-          output="$RUNNER_TEMP/package-proof"
-          mkdir -p "$temporary" "$output"
-          test "$(git rev-parse HEAD)" = "$CANDIDATE"
-          git archive HEAD ds-bot | tar -x -C "$temporary"
-          export CANDIDATE_MANIFEST="$temporary/ds-bot/package.json"
-          node --input-type=module <<'JS'
-          import { readFileSync, writeFileSync } from 'node:fs'
-          const path = process.env.CANDIDATE_MANIFEST
-          const content = readFileSync(path, 'utf8')
-          const packageJSON = JSON.parse(content)
-          if (packageJSON.dsBot.forkCommit !== undefined || !content.includes('    "upstreamCommit": ')) throw Error('Unexpected source manifest')
-          writeFileSync(path, content.replace('    "upstreamCommit": ', '    "forkCommit": "' + process.env.CANDIDATE + '",\n    "upstreamCommit": '))
-          JS
-          (cd "$temporary/ds-bot" && npm pack --ignore-scripts --pack-destination "$output")
-          (cd "$output" && sha256sum ./*.tgz > SHA256SUMS)
-          git rev-parse 'HEAD^{tree}' > "$output/source-tree"
-          git rev-parse HEAD > "$output/source-commit"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dsbot-v042-exact-candidate
-          path: ${{ runner.temp }}/package-proof/
-          if-no-files-found: error
-          retention-days: 7
+          npm ci --no-fund --no-audit
+          npm run harness
+          npm install --prefix "$RUNNER_TEMP/board-react" --no-save --no-fund --no-audit react@18.3.1 react-dom@18.3.1
+          export BOARD_REACT_DIR="$RUNNER_TEMP/board-react/node_modules/react" CHROME_PATH=$(command -v google-chrome)
+          node test/task-board.browser.mjs
