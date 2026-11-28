@@ -9,7 +9,7 @@ import { dirname } from 'node:path'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { goalNoteContext, validGoalTime } from '../shared/goal-note.js'
-import { GOAL_NUDGE_BURST, SOURCE_KIND } from './constants.js'
+import { GOAL_NUDGE_BURST, GOAL_STAGE_REWORK_LIMIT, SOURCE_KIND } from './constants.js'
 import { headOf } from './text.js'
 import { output } from './tools.js'
 import { currentGoalBoardTaskId } from './legacy-goal.js'
@@ -584,6 +584,7 @@ export function reworkGoal(room, input, by, memberOf, memberNames, now = Date.no
     const name = String(input.bot).trim()
     only = memberOf(name)
     if (only === undefined) return { error: `${name} is not a member of "${room.name}". Members: ${memberNames.join(', ')}.` }
+    if (!stage.tasks.some(task => task.botId === only.id)) return { error: `${name} has no task in the current stage.` }
   }
   for (const task of stage.tasks) {
     if (only !== undefined && task.botId !== only.id) continue
@@ -591,8 +592,22 @@ export function reworkGoal(room, input, by, memberOf, memberNames, now = Date.no
     clearTaskNotes(task)
   }
   stage.reworks += 1
+  stage.reworksSinceResume = (stage.reworksSinceResume ?? 0) + 1
   stage.feedback = reason
   touchGoal(goal, { kind: 'rework', by, stage: stage.id, text: headOf(reason, EVENT_TEXT_MAX) }, now)
+  if (stage.reworksSinceResume >= GOAL_STAGE_REWORK_LIMIT) {
+    const pauseReason = `Paused after ${stage.reworksSinceResume} consecutive reworks on stage ${goal.current + 1} ("${stage.title}"). Review progress or resume to continue.`
+    goal.status = 'paused'
+    if (goal.reviewAttempt) goal.reviewAttempt.state = 'cancelled-uncertain'
+    goal.pausedBy = 'system'
+    goal.pauseCause = 'rework-limit'
+    touchGoal(goal, { kind: 'pause', by: 'system', stage: stage.id, text: headOf(pauseReason, EVENT_TEXT_MAX) }, now)
+    return {
+      goal,
+      autoPaused: true,
+      reply: { event: 'pause', title: goal.title, count: goal.stages.length, text: pauseReason },
+    }
+  }
   return { goal, reply: { event: 'rework', title: goal.title, stage: goal.current + 1, count: goal.stages.length, text: reason } }
 }
 
@@ -633,8 +648,14 @@ export function resumeGoal(room, by, now = Date.now()) {
   const goal = room.goal
   if (goal === undefined) return { error: noGoal(room) }
   if (goal.status !== 'paused') return { error: wrongState(room, goal, 'resume', 'paused') }
+  if (by !== 'user' && (goal.pauseCause === 'rework-limit' || goal.pausedBy === 'user')) {
+    return { error: `The goal of "${room.name}" is paused and must be resumed by the user.` }
+  }
   goal.status = 'active'
   delete goal.pausedBy
+  delete goal.pauseCause
+  const stage = goal.stages[goal.current]
+  if (stage !== undefined) stage.reworksSinceResume = 0
   clearIdle(goal)
   if (goal.inspectionBackoff) {
     delete goal.inspectionBackoff
@@ -691,8 +712,13 @@ const OWNER_REVIEW = 'Read the current group goal and this group’s task board 
 const DUTY_CONTINUITY = 'Keep an unfinished goal active until its acceptance is verified, or the user explicitly pauses or stops it. A lack of progress is not itself a user blocker. If a real user decision is the only way forward, report the exact question, recommendation, impact and next check time; continue independent authorized work and do not repeat an unchanged decision request.'
 const DUTY_PASSED = 'Every stage passed. Check the overall "done when", then call group_goal complete with the evidence and a summary for the user.'
 const DUTY_PAUSED = "This group goal is paused. Do not assume who paused it without evidence, assign new work or pass stages for it. Continue unrelated user-authorized work that does not depend on the paused goal. Resume only on an explicit user request."
-const dutyZh = goal => goal.status === 'paused' ? zhDuty.paused : goal.stages[goal.current] === undefined ? zhDuty.passed : zhDuty.active + '\n' + zhDuty.owner
-const dutyOf = goal => (goal.status === 'paused' ? DUTY_PAUSED : goal.stages[goal.current] === undefined ? DUTY_PASSED : `${DUTY_ACTIVE} ${OWNER_REVIEW} ${DUTY_CONTINUITY}`)
+const reworkPaused = goal => goal.pausedBy === 'system' && goal.pauseCause === 'rework-limit'
+const dutyZh = goal => goal.status === 'paused'
+  ? [reworkPaused(goal) ? '当前阶段连续返工达到上限，DS Bot 已自动暂停。' : '', zhDuty.paused].filter(Boolean).join('\n')
+  : goal.stages[goal.current] === undefined ? zhDuty.passed : zhDuty.active + '\n' + zhDuty.owner
+const dutyOf = goal => (goal.status === 'paused'
+  ? (reworkPaused(goal) ? `DS Bot automatically paused this goal after repeated reworks. ${DUTY_PAUSED}` : DUTY_PAUSED)
+  : goal.stages[goal.current] === undefined ? DUTY_PASSED : `${DUTY_ACTIVE} ${OWNER_REVIEW} ${DUTY_CONTINUITY}`)
 
 const DUTY_DRAFT = [
   'Establish the goal from the user request and available facts; follow goal-grill when available and ask only for decisions genuinely needed:',
@@ -2068,6 +2094,8 @@ export function install(rt) {
   const goalUserMessage = (roomId) => {
     const goal = rt.roomOf(roomId)?.goal
     if (goal === undefined) return
+    const stage = goal.stages?.[goal.current]
+    const hasReworkStreak = (stage?.reworksSinceResume ?? 0) > 0
     // A new user message can contain a correction not yet reflected in the
     // structured goal. Reset backoff without resuming a stopped goal.
     if (goal.inspectionBackoff && reviewEligible(goal)) {
@@ -2076,10 +2104,11 @@ export function install(rt) {
       if (automaticIdle(goal)) goal.reviewAt = Math.min(Number.isFinite(goal.reviewAt) ? goal.reviewAt : Infinity, goal.ownerReviewAt)
       void rt.save().catch(() => {})
     }
-    if (goal.idle === undefined && goal.nudges === 0) return
+    if (goal.idle === undefined && goal.nudges === 0 && !hasReworkStreak) return
     if (goal.idle === true && !automaticIdle(goal)) return
     clearIdle(goal)
     goal.nudges = 0
+    if (hasReworkStreak) stage.reworksSinceResume = 0
     goal.revision += 1
     goal.updatedAt = Date.now()
     void rt.save().catch(() => {})
@@ -2326,7 +2355,9 @@ export function install(rt) {
           break
         case 'rework':
           result = reworkGoal(room, args, self, of, names)
-          next = 'Sent back. Preserve prior evidence, identify the affected owner and missing work, and assign only when ready and not already being handled.'
+          next = result.autoPaused
+            ? 'Paused after repeated reworks on this stage. Wait for the user to review and resume before calling members again.'
+            : 'Sent back. Preserve prior evidence, identify the affected owner and missing work, and assign only when ready and not already being handled.'
           break
         case 'complete':
           result = completeGoal(room, args, self)
@@ -2362,7 +2393,7 @@ export function install(rt) {
           return `Unknown action ${action}.`
       }
       if (result.error !== undefined) return result.error
-      if (['start', 'revise', 'pass', 'rework', 'resume'].includes(action)) rt.clearRoomIdleStreak?.(room.id)
+      if (['start', 'revise', 'pass', 'resume'].includes(action) || (action === 'rework' && !result.autoPaused)) rt.clearRoomIdleStreak?.(room.id)
       const mainBotId = rt.state?.mainBotIds?.[0]
       const mainWaiting = mainBotId !== undefined && rt.hasRoomReportFor?.(room.id, mainBotId) === true
       const fromOwnChat = !rt.groupOwners.has(exec.agent?.id) && !rt.taskOwners?.has(exec.agent?.id)
@@ -2373,7 +2404,7 @@ export function install(rt) {
       if (action === 'complete' || action === 'stop') {
         notifyMainGoalOutcome(room, result.goal, { by: self, fromOwnChat, skip: mainWaiting })
       }
-      if (action === 'complete' || action === 'stop' || action === 'pause') {
+      if (action === 'complete' || action === 'stop' || action === 'pause' || result.autoPaused === true) {
         void rt.settleRoomReports?.(room.id).catch(() => {})
       }
       const ledger = observedLedger()

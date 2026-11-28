@@ -2,6 +2,7 @@
 // only in its settings or by a Main Bot. The team's first Main Bot has none until the
 // user picks one in its chat. The Session keeps the selection durably.
 import { BlockAssembler, resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
+import { ALWAYS_AUX_RETRY_MAX, ALWAYS_RETRY_MAX } from './constants.js'
 import { normalize, splitRef } from './text.js'
 import { serviceOf } from './services.js'
 import { isMissingSessionError, ownChatSessions } from './threads.js'
@@ -17,6 +18,19 @@ const TRANSIENT_LLM_CODES = new Set(['TRANSPORT', 'TIMEOUT', 'STREAM_CLOSED', 'M
 const MALFORMED_RETRIES = 2
 const DEFAULT_MODEL_RESTORE_DELAYS_MS = [150, 400, 900]
 const isNestedHmrError = error => /HMR transactions cannot be nested/i.test(error?.message ?? String(error ?? ''))
+// Fatal or deterministic failures that must never spin under `retryPolicy.mode === 'always'`.
+const NON_RETRYABLE_ALWAYS_CODES = new Set([
+  'AUTH', 'QUOTA', 'ACCOUNT_QUOTA', 'INVALID_CREDENTIAL', 'MISSING_CREDENTIAL',
+  'ACCOUNT_SIGN_IN_REQUIRED', 'ACCOUNT_SIGNED_OUT', 'ACCOUNT_TOKEN_INVALID',
+  'INVALID_REQUEST', 'CONTENT_POLICY', 'CONTENT_REFUSED', 'CONTEXT_WINDOW_EXCEEDED',
+  'NO_ADAPTER', 'UNKNOWN_MODEL', 'HOSTED_ENGINE_ROUTE',
+  'ABORTED', 'CLIENT_UPGRADE_REQUIRED', 'MODEL_UNSUPPORTED', 'UNSUPPORTED_CONTENT',
+  'UNSUPPORTED_OPTION', 'UNSUPPORTED_REASONING_EFFORT', 'INVALID_CONFIG',
+  'NO_CREDENTIAL_STORE', 'INVALID_REPLAY_STATE', 'IMAGE_OFFLOAD_REQUIRED',
+  'LOCAL_AGENT_MISSING', 'LOCAL_AGENT_SIGNIN', 'LOCAL_AGENT_QUOTA',
+  'LOCAL_AGENT_EXIT', 'LOCAL_AGENT_ERROR', 'LOCAL_AGENT_SESSION_LOST',
+  'TURN_PAUSED_LOOP', 'TURN_PAUSED_SWITCH_LIMIT',
+])
 // pi-ai's Google adapters end a Gemini stream that stops on a malformed tool call or response
 // with exactly one of these errors, which dsh-llm-pi-ai classifies as PI_AI_ERROR. It is the
 // same transient failure.
@@ -82,6 +96,7 @@ function abortedAssembler(failure) {
 
 function canRetryPolicy(policy, code, retry) {
   if (policy?.mode !== 'normal' && policy?.mode !== 'always') return false
+  if (NON_RETRYABLE_ALWAYS_CODES.has(code)) return false
   if (code === 'MALFORMED_RESPONSE') return retry <= (policy.mode === 'normal' ? Math.min(MALFORMED_RETRIES, policy.maxRetries) : MALFORMED_RETRIES)
   if (code === 'STREAM_CLOSED') {
     const configured = Array.isArray(policy.retryableCodes) && policy.retryableCodes.includes(code)
@@ -90,7 +105,7 @@ function canRetryPolicy(policy, code, retry) {
       : MALFORMED_RETRIES
     return retry <= limit
   }
-  if (policy.mode === 'always') return true
+  if (policy.mode === 'always') return retry <= ALWAYS_AUX_RETRY_MAX
   return Array.isArray(policy.retryableCodes) && policy.retryableCodes.includes(code) && retry <= policy.maxRetries
 }
 
@@ -139,6 +154,7 @@ export function install(rt) {
   const { ctx, state } = rt
 
   const malformedRetries = new WeakMap()
+  const alwaysRetries = new WeakMap()
   const singleToolRetries = new WeakMap()
   serviceOf(ctx, 'systemPrompt')?.context?.({
     name: 'ds-bot:single-tool-retry',
@@ -151,17 +167,42 @@ export function install(rt) {
     },
   })
   ctx.on?.('agent/request-error', async (payload, next) => {
-    const decided = await next()
     const { agent, turn, step, signal, failure } = payload
     const code = failureCode(failure)
+    const policy = payload.retryPolicy ?? retryPolicyOf(ctx, payload.provider)
+    // DSH's `retryPolicy.mode === 'always'` ignores both retryableCodes and maxRetries,
+    // which turns fatal quota/auth errors or persistent provider failures into an endless
+    // loop. Short-circuit fatal codes and cap transient retries per step for Bot sessions,
+    // while handling `MALFORMED_RESPONSE` directly below so its independent cap and
+    // `singleToolRetries` hint always stay active.
+    let decided
+    if (!signal?.aborted && rt.isBotSession(agent.id) && policy?.mode === 'always') {
+      if (NON_RETRYABLE_ALWAYS_CODES.has(code)) return undefined
+      if (code === 'MALFORMED_RESPONSE') {
+        decided = undefined
+      } else {
+        let retries = alwaysRetries.get(agent)
+        if (retries?.turn !== turn || retries?.step !== step) {
+          retries = { turn, step, count: 0 }
+          alwaysRetries.set(agent, retries)
+        }
+        if (retries.count >= ALWAYS_RETRY_MAX) {
+          rt.warn(`Stopping retry loop for ${agent.id} after ${retries.count} attempts (turn ${turn}, step ${step}, code ${code ?? 'UNKNOWN'})`)
+          return undefined
+        }
+        retries.count += 1
+        decided = await next()
+      }
+    } else {
+      decided = await next()
+    }
     if (decided !== undefined || code !== 'MALFORMED_RESPONSE' || signal?.aborted || !rt.isBotSession(agent.id)) return decided
     let retries = malformedRetries.get(agent)
     if (retries?.turn !== turn || retries?.step !== step) {
       retries = { turn, step, count: 0 }
       malformedRetries.set(agent, retries)
     }
-    const policy = payload.retryPolicy ?? retryPolicyOf(ctx, payload.provider)
-    if (code !== failure.code && dshRetries(policy, failure.code)) return undefined
+    if (code !== failure.code && policy?.mode !== 'always' && dshRetries(policy, failure.code)) return undefined
     if (!canRetryPolicy(policy, code, retries.count + 1)) return undefined
     retries.count += 1
     rt.warn(`Retrying malformed model response for ${agent.id} (turn ${turn}, step ${step}, retry ${retries.count}/${MALFORMED_RETRIES})`)
@@ -209,6 +250,7 @@ export function install(rt) {
   const dropCatalog = () => {
     catalogGeneration += 1
     catalogCache = { at: 0, value: [] }
+    reasoningCache.clear()
   }
   // A key set or a sign-in may be the user's fix for a Bot's failed turn (turns.js); a
   // key removed or a sign-out is not. A provider added or removed changes whether a
@@ -229,7 +271,6 @@ export function install(rt) {
   ctx.on?.('llm/adapters-updated', async () => {
     dropCatalog()
     syncedKey = undefined
-    reasoningCache.clear()
     await forgetChangedRefusals()
     syncAfterAdapters()
   })
@@ -257,7 +298,7 @@ export function install(rt) {
 
   // The thinking levels a model serves: `{efforts: [{id, name, description?}],
   // defaultEffort?}`, or undefined when it has none or the provider cannot say.
-  async function reasoningOf(ref) {
+  async function reasoningOf(ref, generation = catalogGeneration) {
     const now = Date.now()
     const cached = reasoningCache.get(ref)
     if (cached !== undefined && now - cached.at < CATALOG_TTL_MS) return cached.value
@@ -269,6 +310,7 @@ export function install(rt) {
       efforts: (info.reasoning.efforts ?? []).map(effort => ({ id: effort.id, name: effort.name ?? effort.id, ...(effort.description ? { description: effort.description } : {}) })),
       ...(info.reasoning.defaultEffort === undefined ? {} : { defaultEffort: info.reasoning.defaultEffort }),
     }
+    if (generation !== catalogGeneration) return value
     const at = Date.now()
     for (const [key, entry] of reasoningCache) {
       if (at - entry.at >= CATALOG_TTL_MS) reasoningCache.delete(key)
@@ -323,7 +365,7 @@ export function install(rt) {
     if (generation === catalogGeneration) rt.unblockBots?.({ keyed: new Set(entries.filter(entry => !entry.needsKey).map(entry => entry.provider)) })
     const used = new Set(Object.values(state.bots ?? {}).flatMap(bot => [bot.model, bot.appliedModel].filter(Boolean)))
     await Promise.all(entries.filter(entry => used.has(entry.ref)).map(async (entry) => {
-      const reasoning = await reasoningOf(entry.ref)
+      const reasoning = await reasoningOf(entry.ref, generation)
       if (reasoning !== undefined) entry.reasoning = reasoning
     }))
     if (generation === catalogGeneration) catalogCache = { at: Date.now(), value: entries }
@@ -836,8 +878,7 @@ export function install(rt) {
     const deadline = Date.now() + ms
     for (;;) {
       if (!bot.model) return undefined
-      dropCatalog()
-      const served = new Set((await catalog()).map(entry => entry.ref))
+      const served = new Set((await catalog({ fresh: true })).map(entry => entry.ref))
       if (llm() === undefined) return undefined
       if (served.has(bot.model) || Date.now() >= deadline) return desiredModel(bot)
       await new Promise((resolve) => {

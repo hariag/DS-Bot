@@ -71,6 +71,8 @@ export const COMPUTER_ONLY_ENDPOINTS = new Set([
   'linear-project-watch-status', 'queue-inspect', 'version',
   // Claims the computer's own post-upgrade release notes notice; phones track their own app version locally.
   'release-notes-claim',
+  // Enables the host's DSH schedule plugin via pluginManager; engine plugin changes stay on this computer.
+  'schedule-enable',
 ])
 
 // The only computer-prefixed endpoints a paired phone may use. Every other computer-*

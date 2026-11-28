@@ -97,6 +97,9 @@ export function teamActions({ call, after, partFor, roster, ui, live, cards, hel
     // The inbox page sits over the conversation column like New chat (inbox.js).
     openInbox: () => { ui.set(state => ({ ...state, inbox: true, inboxTarget: null, newChat: null, newChatSection: null, exchange: null, menu: null, palette: null, groupSearch: null, leftDrawer: false })) },
     closeInbox: () => { ui.set(state => (state.inbox ? { ...state, inbox: false, inboxTarget: null } : state)) },
+    openPersonalBoard: () => ui.set(state => state.personalBoard === true && !state.inbox
+      ? state : { ...state, personalBoard: true, inbox: false, inboxTarget: null }),
+    closePersonalBoard: () => ui.set(state => state.personalBoard ? { ...state, personalBoard: false } : state),
     // A board belongs to a stable team identity even while its DSH Session opens or changes.
     openInboxTaskBoard: (chatId) => {
       const snapshot = roster.getSnapshot()
@@ -481,6 +484,7 @@ goalReviewResolve: (roomId, goalId, reviewId) => after(call('goal-control', { ro
     pluginsSourceRemove: id => after(call('plugins-source-remove', { id })),
     pluginsRetry: () => after(call('plugins-retry', {})),
     schedules: () => call('schedules'),
+    scheduleEnable: () => call('schedule-enable'),
     scheduleCreate: task => call('schedule-create', task),
     scheduleDelete: (sessionId, id) => call('schedule-delete', { sessionId, id }),
     schedulePause: (sessionId, id, active) => call('schedule-pause', { sessionId, id, active }),

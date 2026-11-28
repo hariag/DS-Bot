@@ -1,0 +1,60 @@
+name: DS-Bot integration build
+
+on:
+  push:
+    branches: [chore/ci-dsbot-v0.4.2-20261128]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install locked build dependencies
+        run: |
+          npm ci --prefix link --no-fund --no-audit
+          npm ci --prefix ds-bot --no-fund --no-audit
+      - name: Rebuild plugin bundles
+        run: |
+          npm --prefix ds-bot run build
+          node ds-bot/scripts/build-client.mjs --check
+          node ds-bot/scripts/build-link.mjs --check
+          mkdir -p build-output
+          for name in client.js link.js office.js; do cp "ds-bot/$name" "build-output/$name"; done
+          git rev-parse 'HEAD^{tree}' > build-output/source-tree
+          (cd build-output && sha256sum client.js link.js office.js > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsbot-v042-generated-bundles
+          path: build-output/
+          if-no-files-found: error
+          retention-days: 3
+      - name: Verify desktop UI build
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: |
+          npm ci --prefix app --no-fund --no-audit
+          npm --prefix app run build
+          npm --prefix app test
+  host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Verify host routing, schedules, and integration board
+        working-directory: ds-bot
+        run: |
+          npm ci --no-fund --no-audit
+          npm run harness
+          node --import ./test/harness-resolve.mjs --test --test-concurrency=2 --test-timeout=120000 --test-force-exit test/models.test.js test/malformed-response.test.js test/runaway-guards.test.js test/group-goal.test.js test/schedules.test.js test/room-schedule-delivery.test.js test/web-fetch.test.js
+          npm run test:board-host
+          npm run lint
