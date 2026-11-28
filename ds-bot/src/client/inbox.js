@@ -148,9 +148,10 @@ function ItemBody({ item, bot, summary, roster, actions, hooks }) {
     return pending
   }
   const open = () => openItem(item, actions)
+  const openPersonalBoard = actions.openPersonalBoard
   const compact = (label, onClick, disabled = false) => h('div', { className: 'bt-ib-compact' },
     h('span', { className: 'bt-ib-compact-text' }, summary),
-    h('button', { type: 'button', className: 'bt-send bt-ib-btn', disabled, onClick }, t(label)))
+    onClick ? h('button', { type: 'button', className: 'bt-send bt-ib-btn', disabled, onClick }, t(label)) : null)
   // Guard synchronous double-clicks on approval buttons (returning the in-flight promise
   // so ApprovalCard keeps its disabled state until settled) and ensure browser/computer
   // takeover dismisses the inbox pane (z 44) before revealing the right panel (z 40).
@@ -180,9 +181,9 @@ function ItemBody({ item, bot, summary, roster, actions, hooks }) {
     case 'linear-sync':
       return item.roomId
         ? compact('Task board', () => actions.openInboxTaskBoard(item.roomId))
-        : compact('My task board', () => { actions.closeInbox(); actions.openPersonalBoard() })
+        : compact('My task board', openPersonalBoard)
     case 'remote-watch':
-      return compact('Remote code changes', () => { actions.closeInbox(); actions.openPersonalBoard() })
+      return compact('Remote code changes', openPersonalBoard)
     case 'approval': {
       const approval = hooks.approvals.find(entry => entry.id === item.ref)
       return approval && bot

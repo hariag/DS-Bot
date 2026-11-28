@@ -1,6 +1,6 @@
 {
   "name": "ds-bot",
-  "version": "0.4.1+aios.20261128.4",
+  "version": "0.4.2+aios.20261128.1",
   "description": "DS Bot: a team of long-lived Bots for DeepSeek Harness, with Main Bots, Bot-to-Bot messages and group chats",
   "keywords": [
     "dsh-plugin",
@@ -30,6 +30,7 @@
     "./plugin-sdk": "./src/host/plugins/sdk.js",
     "./browser-provider": "./src/host/plugins/sdk.js",
     "./web-search": "./web-search.js",
+    "./web-fetch": "./web-fetch.js",
     "./code-mode": "./code-mode.js",
     "./package.json": "./package.json"
   },
@@ -48,6 +49,7 @@
     "link.js",
     "office.js",
     "web-search.js",
+    "web-fetch.js",
     "code-mode.js",
     "cordis.patch.yml",
     "assets/pwa/",
@@ -60,6 +62,7 @@
     "test:board-host": "node --import ./test/harness-resolve.mjs --test --test-timeout=120000 --test-force-exit \"test/board-host/*.test.mjs\"",
     "test:group-goal:e2e": "node test/e2e/group-goal.e2e.mjs",
     "test:windows": "node --import ./test/harness-resolve.mjs --test --test-concurrency=2 --test-timeout=120000 --test-force-exit \"test/*.test.js\"",
+    "test:windows:shard": "node scripts/run-tests-shard.mjs",
     "test:browser": "node --import ./test/harness-resolve.mjs --test --test-concurrency=1 --test-timeout=120000 --test-force-exit \"test/browser/*.test.js\"",
     "lint": "node scripts/lint.mjs",
     "harness": "npm ci --prefix dev/harness --legacy-peer-deps=false --no-fund --no-audit",
@@ -120,10 +123,12 @@
     "ds-bot-mcp": "./bin/ds-bot-mcp.mjs"
   },
   "dsBot": {
-    "build": "aios-20261128.4",
+    "build": "aios-20261128.1",
     "fork": "hariag/DS-Bot",
-    "upstreamCommit": "ca0116af3bde8888e13910df2bb9add3800f390a",
+    "upstreamCommit": "4a31316bb5c45aa7408c7157d09fd5ad26f7ee50",
     "changes": [
+      "upstream-v0.4.2",
+      "board-release-version-timeline",
       "lazy-cold-group-inbox-recovery",
       "resume-bot-navigation-after-late-session-list",
       "coherent-task-proposal-conflict-recovery",
