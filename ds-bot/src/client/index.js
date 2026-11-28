@@ -223,10 +223,10 @@ export function apply(ctx) {
   let pulls = 0
   let applied = 0
   const foldWrites = sectionFoldWrites()
-  const pull = async () => {
+  const pull = async (signal) => {
     const order = ++pulls
     const known = roster.getSnapshot()
-    const value = await call('state', { since: known.revision, rosterKey: known.rosterKey ?? '', models: known.modelsKey ?? '', live: liveKey, instructionsKey: known.instructionsKey ?? '', locale: language(), avatars: 'ref' })
+    const value = await call('state', { since: known.revision, rosterKey: known.rosterKey ?? '', models: known.modelsKey ?? '', live: liveKey, instructionsKey: known.instructionsKey ?? '', locale: language(), avatars: 'ref' }, signal)
     if (order < applied) return false
     applied = order
     const prevLiveKey = liveKey
@@ -683,6 +683,7 @@ export function apply(ctx) {
   }
   const lostSession = (target) => (roster.getSnapshot().bots ?? []).some(bot => bot.sessionMissing === target)
   const recovering = new Set()
+  let retryingOpen
   const show = listedOpener({ list: ctx.sessions.list, refresh: () => Promise.resolve(ctx.sessions.refresh?.()).catch(quietly('refresh sessions')), open: (target) => { expected = target; ctx.uiWorkspace.openSession(target) }, current: mainView, begin: beginOpening, done: endOpening, fail: failOpening, gone: lostSession })
   // Whether the open Bot panel is folded away for lack of room: its opener then
   // means "show it" (the column yields), not "close it". A panel shown because
@@ -750,9 +751,18 @@ export function apply(ctx) {
       setPlain(false)
       show(target)
     },
-    retryOpening: (target) => {
-      if (!target) return
-      show(target)
+    retryOpening: async (target) => {
+      const pending = ui.getSnapshot().pendingOpen
+      if (pending?.failed !== true || pending.target !== target || retryingOpen === pending) return
+      retryingOpen = pending
+      const seq = ++navSeq
+      try {
+        // The roster may have rotated this Bot to another part during the wait.
+        await pull(AbortSignal.timeout(3000)).catch(quietly('refresh Bot before retrying session'))
+        if (seq === navSeq && ui.getSnapshot().pendingOpen === pending) show(partFor(pending.id))
+      } finally {
+        if (retryingOpen === pending) retryingOpen = undefined
+      }
     },
     // The Bot's current Session is gone from the library: a fresh part takes its place
     // (the Host makes it without the lost part), then that part is opened. The failure

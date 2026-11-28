@@ -68,12 +68,13 @@ export function listedOpener({ list, open, refresh, current, begin, done, fail, 
       if (state === 'settled') return
       const now = current?.()
       if (now === target) { settle(); return }
-      if (initialList && state === 'waiting' && list.getSnapshot().phase === 'ready') {
+      if (initialList && list.getSnapshot().phase === 'ready') {
         if (!readyQueued) {
           readyQueued = true
           // The native workspace restores its saved chat on the first ready
           // list and can publish its retention inside that same notification.
-          // Let that restore finish before the user's Bot selection lands.
+          // Let that restore finish before the user's Bot selection lands,
+          // even when the list arrived after the deadline.
           queueMicrotask(() => {
             from = current?.()
             initialList = false

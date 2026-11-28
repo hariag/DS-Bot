@@ -76,6 +76,27 @@ test('the user’s first Bot selection wins over synchronous workspace restorati
   assert.deepEqual(order, ['restore-start', 'restore-finished', 'target'])
 })
 
+test('the first Bot selection still wins when the initial list lands after timeout', async () => {
+  const list = store([], 'pending')
+  const stopRestore = list.subscribe(() => {
+    if (list.getSnapshot().phase !== 'ready') return
+    stopRestore()
+    list.setMain('saved')
+  })
+  const { show, opened, finished, failed, failReasons, lastTimer } = rig(list)
+  show('target')
+  lastTimer().fn()
+  assert.deepEqual(failed, ['target'])
+  assert.deepEqual(failReasons, ['timeout'])
+
+  list.ready('saved', 'target')
+  assert.deepEqual(opened, [])
+  await Promise.resolve()
+  list.set('another')
+  assert.deepEqual(opened, ['target'])
+  assert.deepEqual(finished, ['target'])
+})
+
 test('a newer Bot click supersedes a queued first-list open', async () => {
   const list = store([], 'pending')
   const { show, opened, finished } = rig(list)

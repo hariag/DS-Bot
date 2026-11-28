@@ -10,7 +10,7 @@ import { t } from './i18n.js'
 // conversation area shows this quiet state for the Bot that was asked for instead.
 // The cover stays until that Session is the one on screen, or the user opens something
 // else. A long wait changes the note; a wait that cannot succeed says so and offers a
-// way out (a new Session) instead of covering the conversation forever (#1929).
+// way to retry or recover instead of covering the conversation forever (#1929).
 
 // How long "Opening…" stays before the note says the Session is still on its way.
 // This timer does not take the cover down.
@@ -95,9 +95,8 @@ export function openingModel({ pending, current, roster }) {
   }
 }
 
-// A failed wait keeps the cover for the same Bot, explains whether the Session is gone
-// or still unavailable, and lets the user retry or start a new one; a group chat gets
-// retry on timeout and no Bot recovery button.
+// A timeout only says the Session did not reach the browser in time. Reserve recovery
+// for a Bot whose current Session the Host has confirmed missing.
 export function OpeningCover({ model, column, onNewSession, onRetry, actions }) {
   if (model === null) return null
   const recover = onNewSession ?? actions?.recoverOpening
@@ -110,7 +109,7 @@ export function OpeningCover({ model, column, onNewSession, onRetry, actions }) 
       onClick: () => retry(model.target),
     }, t('Try again')))
   }
-  if (model.failed && model.bot !== undefined) {
+  if (model.failed && model.reason === 'missing' && model.bot !== undefined && recover) {
     buttons.push(h('button', {
       key: 'new', type: 'button', className: 'bt-soft bt-soft-sm bt-opening-new',
       onClick: () => recover?.(model.bot.id),

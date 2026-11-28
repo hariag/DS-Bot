@@ -895,7 +895,7 @@ export function install(rt) {
 
   const connectorsView = () => ({
     connectors: entries().filter(entry => entry.id !== 'mail').map(rowFor),
-    mail: rt.mailView?.() ?? { accounts: [], google: false },
+    mail: rt.mailView?.() ?? { accounts: [], google: false, offFor: [] },
   })
 
   const HTTP_SECRET_REF_ERROR = 'One-time secret-ref handles can only be consumed by Bot host tools (such as save_capability), not via HTTP endpoints.'
@@ -1014,7 +1014,17 @@ export function install(rt) {
       const entry = known(body.id)
       const patch = {}
       if (body.readOnly !== undefined) patch.readOnly = body.readOnly === true
-      if (Array.isArray(body.offFor)) patch.offFor = [...new Set(body.offFor.filter(id => rt.botOf(id) !== undefined))]
+      if (body.botId !== undefined || body.enabled !== undefined) {
+        if (typeof body.botId !== 'string' || rt.botOf(body.botId) === undefined || typeof body.enabled !== 'boolean') {
+          throw new Error('Provide a known Bot and a boolean enabled value')
+        }
+        const disabled = new Set(offFor(entry.id))
+        if (body.enabled) disabled.delete(body.botId)
+        else disabled.add(body.botId)
+        patch.offFor = [...disabled]
+      } else if (Array.isArray(body.offFor)) {
+        patch.offFor = [...new Set(body.offFor.filter(id => rt.botOf(id) !== undefined))]
+      }
       await saveState(entry.id, patch)
       rt.reapplyToolMasks?.()
       return connectorsView()

@@ -449,8 +449,7 @@ export function BotConnectors({ bot, roster, actions, run }) {
     rows.map((connector) => {
       const off = (connector.offFor ?? []).includes(bot.id)
       return h(SwitchRow, { key: connector.id, label: connector.name, on: !off, onChange: (checked) => {
-        const next = checked ? (connector.offFor ?? []).filter(id => id !== bot.id) : [...(connector.offFor ?? []), bot.id]
-        void run(actions.connectorSet(connector.id, { offFor: next }))
+        void run(actions.connectorSet(connector.id, { botId: bot.id, enabled: checked }))
       } })
     }))
 }

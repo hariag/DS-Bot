@@ -1031,5 +1031,7 @@ test('startup recovery compacts stacked plain room inbox messages and coalesces 
     })
   assert.equal(inbox.nextTurn[0].id, 'in-11')
   assert.equal(notes(home).queued[roomSess][0].args.exchangeId, 'ex-room-11')
+  // Recovery can schedule another atomic write after the compacted queue first appears.
+  await host.stop()
   assert.equal(readdirSync(home).some(name => name.startsWith('inflight.json.') && name.endsWith('.tmp')), false)
 })
