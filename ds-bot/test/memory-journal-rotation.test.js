@@ -9,7 +9,11 @@ import { fakeContext } from './fake-ctx.js'
 
 async function setupTeam(t, config = {}) {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-mem-rotate-'))
-  t.after(() => rmSync(home, { recursive: true, force: true, maxRetries: 5 }))
+  const ctx = fakeContext()
+  t.after(async () => {
+    await ctx.dispose()
+    rmSync(home, { recursive: true, force: true, maxRetries: 5 })
+  })
   writeFileSync(join(home, 'state.json'), JSON.stringify({
     version: 1,
     mainBotIds: ['b1'],
@@ -27,7 +31,6 @@ async function setupTeam(t, config = {}) {
     revision: 0,
   }))
 
-  const ctx = fakeContext()
   Object.assign(ctx, {
     llm: {
       listProviders: () => [{ id: 'deepseek', name: 'DeepSeek' }],
@@ -52,7 +55,6 @@ async function setupTeam(t, config = {}) {
     ...config,
   })
   await rt.load()
-  t.after(() => ctx.dispose())
   return { home, rt, execute: ctx.listeners.get('tools/execute')[0] }
 }
 
