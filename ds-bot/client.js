@@ -67531,7 +67531,7 @@ function recoveryGroups(rows2, idOf, nameOf2) {
   }
   return [...groups.values()].sort((a, b2) => a.name.localeCompare(b2.name));
 }
-function HeldRecord({ item, scope, request, busy, decide }) {
+function HeldRecord({ item, scope, request, busy, decide, canInspect }) {
   const [candidate, setCandidate] = (0, import_react82.useState)(null), [loading, setLoading] = (0, import_react82.useState)(false), [error, setError] = (0, import_react82.useState)("");
   const generation = (0, import_react82.useRef)(0), key = JSON.stringify([scope.kind, scope.id, item.recoveryId]), currentKey = (0, import_react82.useRef)(key);
   if (currentKey.current !== key) {
@@ -67592,10 +67592,10 @@ function HeldRecord({ item, scope, request, busy, decide }) {
       (0, import_react82.createElement)(Fact, { label: t("Exchange ID"), value: item.exchangeId || t("Unknown") }),
       (0, import_react82.createElement)(Fact, { label: t("Recovery ID"), value: item.recoveryId })
     ),
-    (0, import_react82.createElement)("p", { className: "bt-recovery-note" }, t("Ignoring keeps the record and does not complete the work.")),
+    decide ? (0, import_react82.createElement)("p", { className: "bt-recovery-note" }, t("Ignoring keeps the record and does not complete the work.")) : null,
     item.redo?.status === "unknown" ? (0, import_react82.createElement)("p", { className: "bt-recovery-note", role: "status" }, t("A separate redo record exists. Its execution and result are unknown; the original work remains unresolved.")) : null,
-    (0, import_react82.createElement)("p", { className: "bt-recovery-note" }, t("Redo is not available. You can inspect candidate text without sending it.")),
-    (0, import_react82.createElement)("button", { type: "button", disabled: loading, onClick: () => void inspect() }, t(loading ? "Loading…" : "View candidate text")),
+    canInspect ? (0, import_react82.createElement)("p", { className: "bt-recovery-note" }, t("Redo is not available. You can inspect candidate text without sending it.")) : null,
+    canInspect ? (0, import_react82.createElement)("button", { type: "button", disabled: loading, onClick: () => void inspect() }, t(loading ? "Loading…" : "View candidate text")) : null,
     error ? (0, import_react82.createElement)("p", { className: "bt-recovery-warning", role: "alert" }, error) : null,
     candidate?.key === key ? (0, import_react82.createElement)(
       "div",
@@ -67604,7 +67604,7 @@ function HeldRecord({ item, scope, request, busy, decide }) {
       candidate.snapshot ? (0, import_react82.createElement)("p", { className: "bt-recovery-note" }, t("This saved snapshot may omit other inputs and may be out of date.")) : null,
       candidate.parts.map((part, index) => (0, import_react82.createElement)("pre", { key: index, className: "bt-recovery-candidate-text" }, part))
     ) : null,
-    (0, import_react82.createElement)("button", { type: "button", disabled: !!busy, onClick: () => void decide(item, item.decision === "ignored" ? "open" : "ignored") }, t(item.decision === "ignored" ? "Undo ignore" : "Ignore"))
+    decide ? (0, import_react82.createElement)("button", { type: "button", disabled: !!busy, onClick: () => void decide(item, item.decision === "ignored" ? "open" : "ignored") }, t(item.decision === "ignored" ? "Undo ignore" : "Ignore")) : null
   );
 }
 var queuedDeliveryStatus = (value) => value === "send-outcome-unknown" ? t("Send outcome unknown") : value === "history-unavailable" ? t("Session history unavailable") : value === "seen-in-history" ? t("Exchange found in history") : value === "work-stopped" ? t("Work stopped") : t("Review outcome unknown");
@@ -67628,13 +67628,13 @@ function QueuedDelivery({ item, busy, decide }) {
       (0, import_react82.createElement)(Fact, { label: t("Queued at"), value: Number.isSafeInteger(item.queuedAt) ? snapshotTime(item.queuedAt) : t("Unknown") })
     ),
     (0, import_react82.createElement)("p", { className: "bt-recovery-note" }, queuedDeliveryNote(item.status)),
-    (0, import_react82.createElement)("p", { className: "bt-recovery-note" }, t("Ignoring prevents future automatic recovery and does not complete the work.")),
+    decide ? (0, import_react82.createElement)("p", { className: "bt-recovery-note" }, t("Ignoring prevents future automatic recovery and does not complete the work.")) : null,
     item.decision === "ignored" ? (0, import_react82.createElement)("p", { className: "bt-recovery-note" }, queuedDeliveryRestoreNote(item.status)) : null,
-    (0, import_react82.createElement)(
+    decide ? (0, import_react82.createElement)(
       "button",
       { type: "button", disabled: !!busy, onClick: () => void decide(item, item.decision === "ignored" ? "open" : "ignored") },
       t(item.decision === "ignored" ? "Undo ignore" : "Ignore")
-    )
+    ) : null
   );
 }
 function HeldTurns({ recovery, open, onOpen, scope, request, onRefresh }) {
@@ -67682,6 +67682,8 @@ function HeldTurns({ recovery, open, onOpen, scope, request, onRefresh }) {
     (0, import_react82.createElement)("summary", { className: "bt-recovery-summary" }, icon3, (0, import_react82.createElement)("span", { className: "bt-recovery-summary-text" }, title)),
     open ? (0, import_react82.createElement)("p", { className: "bt-board-pending", role: "status" }, t(recovery === void 0 ? "Loading…" : "Recovery records are unavailable or incomplete.")) : null
   );
+  const canDecide = recovery.decisionsAvailable !== false;
+  const canInspect = recovery.candidateAvailable !== false;
   const rows2 = Array.isArray(recovery.items) ? recovery.items : [];
   const needle = query.trim().toLocaleLowerCase();
   const filtered = rows2.filter((item) => matchesRecovery(needle, [item.botName, item.botId, item.sessionId, item.exchangeId, item.recoveryId]));
@@ -67696,13 +67698,13 @@ function HeldTurns({ recovery, open, onOpen, scope, request, onRefresh }) {
     "section",
     { key: group.id, className: "bt-recovery-group" },
     (0, import_react82.createElement)("div", { className: "bt-recovery-group-title" }, (0, import_react82.createElement)("strong", null, group.name), (0, import_react82.createElement)("span", null, group.rows.length)),
-    group.rows.map((item) => (0, import_react82.createElement)(QueuedDelivery, { key: item.recoveryId, item, busy, decide: decideDelivery }))
+    group.rows.map((item) => (0, import_react82.createElement)(QueuedDelivery, { key: item.recoveryId, item, busy, decide: canDecide ? decideDelivery : void 0 }))
   )));
   const renderRows = (list) => (0, import_react82.createElement)("div", { className: "bt-recovery-groups" }, recoveryGroups(list, (item) => item.botId, (item) => item.botName).map((group) => (0, import_react82.createElement)(
     "details",
     { key: group.id, className: "bt-recovery-group", open: group.rows.length <= 4 ? true : void 0 },
     (0, import_react82.createElement)("summary", { className: "bt-recovery-group-title" }, (0, import_react82.createElement)("strong", null, group.name), (0, import_react82.createElement)("span", null, group.rows.length)),
-    group.rows.map((item) => (0, import_react82.createElement)(HeldRecord, { key: item.recoveryId, item, scope, request, busy, decide }))
+    group.rows.map((item) => (0, import_react82.createElement)(HeldRecord, { key: item.recoveryId, item, scope, request, busy, canInspect, decide: canDecide ? decide : void 0 }))
   )));
   return (0, import_react82.createElement)(
     "details",
@@ -67715,7 +67717,7 @@ function HeldTurns({ recovery, open, onOpen, scope, request, onRefresh }) {
         "span",
         { className: "bt-recovery-summary-text" },
         title,
-        (0, import_react82.createElement)("small", null, pendingDeliveries.length ? t("{turns} interrupted turns · {messages} queued messages", { turns: pendingRows.length, messages: pendingDeliveries.length }) : t(rows2.length ? "Choose what to do with each item" : recovery.incomplete ? "Recovery records are unavailable or incomplete." : "No items"))
+        (0, import_react82.createElement)("small", null, pendingDeliveries.length ? t("{turns} interrupted turns · {messages} queued messages", { turns: pendingRows.length, messages: pendingDeliveries.length }) : t(rows2.length ? canDecide ? "Choose what to do with each item" : "Status unknown" : recovery.incomplete ? "Recovery records are unavailable or incomplete." : "No items"))
       ),
       (0, import_react82.createElement)("span", { className: "bt-recovery-count" }, recovery.incomplete && !pendingRows.length && !pendingDeliveries.length ? "—" : String(pendingRows.length + pendingDeliveries.length))
     ),

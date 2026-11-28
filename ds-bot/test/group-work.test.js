@@ -3046,7 +3046,7 @@ test('after a restart a member whose pick-up is still queued keeps its batch wai
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const batch = { key: 'k-queued', roomId: 'r1', by: 'a', pending: ['b'], done: ['Tester'], doneIds: ['c'], results: [], worked: true, answered: false, at: 1 }
   const note = { at: 1, args: { toId: 'b', sessionId: 'gb', role: 'room', roomId: 'r1', note: 'your turn', text: '整理文档', exchangeId: 'x-queued', askedBy: 'a' } }
-  const host = await start(t, undefined, undefined, undefined, undefined, undefined, { roomBatches: { 'k-queued': batch } }, { 'inflight.json': { turns: {}, queued: { gb: [note] } } })
+  const host = await start(t, undefined, { sessionQuery:{ readSession:async () => ({ events:[] }) } }, undefined, undefined, undefined, { roomBatches: { 'k-queued': batch } }, { 'inflight.json': { turns: {}, queued: { gb: [note] } } })
   t.mock.timers.tick(3000)
   await settle(() => host.agentOf('gb').calls.length === 1)
   for (let i = 0; i < 20; i += 1) await new Promise(resolve => setImmediate(resolve))
@@ -5769,7 +5769,7 @@ test('persisted batch replacement survives restart and startup settleRoomBatches
     const host2 = await start(
       t,
       { members: ['a', 'b', 'c', 'd'], sessions: { a: 'ga', b: 'gb', c: 'gc', d: 'gd' } },
-      undefined,
+      { sessionQuery:{ readSession:async () => ({ events:[] }) } },
       undefined,
       { d: {} },
       undefined,
@@ -5852,7 +5852,7 @@ test('persisted batch replacement survives restart and startup settleRoomBatches
     const host = await start(
       t,
       { members: ['a', 'b', 'c', 'd'], sessions: { a: 'ga', b: 'gb', c: 'gc', d: 'gd' }, log: [{ seq: 1, who: 'Tester', botId: 'c', text: 'Fact-check done.' }], seq: 1 },
-      undefined,
+      { sessionQuery:{ readSession:async () => ({ events:[] }) } },
       undefined,
       { d: {} },
       undefined,

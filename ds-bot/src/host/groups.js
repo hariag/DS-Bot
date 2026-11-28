@@ -474,27 +474,59 @@ export function alignGroupSessionLines(sessionLines, kept) {
   return undefined
 }
 
-export function roomBusyForPatrol(rt, room, ignoreMessageId, openingSessionId) {
-  if (rt.roomActive(room.id) || rt.roomInbox.get(room.id)?.length || rt.roomLaterCount(room.id)) return true
+const deferredRoomResultFields = new Set(['kind', 'form', 'role', 'roomId', 'exchangeId', 'transferId', 'senderName', 'deferred', 'resultRef'])
+const roomExchangeId = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function isSettledRoomResult(rt, message, room) {
+  const source = message?.source
+  if (source?.kind !== SOURCE_KIND || source.form !== 'relay' || source.role !== 'room'
+    || source.roomId !== room.id || source.deferred !== true
+    || typeof source.exchangeId !== 'string' || !roomExchangeId.test(source.exchangeId)
+    || (source.transferId !== undefined && (typeof source.transferId !== 'string' || !roomExchangeId.test(source.transferId)))
+    || typeof source.resultRef !== 'string' || !/^G[1-9]\d*$/.test(source.resultRef)
+    || !Object.keys(source).every(key => deferredRoomResultFields.has(key))) return false
+  const seq = Number(source.resultRef.slice(1))
+  if (!Number.isSafeInteger(seq)) return false
+  // A deferred copy can outlive the room log's hot window. The ledger can read
+  // the exact sequence from its indexed shard without scanning group history.
+  try {
+    const result = room.log?.findLast(line => line.seq === seq) ?? rt.ledger?.record?.(`group-${room.id}`, seq)
+    return result?.seq === seq && result.kind === 'done'
+  } catch {
+    return false
+  }
+}
+
+export function roomBusyForPatrol(rt, room, ignoreMessageId, openingSessionId, onBlocked) {
+  const blocked = reason => {
+    onBlocked?.(reason)
+    return true
+  }
+  if (rt.roomActive(room.id)) return blocked('round')
+  if (rt.roomInbox.get(room.id)?.length || rt.roomLaterCount(room.id)) return blocked('room-queue')
   // An unanswered batch survives a restart, sometimes for hours. A live waiter
   // protects an in-flight handoff; the historical batch alone cannot prove one.
-  for (const waiter of rt.roomWaiters.values()) if (waiter.roomId === room.id) return true
+  for (const waiter of rt.roomWaiters.values()) if (waiter.roomId === room.id) return blocked('waiter')
   const agents = rt.ctx.get?.('agents')
-  const queued = message => (ignoreMessageId === undefined || message.id !== ignoreMessageId) && !scheduleChangeId(message)
-  const sessions = [rt.sessionOfRoom(room), ...room.members.map(id => room.sessions?.[id])]
+  const rootSessionId = rt.sessionOfRoom(room)
+  const sessions = [rootSessionId, ...room.members.map(id => room.sessions?.[id])]
   return sessions.some(id => {
     if (!id) return false
     const agent = agents?.get?.(id)
-    if (id !== openingSessionId && (rt.live.get(id)?.turn !== undefined || agent?.status === 'running')) return true
-    return rt.hasSubagents(id) || rt.waitsForApproval(id)
-      || agent?.inbox?.nextStep?.some(queued) || agent?.inbox?.nextTurn?.some(queued)
+    if (id !== openingSessionId && (rt.live.get(id)?.turn !== undefined || agent?.status === 'running')) return blocked('running')
+    if (rt.hasSubagents(id)) return blocked('subagent')
+    if (rt.waitsForApproval(id)) return blocked('approval')
+    const queued = message => (ignoreMessageId === undefined || message.id !== ignoreMessageId) && !scheduleChangeId(message)
+      && (id === rootSessionId || !isSettledRoomResult(rt, message, room))
+    if (agent?.inbox?.nextStep?.some(queued) || agent?.inbox?.nextTurn?.some(queued)) return blocked('session-queue')
+    return false
   })
 }
 
 export function install(rt) {
   const { ctx } = rt
-  rt.roomBusyForPatrol = (room, ignoreMessageId, openingSessionId) =>
-    roomBusyForPatrol(rt, room, ignoreMessageId, openingSessionId)
+  rt.roomBusyForPatrol = (room, ignoreMessageId, openingSessionId, onBlocked) =>
+    roomBusyForPatrol(rt, room, ignoreMessageId, openingSessionId, onBlocked)
 
   // Everything said in a group is in the group's book of the ledger (ledger.js), whole,
   // before anything reads it. The room's own log in state.json keeps the latest lines,

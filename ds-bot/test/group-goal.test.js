@@ -168,10 +168,16 @@ test('a scheduled review retries the same occurrence after a busy result', async
   agent.inbox.nextTurn.push({ id:'busy', source:{ kind:'bot' } })
   const key = JSON.stringify(['managed', new Date().toISOString()])
   assert.equal(await host.rt.runScheduledRoomReview(room, key, agent), 'busy')
-  assert.equal(room.scheduledReviewOccurrence.outcome, 'busy')
+  const busy = room.scheduledReviewOccurrence
+  assert.equal(busy.outcome, 'busy')
+  assert.equal(busy.busyReason, 'root-queue')
+  assert.ok(Number.isSafeInteger(busy.busyAt) && busy.busyAt >= busy.at)
+  assert.deepEqual(saved(host).rooms.r1.scheduledReviewOccurrence, busy)
   agent.inbox.nextTurn.length = 0
   assert.equal(await host.rt.runScheduledRoomReview(room, key, agent), 'admitted')
   assert.equal(room.scheduledReviewOccurrence.outcome, 'admitted')
+  assert.equal(room.scheduledReviewOccurrence.busyReason, undefined)
+  assert.equal(room.scheduledReviewOccurrence.busyAt, undefined)
   assert.ok(room.goal.reviewAttempt)
   assert.equal(room.goal.idle, undefined, 'active goals can be reviewed without entering an idle state')
 })
@@ -1022,6 +1028,7 @@ test('fallback polling resumes the original native check after the short busy re
   }))
   host.rt.live.set('gb', { turn: 1 })
   assert.equal(await host.rt.runScheduledRoomReview(room, key, agent), 'busy')
+  assert.equal(room.scheduledReviewOccurrence.busyReason, 'running')
   const tick = async () => {
     t.mock.timers.tick(5 * 60_000)
     await new Promise(resolve => setImmediate(resolve))

@@ -98,6 +98,8 @@ export function install(rt) {
     deleteDeliveriesByTaskStart: "DELETE FROM deliveries WHERE task_id = ? AND role = 'task'",
     deleteDeliveriesByWork: 'DELETE FROM deliveries WHERE exchange_id = ? OR work_id = ?',
     clearDeliveries: 'DELETE FROM deliveries',
+    listHeldDeliveries: "SELECT session_id, args_json, reason, created_at FROM deliveries WHERE status = 'held' ORDER BY created_at ASC LIMIT 20001",
+    listUnverifiedTurns: 'SELECT session_id, record_json FROM active_turns WHERE unverified = 1 ORDER BY since ASC LIMIT 20001',
     listDeliveries: 'SELECT exchange_id, session_id, address_json, role, bot_id, room_id, task_id, work_id, args_json, status, reason, created_at, updated_at FROM deliveries ORDER BY created_at ASC',
 
     upsertTurn: `
@@ -445,6 +447,14 @@ export function install(rt) {
     )
   }
 
+  function writeQueuedDelivery(s, sessionId, item) {
+    if (typeof item?.recoveryHold === 'string') {
+      writeDeliveryRow(s, sessionId, item.args, item.at, 'held', item.recoveryHold)
+    } else {
+      writeDeliveryRow(s, sessionId, item?.args, item?.at)
+    }
+  }
+
   function writeTurnRow(s, sessionId, record) {
     if (typeof sessionId !== 'string' || sessionId === '' || !record || typeof record !== 'object') return
     const now = Date.now()
@@ -547,7 +557,7 @@ export function install(rt) {
       for (const [sid, list] of Object.entries(queued)) {
         if (!Array.isArray(list)) continue
         for (const item of list) {
-          if (item?.args?.exchangeId) writeDeliveryRow(s, sid, item.args, item.at)
+          if (item?.args?.exchangeId) writeQueuedDelivery(s, sid, item)
         }
       }
       for (const [sid, entries] of Object.entries(silent)) {
@@ -584,7 +594,8 @@ export function install(rt) {
         if (!args || typeof args !== 'object') continue
         const key = row.session_id || args.sessionId || args.toId
         if (!key) continue
-        ;(queued[key] ??= []).push({ at: row.created_at, args, status: row.status })
+        ;(queued[key] ??= []).push({ at: row.created_at, args, status: row.status,
+          ...(row.status === 'held' && typeof row.reason === 'string' ? { recoveryHold:row.reason } : {}) })
       }
       const silent = {}
       for (const row of s.listSilentByScope.all('session')) {
@@ -615,10 +626,23 @@ export function install(rt) {
     }, { turns: {}, queued: {}, silent: {}, obligations: [], terminalMarkers: [] })
   }
 
-  function upsertDelivery(sessionId, args, at = Date.now()) {
+  function readRecoveryRecords() {
+    try {
+      return withRead(s => ({
+        turns: s.listUnverifiedTurns.all().map(row => ({ sessionId:row.session_id, record:parseJson(row.record_json) })),
+        deliveries: s.listHeldDeliveries.all().map(row => ({
+          sessionId:row.session_id, args:parseJson(row.args_json), at:row.created_at, recoveryHold:row.reason,
+        })),
+      }))
+    } catch {
+      return undefined
+    }
+  }
+
+  function upsertDelivery(sessionId, args, at = Date.now(), recoveryHold) {
     if (!canWrite() || !args?.exchangeId) return 0
     return withTx((s) => {
-      writeDeliveryRow(s, sessionId, args, at)
+      writeQueuedDelivery(s, sessionId, { args, at, recoveryHold })
       return bumpGen(s)
     }) ?? 0
   }
@@ -630,7 +654,7 @@ export function install(rt) {
       for (const [sid, list] of Object.entries(queuedBySession ?? {})) {
         if (!Array.isArray(list)) continue
         for (const item of list) {
-          if (item?.args?.exchangeId) writeDeliveryRow(s, sid, item.args, item.at)
+          if (item?.args?.exchangeId) writeQueuedDelivery(s, sid, item)
         }
       }
       return bumpGen(s)
@@ -943,8 +967,9 @@ export function install(rt) {
         for await (const event of rt.eventsBackwards(sessionId, signal, 50, read)) {
           collected.push(event)
         }
+        if (!read.complete) return { status: 'unavailable' }
         collected.reverse()
-        if (collected.length === 0 && read.complete) return preferLiveIfNewer({ status: 'not_found', events: [] })
+        if (collected.length === 0) return preferLiveIfNewer({ status: 'not_found', events: [] })
         return preferLiveIfNewer({ status: 'ok', events: collected })
       } catch (error) {
         if (isMissingSessionError(error)) return preferLiveIfNewer({ status: 'not_found', events: [] })
@@ -973,6 +998,7 @@ export function install(rt) {
     dbPath,
     currentGen,
     loadInitialState,
+    readRecoveryRecords,
     hadInitialReadFailure: () => initialReadFailed,
     recoverAfterLock,
     syncLegacyInflight: () => importLegacyInflightIfNeeded({ allowWrite: true }),

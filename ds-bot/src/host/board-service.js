@@ -826,6 +826,7 @@ export function install(rt) {
       case 'board-redo-preview':
       case 'board-redo-confirm':
         api.list(scope, principal)
+        if (typeof rt.recoveryHeldOriginal !== 'function') throw new Error('Redo is unavailable')
         redoPreparation ??= createUserRedoPreparation(rt)
         return endpoint === 'board-redo-preview' ? redoPreparation.preview(payload) : redoPreparation.confirm(payload)
       case 'board-list': {

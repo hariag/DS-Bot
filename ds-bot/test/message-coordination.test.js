@@ -1170,3 +1170,45 @@ test('incomplete SQLite schema does not crash startup and completes initializati
   host.rt.coordination.upsertTurn('dm-a', { botId: 'a', turn: 1, since: 100 })
   assert.equal(host.rt.coordination.loadInitialState().turns['dm-a']?.botId, 'a')
 })
+
+test('startup holds a queued exchange when original history is unavailable and shows only durable recovery metadata', async t => {
+  const base = tempBase('ds-bot-coord-recovery-view-')
+  const home = join(base, 'bot')
+  mkdirSync(home, { recursive: true })
+  writeFileSync(join(home, 'state.json'), JSON.stringify(seedTeam()))
+  const args = { fromId:'a', fromName:'Chief', toId:'b', sessionId:'dm-b', role:'request',
+    exchangeId:'ex-held-by-history', text:'Do not expose this message', address:{ foreground:true } }
+  writeFileSync(join(home, 'inflight.json'), JSON.stringify({ turns:{}, queued:{ 'dm-b':[{ at:100, args }] } }))
+  const dsh = await mountRealDsh(t, base)
+  const b = await dsh.create('dm-b')
+  const { rt } = attachRuntime(t, dsh, home, base)
+  t.mock.method(rt, 'readSessionEvidence', async () => ({ status:'unavailable' }))
+  await rt.load()
+  const scope = { kind:'personal', id:'b' }
+  await sleepUntil(() => rt.recoveryHeldView(scope).deliveries.length === 1, RESUME_DELAY_MS + 5000)
+  assert.equal(b.session.snapshotEvents().some(e => e.data?.source?.exchangeId === args.exchangeId), false)
+  const view = await rt.boardCall('board-list', { scope })
+  assert.equal(view.recovery.available, true)
+  assert.equal(view.recovery.decisionsAvailable, false)
+  assert.equal(view.recovery.candidateAvailable, false)
+  assert.equal(view.recovery.deliveries[0].exchangeId, args.exchangeId)
+  assert.equal(view.recovery.deliveries[0].status, 'history-unavailable')
+  assert.doesNotMatch(JSON.stringify(view.recovery), /Do not expose/)
+  assert.equal(rt.coordination.loadInitialState().queued['dm-b'][0].recoveryHold, 'history-unavailable')
+  const unrelated = await rt.boardCall('board-list', { scope:{ kind:'personal', id:'a' } })
+  assert.deepEqual(unrelated.recovery.deliveries, [])
+})
+
+test('a capped cold Session history cannot prove a delivery was absent', async t => {
+  const home = tempBase('ds-bot-coord-history-cap-')
+  const ctx = fakeContext()
+  let pages = 0
+  ctx.sessionController = { page: async ({ beforeSeq = 1000 }) => {
+    pages++
+    return { records:[{ event:{ seq:beforeSeq - 1, type:'turn/start' } }], hasMore:true }
+  } }
+  const rt = createRuntime(ctx, { home })
+  t.after(() => ctx.dispose())
+  assert.deepEqual(await rt.readSessionEvidence('dm-b'), { status:'unavailable' })
+  assert.equal(pages, 50)
+})

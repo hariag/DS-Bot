@@ -90,3 +90,32 @@ export function queuedDeliveriesView(queued, scope, bots = {}) {
   items.sort((a, b) => (b.queuedAt ?? 0) - (a.queuedAt ?? 0) || a.recoveryId.localeCompare(b.recoveryId))
   return { incomplete, items }
 }
+
+// The current coordination store marks unverified turns and held deliveries
+// independently of its live queue. Only those marked records enter this view.
+export function coordinationRecoveryView(records, scope, bots) {
+  const unavailable = { available:false, incomplete:true, items:[], deliveries:[], deliveriesIncomplete:true }
+  if (!records) return unavailable
+  const holds = Object.create(null), queued = Object.create(null)
+  const { turns, deliveries } = records
+  let incomplete = turns.length > 20_000
+  for (const { sessionId, record } of turns.slice(0, 20_000)) {
+    if (record?.unverified !== true || (record.trigger?.roomId !== undefined && record.trigger.roomId !== record.roomId)) {
+      incomplete = true
+      continue
+    }
+    const key = createHash('sha256').update(JSON.stringify([sessionId, record])).digest('hex')
+    holds[key] = { sessionId, record }
+  }
+  for (const delivery of deliveries.slice(0, 20_000)) {
+    ;(queued[delivery.sessionId] ??= []).push(delivery)
+  }
+  const turnView = heldTurnsView(holds, scope, bots)
+  if (!turnView.available) return unavailable
+  const deliveryView = queuedDeliveriesView(queued, scope, bots)
+  const deliveriesIncomplete = deliveries.length > 20_000 || deliveryView.incomplete
+  return { ...turnView, items:turnView.items.map(item => ({ ...item, evidence:'coordination.sqlite' })),
+    incomplete:incomplete || turnView.incomplete || deliveriesIncomplete,
+    deliveries:deliveryView.items, deliveriesIncomplete, sampledAt:Date.now(),
+    decisionsAvailable:false, candidateAvailable:false }
+}

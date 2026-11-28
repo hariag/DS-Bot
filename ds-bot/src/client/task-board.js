@@ -181,7 +181,7 @@ function recoveryGroups(rows, idOf, nameOf) {
   return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name))
 }
 
-function HeldRecord({ item, scope, request, busy, decide }) {
+function HeldRecord({ item, scope, request, busy, decide, canInspect }) {
   const [candidate, setCandidate] = useState(null), [loading, setLoading] = useState(false), [error, setError] = useState('')
   const generation = useRef(0), key = JSON.stringify([scope.kind, scope.id, item.recoveryId]), currentKey = useRef(key)
   if (currentKey.current !== key) { currentKey.current = key; generation.current += 1 }
@@ -211,10 +211,10 @@ function HeldRecord({ item, scope, request, busy, decide }) {
     h('div', { className:'bt-recovery-facts' }, h(Fact, { label:t('Session ID'), value:item.sessionId }),
       h(Fact, { label:t('Original turn'), value:Number.isSafeInteger(item.turn) ? String(item.turn) : t('Unknown') }),
       h(Fact, { label:t('Exchange ID'), value:item.exchangeId || t('Unknown') }), h(Fact, { label:t('Recovery ID'), value:item.recoveryId })),
-    h('p', { className:'bt-recovery-note' }, t('Ignoring keeps the record and does not complete the work.')),
+    decide ? h('p', { className:'bt-recovery-note' }, t('Ignoring keeps the record and does not complete the work.')) : null,
     item.redo?.status === 'unknown' ? h('p', { className:'bt-recovery-note', role:'status' }, t('A separate redo record exists. Its execution and result are unknown; the original work remains unresolved.')) : null,
-    h('p', { className:'bt-recovery-note' }, t('Redo is not available. You can inspect candidate text without sending it.')),
-    h('button', { type:'button', disabled:loading, onClick:() => void inspect() }, t(loading ? 'Loading…' : 'View candidate text')),
+    canInspect ? h('p', { className:'bt-recovery-note' }, t('Redo is not available. You can inspect candidate text without sending it.')) : null,
+    canInspect ? h('button', { type:'button', disabled:loading, onClick:() => void inspect() }, t(loading ? 'Loading…' : 'View candidate text')) : null,
     error ? h('p', { className:'bt-recovery-warning', role:'alert' }, error) : null,
     candidate?.key === key ? h('div', { className:'bt-recovery-candidate' },
       h('p', { className:'bt-recovery-warning', role:'status' }, t(candidate.legacy
@@ -222,7 +222,7 @@ function HeldRecord({ item, scope, request, busy, decide }) {
         : 'This is a candidate from the persisted log; its original sender is not authenticated. It is for inspection only and cannot be executed.')),
       candidate.snapshot ? h('p', { className:'bt-recovery-note' }, t('This saved snapshot may omit other inputs and may be out of date.')) : null,
       candidate.parts.map((part,index) => h('pre', { key:index, className:'bt-recovery-candidate-text' }, part))) : null,
-    h('button', { type:'button', disabled:!!busy, onClick:() => void decide(item, item.decision === 'ignored' ? 'open' : 'ignored') }, t(item.decision === 'ignored' ? 'Undo ignore' : 'Ignore')))
+    decide ? h('button', { type:'button', disabled:!!busy, onClick:() => void decide(item, item.decision === 'ignored' ? 'open' : 'ignored') }, t(item.decision === 'ignored' ? 'Undo ignore' : 'Ignore')) : null)
 }
 
 const queuedDeliveryStatus = value => value === 'send-outcome-unknown' ? t('Send outcome unknown')
@@ -246,10 +246,10 @@ function QueuedDelivery({ item, busy, decide }) {
       h(Fact, { label:t('Exchange ID'), value:item.exchangeId }),
       h(Fact, { label:t('Queued at'), value:Number.isSafeInteger(item.queuedAt) ? snapshotTime(item.queuedAt) : t('Unknown') })),
     h('p', { className:'bt-recovery-note' }, queuedDeliveryNote(item.status)),
-    h('p', { className:'bt-recovery-note' }, t('Ignoring prevents future automatic recovery and does not complete the work.')),
+    decide ? h('p', { className:'bt-recovery-note' }, t('Ignoring prevents future automatic recovery and does not complete the work.')) : null,
     item.decision === 'ignored' ? h('p', { className:'bt-recovery-note' }, queuedDeliveryRestoreNote(item.status)) : null,
-    h('button', { type:'button', disabled:!!busy, onClick:() => void decide(item, item.decision === 'ignored' ? 'open' : 'ignored') },
-      t(item.decision === 'ignored' ? 'Undo ignore' : 'Ignore')))
+    decide ? h('button', { type:'button', disabled:!!busy, onClick:() => void decide(item, item.decision === 'ignored' ? 'open' : 'ignored') },
+      t(item.decision === 'ignored' ? 'Undo ignore' : 'Ignore')) : null)
 }
 
 // The host provides scoped metadata only. This view never replays or closes work.
@@ -283,6 +283,8 @@ function HeldTurns({ recovery, open, onOpen, scope, request, onRefresh }) {
   if (!open || recovery?.available !== true) return h('details', panel,
     h('summary', { className:'bt-recovery-summary' }, icon, h('span', { className:'bt-recovery-summary-text' }, title)),
     open ? h('p', { className:'bt-board-pending', role:'status' }, t(recovery === undefined ? 'Loading…' : 'Recovery records are unavailable or incomplete.')) : null)
+  const canDecide = recovery.decisionsAvailable !== false
+  const canInspect = recovery.candidateAvailable !== false
   const rows = Array.isArray(recovery.items) ? recovery.items : []
   const needle = query.trim().toLocaleLowerCase()
   const filtered = rows.filter(item => matchesRecovery(needle, [item.botName, item.botId, item.sessionId, item.exchangeId, item.recoveryId]))
@@ -295,15 +297,15 @@ function HeldTurns({ recovery, open, onOpen, scope, request, onRefresh }) {
   const ignoredDeliveries = filteredDeliveries.filter(item => item.decision === 'ignored')
   const renderDeliveries = list => h('div', { className:'bt-recovery-deliveries' }, recoveryGroups(list, item => item.recipientId, item => item.recipientName).map(group => h('section', { key:group.id, className:'bt-recovery-group' },
     h('div', { className:'bt-recovery-group-title' }, h('strong', null, group.name), h('span', null, group.rows.length)),
-    group.rows.map(item => h(QueuedDelivery, { key:item.recoveryId, item, busy, decide:decideDelivery })))))
+    group.rows.map(item => h(QueuedDelivery, { key:item.recoveryId, item, busy, decide:canDecide ? decideDelivery : undefined })))))
   const renderRows = list => h('div', { className: 'bt-recovery-groups' }, recoveryGroups(list, item => item.botId, item => item.botName).map(group => h('details', { key: group.id, className: 'bt-recovery-group', open: group.rows.length <= 4 ? true : undefined },
     h('summary', { className: 'bt-recovery-group-title' }, h('strong', null, group.name), h('span', null, group.rows.length)),
-    group.rows.map(item => h(HeldRecord, { key:item.recoveryId, item, scope, request, busy, decide })))))
+    group.rows.map(item => h(HeldRecord, { key:item.recoveryId, item, scope, request, busy, canInspect, decide:canDecide ? decide : undefined })))))
   return h('details', panel,
     h('summary', { className: 'bt-recovery-summary' }, icon,
       h('span', { className: 'bt-recovery-summary-text' }, title,
         h('small', null, pendingDeliveries.length ? t('{turns} interrupted turns · {messages} queued messages', { turns:pendingRows.length, messages:pendingDeliveries.length })
-          : t(rows.length ? 'Choose what to do with each item' : recovery.incomplete ? 'Recovery records are unavailable or incomplete.' : 'No items'))),
+          : t(rows.length ? canDecide ? 'Choose what to do with each item' : 'Status unknown' : recovery.incomplete ? 'Recovery records are unavailable or incomplete.' : 'No items'))),
       h('span', { className: 'bt-recovery-count' }, recovery.incomplete && !pendingRows.length && !pendingDeliveries.length ? '—' : String(pendingRows.length + pendingDeliveries.length))),
     h('div', { className: 'bt-recovery-body' },
       error ? h('p', { role:'alert', className:'bt-recovery-warning' }, error) : null,

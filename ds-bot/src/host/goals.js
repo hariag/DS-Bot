@@ -22,10 +22,17 @@ import { goalDutiesZh as zhDuty } from './goal-prompt-zh.mjs'
 
 // DSH can inject a schedule-change notice without waking an agent. Only a
 // verified no-action notice may remain queued while the room is considered idle.
-function quietInbox(agent, openingId) {
+function quietInbox(agent, openingId, onBlocked) {
+  if (!Array.isArray(agent?.inbox?.nextStep) || !Array.isArray(agent.inbox.nextTurn)) {
+    onBlocked?.('root-inbox-unavailable')
+    return false
+  }
   const other = message => (openingId === undefined || message.id !== openingId) && !scheduleChangeId(message)
-  return Array.isArray(agent?.inbox?.nextStep) && Array.isArray(agent?.inbox?.nextTurn)
-    && !agent.inbox.nextStep.some(other) && !agent.inbox.nextTurn.some(other)
+  if (agent.inbox.nextStep.some(other) || agent.inbox.nextTurn.some(other)) {
+    onBlocked?.('root-queue')
+    return false
+  }
+  return true
 }
 
 const TITLE_MAX = 80
@@ -1801,13 +1808,21 @@ export function install(rt) {
     const goal = room.goal
     const activeRoom = () => !reviewDisposed && rt.readOnly() === undefined && rt.roomOf(room.id) === room
       && agent.session?.id === rt.sessionOfRoom(room) && room.goal === goal && !stopsPending.has(room.id)
-    const quiet = () => quietInbox(agent, openingMessageId)
-      && !rt.roomBusyForPatrol(room, openingMessageId, openingMessageId ? agent.session.id : undefined)
+    const patrolBlocker = () => {
+      let reason = 'other'
+      const onBlocked = category => { reason = category }
+      if (!quietInbox(agent, openingMessageId, onBlocked)
+        || rt.roomBusyForPatrol(room, openingMessageId, openingMessageId ? agent.session.id : undefined, onBlocked)) return reason
+    }
     // A durable claim precedes every possible send, including the no-goal
     // fallback handled by the caller. An uncertain save cannot authorize a retry.
     const occurrence = { key:occurrenceKey, at, outcome:'claimed', ...(goal ? { goalId:goal.id } : {}) }
-    const result = async outcome => {
+    const result = async (outcome, reason) => {
       occurrence.outcome = outcome
+      if (outcome === 'busy') {
+        occurrence.busyReason = reason
+        occurrence.busyAt = Date.now()
+      }
       await rt.save({ required:true })
       return outcome
     }
@@ -1815,7 +1830,8 @@ export function install(rt) {
       rt.requireHomeLock()
       room.scheduledReviewOccurrence = occurrence
       if (!activeRoom() || !room.admin || !room.members.includes(room.admin)) return await result('paused')
-      if (!quiet()) return await result('busy')
+      const initialBlocker = patrolBlocker()
+      if (initialBlocker !== undefined) return await result('busy', initialBlocker)
       if (goal?.reviewAttempt) {
         const original = goal.reviewAttempt
         await result('pending')
@@ -1833,7 +1849,8 @@ export function install(rt) {
       if (pendingReviewRooms.has(room.id) || reviewing.has(room.id)) return await result('pending')
       if (!goal) {
         await result('no-goal')
-        return activeRoom() && quiet() ? 'no-goal' : await result('busy')
+        const blocker = activeRoom() ? patrolBlocker() : 'room-changed'
+        return blocker === undefined ? 'no-goal' : await result('busy', blocker)
       }
       if (goal.status === 'complete') return await result('completed')
       if (!reviewEligible(goal)) return await result('paused')
@@ -1868,14 +1885,17 @@ export function install(rt) {
       occurrence.reviewId = id
       await result(message ? 'admitted' : 'admitting')
       const valid = () => activeRoom() && room.scheduledReviewOccurrence === occurrence && goalReviewAllowed(room, id)
-      if (!valid() || !quiet() || (inspectionRequired(room) && !attempt.inspectOnly)) {
+      const blocker = valid()
+        ? patrolBlocker() ?? (inspectionRequired(room) && !attempt.inspectOnly ? 'inspection-required' : undefined)
+        : 'review-changed'
+      if (blocker !== undefined) {
         if (goal.reviewAttempt === attempt && room.goal === goal) {
           const automatic = automaticIdle(goal)
           delete goal.reviewAttempt
           goal.revision++
           if (automatic) goal.idleRevision = goal.revision
         }
-        return await result('busy')
+        return await result('busy', blocker)
       }
       // The native schedule already owns the root's first pre-step. Returning its
       // relay in that step records one user/message. Enqueuing another next-turn
@@ -1886,6 +1906,8 @@ export function install(rt) {
     } catch (error) {
       if (goal?.reviewAttempt && goal.reviewAttempt.id === occurrence.reviewId) goal.reviewAttempt.state = 'uncertain'
       occurrence.outcome = 'uncertain'
+      delete occurrence.busyReason
+      delete occurrence.busyAt
       await rt.save({ required:true }).catch(() => {})
       rt.warn('ds-bot: scheduled group check in %s could not be confirmed: %s', room.id, error)
       return 'uncertain'

@@ -14,6 +14,7 @@ import { mkdir, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { HISTORY_TIMEOUT_MS, isWorkTool, MESSAGE_INLINE_MAX, SOURCE_KIND, STEER_CUT } from './constants.js'
 import { eventMatchesReceipt, receiptKeyOf } from './coordination.js'
+import { coordinationRecoveryView } from './recovery-held.js'
 import { replaceFile } from './files.js'
 import { stripOwnName } from './groups.js'
 import { answerSender, cutOffText, failureLine, turnFailure } from './turns.js'
@@ -22,6 +23,8 @@ import { addressedSession, isActiveTask, ownChatSessions, returnAddress, session
 
 // Long enough for DSH to finish opening its workspaces after a start.
 export const RESUME_DELAY_MS = 3000
+
+const readableEvidence = evidence => evidence.status === 'ok' || evidence.status === 'not_found'
 
 export const resumeText = record => [
   'DeepSeek Harness restarted while you were working on this, so your last turn stopped before it finished.',
@@ -193,6 +196,7 @@ export function install(rt) {
   const { ctx, home } = rt
   const file = join(home, 'inflight.json')
   const coord = rt.coordination
+  rt.recoveryHeldView = scope => coordinationRecoveryView(coord?.readRecoveryRecords?.(), scope, rt.state?.bots)
 
   // What the last run left; loaded from coordination.sqlite (importing legacy inflight.json if needed).
   let interrupted = coord?.loadInitialState?.() ?? { turns: {}, queued: {}, silent: {}, obligations: [] }
@@ -607,6 +611,17 @@ export function install(rt) {
     return undefined
   }
 
+  function holdQueuedForHistory(exchangeId) {
+    for (const [sessionId, entries] of Object.entries(queued)) {
+      const entry = entries.find(item => item.args?.exchangeId === exchangeId)
+      if (!entry || entry.recoveryHold === 'history-unavailable') continue
+      coord?.upsertDelivery?.(sessionId, entry.args, entry.at, 'history-unavailable')
+      entry.recoveryHold = 'history-unavailable'
+      persist()
+      return
+    }
+  }
+
   // A hard stop keeps the inbox, which the Session runs once it wakes; only what DSH
   // cancelled is sent again. Before replaying any queued delivery, verify both the live
   // inbox and durable DSH session history so already-consumed messages are never sent twice,
@@ -688,7 +703,8 @@ export function install(rt) {
         forgetQueued(args.exchangeId)
         continue
       }
-      if (destEvidence.status === 'error' || origEvidence.status === 'error') {
+      if (!readableEvidence(destEvidence) || !readableEvidence(origEvidence)) {
+        holdQueuedForHistory(args.exchangeId)
         active.add(dest)
         rt.noteFailure?.({
           level: 'warn',
@@ -876,7 +892,7 @@ export function install(rt) {
       const origEvidence = payload.sessionId && payload.sessionId !== dest
         ? await rt.readSessionEvidence(payload.sessionId, AbortSignal.timeout(HISTORY_TIMEOUT_MS))
         : { status: 'not_found', events: [] }
-      if (evidence.status === 'error' || origEvidence.status === 'error') {
+      if (!readableEvidence(evidence) || !readableEvidence(origEvidence)) {
         keepTaskSessions.add(dest)
         rt.noteFailure?.({
           level: 'warn',
@@ -1864,7 +1880,7 @@ export function install(rt) {
           const unknownTool = !isTerminalReason(inspectedTurn?.reason)
             && record.approval === undefined
             && (inspectedTurn?.unconfirmedCalls?.size ?? 0) > 0
-          if (history.status === 'error' || unknownTool) {
+          if (!readableEvidence(history) || unknownTool) {
             unverified[sessionId] = { ...record, unverified: true }
             keepTaskSessions.add(sessionId)
             const activeWork = record.trigger === undefined ? undefined : rt.workOf?.(record.trigger)
