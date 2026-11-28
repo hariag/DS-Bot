@@ -423,6 +423,15 @@ test('createTeam pauses catch-up polling while hidden, caches sessionHook, prune
     team.actions.closeSettings()
   })
 
+  await t.test('the personal task board opens from Inbox and closes on desktop', () => {
+    team.actions.openInbox()
+    team.actions.openPersonalBoard()
+    assert.equal(team.hooks.useUi(s => s.inbox), false)
+    assert.equal(team.hooks.useUi(s => s.personalBoard), true)
+    team.actions.closePersonalBoard()
+    assert.equal(team.hooks.useUi(s => s.personalBoard), false)
+  })
+
   // #2418 guardrail: every unguarded `actions.<fn>(...)` called by shared ds-bot client views
   // imported into the standalone desktop app must be defined on `team.actions`.
   await t.test('shared ds-bot client views used by desktop only call actions defined on team.actions', () => {

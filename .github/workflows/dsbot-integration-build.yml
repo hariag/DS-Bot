@@ -1,154 +1,68 @@
-name: DS-Bot integration build
-
+name: Exact DS-Bot candidate verification
 on:
   push:
     branches: [chore/ci-dsbot-v0.4.2-20261128]
-
 permissions:
   contents: read
-
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - name: Install locked build dependencies
-        run: |
-          npm ci --prefix link --no-fund --no-audit
-          npm ci --prefix ds-bot --no-fund --no-audit
-      - name: Rebuild plugin bundles
-        run: |
-          npm --prefix ds-bot run build
-          node ds-bot/scripts/build-client.mjs --check
-          node ds-bot/scripts/build-link.mjs --check
-          mkdir -p build-output
-          for name in client.js link.js office.js; do cp "ds-bot/$name" "build-output/$name"; done
-          cp ds-bot/src/shared/release-notes-generated.js build-output/release-notes-generated.js
-          git rev-parse 'HEAD^{tree}' > build-output/source-tree
-          (cd build-output && sha256sum client.js link.js office.js release-notes-generated.js > SHA256SUMS)
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dsbot-v042-generated-bundles
-          path: build-output/
-          if-no-files-found: error
-          retention-days: 3
-  host:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - name: Verify host routing, schedules, and integration board
-        working-directory: ds-bot
-        run: |
-          npm ci --no-fund --no-audit
-          npm run harness
-          node --import ./test/harness-resolve.mjs --test --test-concurrency=2 --test-timeout=120000 --test-force-exit test/models.test.js test/malformed-response.test.js test/runaway-guards.test.js test/group-goal.test.js test/schedules.test.js test/room-schedule-delivery.test.js test/web-fetch.test.js
-          npm run test:board-host
-          npm run lint
-
-  desktop:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - name: Verify desktop UI build
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
-        run: |
-          npm ci --prefix app --no-fund --no-audit
-          npm --prefix app run build
-          npm --prefix app test
-  runtime:
-    name: DSH 0.2.3-alpha.2 isolated smoke
-    needs: build
+  board:
+    name: Task board Chromium regression
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: a8f4197f3987ae7ba5a86e50b277f8de6fc5e484
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - uses: actions/download-artifact@v4
+      - name: Run the fork board and release timeline tests in Chromium
+        working-directory: ds-bot
+        run: |
+          npm ci --no-fund --no-audit
+          npm run harness
+          npm install --prefix "$RUNNER_TEMP/board-react" --no-save --no-fund --no-audit react@18.3.1 react-dom@18.3.1
+          export BOARD_REACT_DIR="$RUNNER_TEMP/board-react/node_modules/react" CHROME_PATH=$(command -v google-chrome)
+          node test/task-board.browser.mjs
+  package:
+    name: Package the exact tested candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
         with:
-          name: dsbot-v042-generated-bundles
-          path: build-output
-      - name: Install the released host and the candidate plugin in a disposable profile
+          ref: a8f4197f3987ae7ba5a86e50b277f8de6fc5e484
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Record the installed payload and its source
+        env:
+          CANDIDATE: a8f4197f3987ae7ba5a86e50b277f8de6fc5e484
         shell: bash
         run: |
           set -euo pipefail
-          umask 077
-          sandbox="$RUNNER_TEMP/dsbot-v042-runtime"
-          fixture="$sandbox/home"
-          runtime="$sandbox/runtime"
-          profile="$fixture/profiles/web"
-          mkdir -p "$profile" "$runtime"
-          npm install --prefix "$runtime" --no-audit --no-fund @deepseek-ai/dsh@0.2.3-alpha.2 pnpm@11
-          for name in client.js link.js office.js; do cp "build-output/$name" "ds-bot/$name"; done
-          cp build-output/release-notes-generated.js ds-bot/src/shared/release-notes-generated.js
-          artifact="$(cd ds-bot && npm pack --ignore-scripts --pack-destination "$sandbox" --silent)"
-          export PROFILE_DIR="$profile" CANDIDATE_ARTIFACT="$sandbox/$artifact"
+          shopt -s nullglob
+          temporary="$RUNNER_TEMP/pack"
+          output="$RUNNER_TEMP/package-proof"
+          mkdir -p "$temporary" "$output"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          git archive HEAD ds-bot | tar -x -C "$temporary"
+          export CANDIDATE_MANIFEST="$temporary/ds-bot/package.json"
           node --input-type=module <<'JS'
-          import { writeFileSync } from 'node:fs'
-          writeFileSync(process.env.PROFILE_DIR + '/package.json', JSON.stringify({
-            name: 'dsbot-upstream042-ci',
-            private: true,
-            dependencies: { 'ds-bot': 'file:' + process.env.CANDIDATE_ARTIFACT },
-            dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'ds-bot'] } },
-          }))
+          import { readFileSync, writeFileSync } from 'node:fs'
+          const path = process.env.CANDIDATE_MANIFEST
+          const content = readFileSync(path, 'utf8')
+          const packageJSON = JSON.parse(content)
+          if (packageJSON.dsBot.forkCommit !== undefined || !content.includes('    "upstreamCommit": ')) throw Error('Unexpected source manifest')
+          writeFileSync(path, content.replace('    "upstreamCommit": ', '    "forkCommit": "' + process.env.CANDIDATE + '",\n    "upstreamCommit": '))
           JS
-          printf 'packages:\n  - .\nnodeLinker: hoisted\nautoInstallPeers: false\n' > "$profile/pnpm-workspace.yaml"
-          (cd "$profile" && DSH_HOME="$fixture" "$runtime/node_modules/.bin/pnpm" install --ignore-scripts)
-          MOCK_PORT=8986 MOCK_LOG="$fixture/mock.jsonl" node ds-bot/dev/mock-llm.mjs "$fixture" > "$fixture/mock.log" 2>&1 &
-          mock_pid=$!
-          env -i PATH="$PATH" HOME="$fixture" LANG=C.UTF-8 TZ=Asia/Shanghai DSH_HOME="$fixture" NO_PROXY=127.0.0.1,localhost \
-            DEEPSEEK_BASE_URL=http://127.0.0.1:8986/v1 DEEPSEEK_API_KEY=mock-key \
-            node "$runtime/node_modules/@deepseek-ai/dsh/lib/bin.js" web --no-open --port 3752 > "$fixture/web.log" 2>&1 &
-          web_pid=$!
-          trap 'kill "$web_pid" "$mock_pid" 2>/dev/null || true' EXIT
-          for attempt in $(seq 1 90); do
-            if grep -q 'dsh web: http://127.0.0.1:3752/' "$fixture/web.log"; then break; fi
-            if ! kill -0 "$web_pid" "$mock_pid" 2>/dev/null; then break; fi
-            sleep 1
-          done
-          HOST_LOG="$fixture/web.log" node --input-type=module <<'JS'
-          import assert from 'node:assert/strict'
-          import { readFileSync } from 'node:fs'
-          const source = readFileSync(process.env.HOST_LOG, 'utf8')
-          const local = source.match(/http:\/\/127\.0\.0\.1:3752\/\?token=\S+/)?.[0]
-          if (!local) {
-            const lines = source.split('\n').filter(line => /failed|exception|error|cannot|Error/.test(line) && !line.includes('token='))
-            console.error(lines.slice(-20).join('\n'))
-            throw Error('Published DSH never opened the isolated loopback listener')
-          }
-          const login = await fetch(local, { redirect: 'manual', signal: AbortSignal.timeout(10_000) })
-          assert.equal(login.status, 303)
-          const cookie = login.headers.getSetCookie().map(value => value.split(';')[0]).join('; ')
-          assert.ok(cookie)
-          const call = async (endpoint, payload = {}) => {
-            const response = await fetch('http://127.0.0.1:3752/api/bot', {
-              method: 'POST', headers: { 'Content-Type': 'application/json', cookie },
-              body: JSON.stringify({ endpoint, payload }), signal: AbortSignal.timeout(12_000),
-            })
-            assert.equal(response.status, 200, endpoint)
-            const result = await response.json()
-            assert.equal(result.ok, true, endpoint + ': ' + (result.error?.message ?? ''))
-            return result.value
-          }
-          const version = await call('version')
-          assert.equal(version.version, '0.4.2+aios.20261128.1')
-          assert.equal(version.upstreamCommit, '4a31316bb5c45aa7408c7157d09fd5ad26f7ee50')
-          const state = await call('state', { locale: 'zh' })
-          assert.ok(state)
-          await call('board-list', { scope: { kind: 'personal', id: 'user' } })
-          console.log(JSON.stringify({version: version.version, upstreamCommit: version.upstreamCommit, checks: ['version','state','board-list']}))
-          JS
+          (cd "$temporary/ds-bot" && npm pack --ignore-scripts --pack-destination "$output")
+          (cd "$output" && sha256sum ./*.tgz > SHA256SUMS)
+          git rev-parse 'HEAD^{tree}' > "$output/source-tree"
+          git rev-parse HEAD > "$output/source-commit"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsbot-v042-exact-candidate
+          path: ${{ runner.temp }}/package-proof/
+          if-no-files-found: error
+          retention-days: 7
