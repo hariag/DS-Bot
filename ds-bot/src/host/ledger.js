@@ -92,6 +92,9 @@ export function install(rt) {
   const maxShardRows = rt.config?.ledgerMaxShardRows ?? DEFAULT_MAX_SHARD_ROWS
 
   const pool = createShardPool({ maxOpen: 4 })
+  // A DSH can keep reading after another instance takes the team lock. Windows
+  // blocks removal as long as either instance holds a shard open.
+  const readShard = (dir, file, query) => pool.read(join(dir, file), query, process.platform !== 'win32')
 
   /** @type {Map<string, { records: object[], bySeq: Map<number, object>, size: number, bytes: number, ino: number, dev: number, shards: object[], mStamp: string, pendingWrites: number, pendingPrepends: object[], readOnly: boolean, torn: boolean, view?: object }>} */
   const books = new Map()
@@ -256,8 +259,8 @@ export function install(rt) {
   }
 
   function shardRecords(shardsDir, shard) {
-    const db = pool.getReadOnly(join(shardsDir, shard.file))
-    return db.prepare('SELECT payload FROM records ORDER BY idx ASC').all().map(row => JSON.parse(row.payload))
+    const rows = readShard(shardsDir, shard.file, db => db.prepare('SELECT payload FROM records ORDER BY idx ASC').all())
+    return rows.map(row => JSON.parse(row.payload))
   }
 
   function allRecords(book, entry) {
@@ -496,8 +499,8 @@ export function install(rt) {
     const shardsDir = shardsDirOf(book)
     for (const shard of entry.shards) {
       if (shard.minSeq !== null && shard.maxSeq !== null && (seq < shard.minSeq || seq > shard.maxSeq)) continue
-      const db = pool.getReadOnly(join(shardsDir, shard.file))
-      if (db.prepare('SELECT 1 FROM records WHERE seq = ? LIMIT 1').get(seq) !== undefined) return true
+      const found = readShard(shardsDir, shard.file, db => db.prepare('SELECT 1 FROM records WHERE seq = ? LIMIT 1').get(seq))
+      if (found !== undefined) return true
     }
     return false
   }
@@ -752,9 +755,11 @@ export function install(rt) {
     const run = (writing.get(book) ?? Promise.resolve()).then(async () => {
       pool.closeUnder(shardsDirOf(book))
       await rm(pathOf(book), { force: true })
-      await rm(shardsDirOf(book), { recursive: true, force: true })
+      await rm(shardsDirOf(book), { recursive: true, force: true, maxRetries: 4, retryDelay: 50 })
     })
-    const current = run.catch(() => {}).finally(() => {
+    const current = run.catch((error) => {
+      rt.warn('ds-bot: ledger files for %s could not be removed: %s', book, error?.code ?? error?.message)
+    }).finally(() => {
       if (writing.get(book) === current) {
         writing.delete(book)
         evict()
@@ -812,8 +817,7 @@ export function install(rt) {
         for (let i = entry.shards.length - 1; i >= 0; i -= 1) {
           const shard = entry.shards[i]
           if (shard.minSeq !== null && shard.maxSeq !== null && (seq < shard.minSeq || seq > shard.maxSeq)) continue
-          const db = pool.getReadOnly(join(shardsDir, shard.file))
-          const row = db.prepare('SELECT payload FROM records WHERE seq = ? ORDER BY idx DESC LIMIT 1').get(seq)
+          const row = readShard(shardsDir, shard.file, db => db.prepare('SELECT payload FROM records WHERE seq = ? ORDER BY idx DESC LIMIT 1').get(seq))
           if (row !== undefined) return JSON.parse(row.payload)
         }
       }
@@ -825,8 +829,9 @@ export function install(rt) {
       if ((entry.pendingPrepends ?? []).some(record => record.event === undefined && record.id === id)) return true
       const shardsDir = shardsDirOf(book)
       for (let i = entry.shards.length - 1; i >= 0; i -= 1) {
-        const db = pool.getReadOnly(join(shardsDir, entry.shards[i].file))
-        if (db.prepare('SELECT 1 FROM records WHERE event IS NULL AND record_id = ? LIMIT 1').get(id) !== undefined) return true
+        const matched = readShard(shardsDir, entry.shards[i].file, db =>
+          db.prepare('SELECT 1 FROM records WHERE event IS NULL AND record_id = ? LIMIT 1').get(id))
+        if (matched !== undefined) return true
       }
       return false
     },
@@ -842,10 +847,9 @@ export function install(rt) {
       const shardsDir = shardsDirOf(book)
       for (const shard of entry.shards) {
         if (since !== undefined && (shard.maxSeq === null || shard.maxSeq <= since)) continue
-        const db = pool.getReadOnly(join(shardsDir, shard.file))
-        const rows = since === undefined
+        const rows = readShard(shardsDir, shard.file, db => since === undefined
           ? db.prepare('SELECT payload FROM records ORDER BY idx ASC').all()
-          : db.prepare('SELECT payload FROM records WHERE seq > ? ORDER BY idx ASC').all(since)
+          : db.prepare('SELECT payload FROM records WHERE seq > ? ORDER BY idx ASC').all(since))
         for (const row of rows) out.push(JSON.parse(row.payload))
       }
       for (const record of entry.records) {
@@ -869,10 +873,9 @@ export function install(rt) {
         if (shard.minSeq === null || shard.maxSeq === null) continue
         if (shard.maxSeq < ceilFrom) continue
         if (to !== undefined && shard.minSeq > to) continue
-        const db = pool.getReadOnly(join(shardsDir, shard.file))
-        const matched = to === undefined
+        const matched = readShard(shardsDir, shard.file, db => to === undefined
           ? db.prepare('SELECT payload FROM records WHERE seq >= ? ORDER BY idx ASC').all(ceilFrom)
-          : db.prepare('SELECT payload FROM records WHERE seq >= ? AND seq <= ? ORDER BY idx ASC').all(ceilFrom, to)
+          : db.prepare('SELECT payload FROM records WHERE seq >= ? AND seq <= ? ORDER BY idx ASC').all(ceilFrom, to))
         for (const row of matched) rows.push(JSON.parse(row.payload))
       }
       rows.push(...hotRange(entry, from, to))
@@ -972,15 +975,15 @@ export function install(rt) {
       const isDefaultPick = filter === undefined && typeof pickOrOptions !== 'object' && String(pick) === String(record => record.text)
       const shardsDir = shardsDirOf(book)
       for (let s = entry.shards.length - 1; s >= 0 && out.length < limit; s -= 1) {
-        const db = pool.getReadOnly(join(shardsDir, entry.shards[s].file))
+        const file = entry.shards[s].file
         if (isDefaultPick) {
           const need = limit - out.length
           const where = words.map(() => "text_lower LIKE ? ESCAPE '\\'").join(' AND ')
           const params = words.map(word => `%${escapeLike(word)}%`)
-          const rows = db.prepare(`SELECT payload FROM records WHERE ${where} ORDER BY idx DESC LIMIT ?`).all(...params, need)
+          const rows = readShard(shardsDir, file, db => db.prepare(`SELECT payload FROM records WHERE ${where} ORDER BY idx DESC LIMIT ?`).all(...params, need))
           for (const row of rows) out.push(JSON.parse(row.payload))
         } else {
-          const rows = db.prepare('SELECT payload FROM records ORDER BY idx DESC').all()
+          const rows = readShard(shardsDir, file, db => db.prepare('SELECT payload FROM records ORDER BY idx DESC').all())
           for (const row of rows) {
             const record = JSON.parse(row.payload)
             if (filter !== undefined && !filter(record)) continue
@@ -1018,8 +1021,8 @@ export function install(rt) {
       const shardEdgeRow = (shardIndex, edge) => {
         if (shardIndex < 0) return entry.pendingPrepends?.at(-1)
         if (shardIndex >= entry.shards.length) return entry.records[0]
-        const db = pool.getReadOnly(join(shardsDir, entry.shards[shardIndex].file))
-        const row = db.prepare(`SELECT payload FROM records ORDER BY idx ${edge === 'last' ? 'DESC' : 'ASC'} LIMIT 1`).get()
+        const row = readShard(shardsDir, entry.shards[shardIndex].file, db =>
+          db.prepare(`SELECT payload FROM records ORDER BY idx ${edge === 'last' ? 'DESC' : 'ASC'} LIMIT 1`).get())
         return row ? JSON.parse(row.payload) : undefined
       }
 
@@ -1060,21 +1063,24 @@ export function install(rt) {
       for (let s = entry.shards.length - 1; s >= 0; s -= 1) {
         const shard = entry.shards[s]
         if (before !== undefined && shard.minSeq !== null && shard.minSeq >= before) continue
-        const db = pool.getReadOnly(join(shardsDir, shard.file))
         const sql = before !== undefined
           ? `SELECT idx, payload FROM records WHERE seq IS NOT NULL AND seq < ? AND ${termSql} ORDER BY idx DESC`
           : `SELECT idx, payload FROM records WHERE ${termSql} ORDER BY idx DESC`
-        const matched = before !== undefined ? db.prepare(sql).all(before, ...termParams) : db.prepare(sql).all(...termParams)
-        for (const row of matched) {
-          const record = JSON.parse(row.payload)
-          const hit = groupLineOf(record)
-          if (hit === undefined) continue
-          const prevRow = db.prepare('SELECT payload FROM records WHERE idx < ? ORDER BY idx DESC LIMIT 1').get(row.idx)
-          const nextRow = db.prepare('SELECT payload FROM records WHERE idx > ? ORDER BY idx ASC LIMIT 1').get(row.idx)
-          const prev = prevRow ? JSON.parse(prevRow.payload) : shardEdgeRow(s - 1, 'last')
-          const next = nextRow ? JSON.parse(nextRow.payload) : shardEdgeRow(s + 1, 'first')
-          if (tryPush(hit, prev, next)) return { results, hasMore }
-        }
+        const full = readShard(shardsDir, shard.file, db => {
+          const matched = before !== undefined ? db.prepare(sql).all(before, ...termParams) : db.prepare(sql).all(...termParams)
+          for (const row of matched) {
+            const record = JSON.parse(row.payload)
+            const hit = groupLineOf(record)
+            if (hit === undefined) continue
+            const prevRow = db.prepare('SELECT payload FROM records WHERE idx < ? ORDER BY idx DESC LIMIT 1').get(row.idx)
+            const nextRow = db.prepare('SELECT payload FROM records WHERE idx > ? ORDER BY idx ASC LIMIT 1').get(row.idx)
+            const prev = prevRow ? JSON.parse(prevRow.payload) : shardEdgeRow(s - 1, 'last')
+            const next = nextRow ? JSON.parse(nextRow.payload) : shardEdgeRow(s + 1, 'first')
+            if (tryPush(hit, prev, next)) return true
+          }
+          return false
+        })
+        if (full) return { results, hasMore }
       }
 
       // 3. Pending prepends newest-first (if any).

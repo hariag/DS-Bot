@@ -11,6 +11,7 @@ import { createRuntime } from '../index.js'
 import { RESUME_DELAY_MS } from '../src/host/resume.js'
 import { SOURCE_KIND } from '../src/host/constants.js'
 import { fakeContext } from './fake-ctx.js'
+import { setPrivateTempAcl } from './private-temp.mjs'
 
 // Node's t.after hooks run in FIFO order, so per-test rmSync registered before
 // mountRealDsh/attachRuntime would delete the temp folder while DSH and SQLite
@@ -1172,7 +1173,7 @@ test('incomplete SQLite schema does not crash startup and completes initializati
 })
 
 test('startup holds a queued exchange when original history is unavailable and shows only durable recovery metadata', async t => {
-  const base = tempBase('ds-bot-coord-recovery-view-')
+  const base = setPrivateTempAcl(tempBase('ds-bot-coord-recovery-view-'))
   const home = join(base, 'bot')
   mkdirSync(home, { recursive: true })
   writeFileSync(join(home, 'state.json'), JSON.stringify(seedTeam()))

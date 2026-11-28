@@ -107,24 +107,41 @@ export function createShardPool({ maxOpen = 4 } = {}) {
     try { db?.close() } catch {}
   }
 
-  return {
-    getReadOnly(filePath) {
-      const existing = handles.get(filePath)
-      if (existing !== undefined) {
-        handles.delete(filePath)
-        handles.set(filePath, existing)
-        return existing
-      }
-      const db = new DatabaseSync(filePath, { readOnly: true })
+  const openReadOnly = (filePath) => {
+    const db = new DatabaseSync(filePath, { readOnly: true })
+    try {
       db.exec('PRAGMA query_only = ON')
-      handles.set(filePath, db)
-      while (handles.size > maxOpen) {
-        const oldestKey = handles.keys().next().value
-        const oldestDb = handles.get(oldestKey)
-        handles.delete(oldestKey)
-        closeDb(oldestDb)
-      }
       return db
+    } catch (error) {
+      closeDb(db)
+      throw error
+    }
+  }
+
+  const getReadOnly = (filePath) => {
+    const existing = handles.get(filePath)
+    if (existing !== undefined) {
+      handles.delete(filePath)
+      handles.set(filePath, existing)
+      return existing
+    }
+    const db = openReadOnly(filePath)
+    handles.set(filePath, db)
+    while (handles.size > maxOpen) {
+      const oldestKey = handles.keys().next().value
+      const oldestDb = handles.get(oldestKey)
+      handles.delete(oldestKey)
+      closeDb(oldestDb)
+    }
+    return db
+  }
+
+  return {
+    getReadOnly,
+    read(filePath, query, retain = true) {
+      if (retain) return query(getReadOnly(filePath))
+      const db = openReadOnly(filePath)
+      try { return query(db) } finally { closeDb(db) }
     },
     closeFile(filePath) {
       const db = handles.get(filePath)
