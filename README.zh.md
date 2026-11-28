@@ -34,11 +34,11 @@ DS Bot 是一个基于 [DeepSeek Harness](https://github.com/deepseek-ai/deepsee
 先装好 DSH，并在 DSH 里配好至少一个模型。DS Bot 直接使用 DSH 里的模型。
 
 - **DSH Desktop**：侧栏点 **插件** → **添加插件**，包名填 `ds-bot`（在中国大陆，安装源选 **中国大陆镜像源**），点 **安装** 并 **立即启用**。
-- **DSH Web**（需要 Node.js `22.19` 以上和 pnpm）：
+- **DSH Web**（需要 Node.js `24.22.3` 以上（24.x）或 `26.13.1` 以上，以及 pnpm）：
 
 ```sh
-npx @deepseek-ai/dsh@0.2.2-rc.5 plugin --profile web add ds-bot
-npx @deepseek-ai/dsh@0.2.2-rc.5 web
+npx @deepseek-ai/dsh@0.2.3-alpha.2 plugin --profile web add ds-bot
+npx @deepseek-ai/dsh@0.2.3-alpha.2 web
 ```
 
 **Docker（NAS、Linux 服务器）**

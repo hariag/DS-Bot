@@ -14,8 +14,7 @@
 import { dirname, join } from 'node:path'
 import { rmSync, writeFileSync } from 'node:fs'
 import { composeEntries } from '@deepseek-ai/dsh-app-boot'
-import { entryListSchema } from '@deepseek-ai/cordis-plugin-include'
-import { dump } from 'js-yaml'
+import { stringifyEntryYaml } from '@deepseek-ai/cordis-plugin-include'
 
 export const GOAL_PATCH_NAME = 'goal.patch.yml'
 
@@ -60,6 +59,6 @@ export function reconcileGoal(profile) {
     rmSync(file, { force: true })
     return []
   }
-  writeFileSync(file, dump(rows, { schema: entryListSchema }), 'utf8')
+  writeFileSync(file, stringifyEntryYaml(rows), 'utf8')
   return [file]
 }

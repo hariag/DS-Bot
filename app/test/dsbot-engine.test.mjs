@@ -6,6 +6,7 @@ import { after, before, describe, test } from 'node:test'
 import { pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import * as connectionPlugin from '@deepseek-ai/dsh-client-connection'
+import * as authenticationPlugin from '@deepseek-ai/dsh-host-authentication-token'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import * as enginePlugin from '../engine/index.js'
 
@@ -178,8 +179,9 @@ describe('dsbot-engine UI static resource', () => {
     try {
       const ws = ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
       const conn = ctx.plugin(connectionPlugin, { trustedHosts: [] })
+      const auth = ctx.plugin(authenticationPlugin, { cookieMaxAgeDays: 30 })
       const eng = ctx.plugin(enginePlugin, { distDir })
-      await Promise.all([ws.await(), conn.await(), eng.await()])
+      await Promise.all([ws.await(), conn.await(), auth.await(), eng.await()])
       // Wait one turn for child plugin (`NativeDirectoryPicker`/`BrowseDirectoryPicker`) mounted inside `eng`.
       await new Promise(resolve => setImmediate(resolve))
 
@@ -198,7 +200,11 @@ describe('dsbot-engine UI static resource', () => {
         }),
       })
       try {
-        const launchUrl = ctx.connection.authenticatedUrl(`http://127.0.0.1:${String(ctx.webServer.port)}`)
+        const baseUrl = `http://127.0.0.1:${String(ctx.webServer.port)}`
+        const entries = []
+        ctx.emit(ctx.webServer, 'webserver/entry-url', baseUrl, entries)
+        const launchUrl = entries.find(entry => entry.open)?.url
+        assert.ok(launchUrl, 'the authentication plugin contributes the launch URL')
         const origin = new URL(launchUrl).origin
 
         // 1. Unauthenticated / and /Index.html both return 401.

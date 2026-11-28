@@ -38,6 +38,11 @@
       config:
         trustedHosts: []
 
+    # Launch-token exchange and the signed browser cookie around the loopback
+    # transport. DSH 0.2.3 moved this out of Connection into its own plugin.
+    - id: authentication-token
+      name: '@deepseek-ai/dsh-host-authentication-token'
+
     # This package's own plugin (index.js): launch-token exchange and static
     # asset server for DS Bot's built frontend (app/ui/dist).
     - id: engine-index

@@ -79,8 +79,12 @@ async function main() {
   // process attaches the engine log tail — the real cause — to this message.
   const missing = ['sessionController', 'workspaceRegistry'].filter(name => ctx.get(name) === undefined)
   if (missing.length > 0) throw new Error(`The profile in ${profile.dir} did not start ${missing.join(', ')}; the engine log has the cause`)
-  const url = connection.authenticatedUrl(`http://127.0.0.1:${String(webServer.port)}`)
-  // The window is the owner's page; DSH 0.2.2 builds the injections for the Peer they serve.
+  const baseUrl = `http://127.0.0.1:${String(webServer.port)}`
+  const entries = []
+  ctx.emit(webServer, 'webserver/entry-url', baseUrl, entries)
+  const url = entries.find(entry => entry.open)?.url
+  if (url === undefined) throw new Error(`The profile in ${profile.dir} did not provide an authenticated browser entry URL`)
+  // The window is the owner's page; DSH builds the injections for the Peer they serve.
   await send({ type: 'ready', url, injections: webServer.collectIndexInjections(connection.browserPeer) })
 }
 

@@ -12,7 +12,7 @@ import BrowseDirectoryPicker from '@deepseek-ai/dsh-host-directory-picker-browse
 import NativeDirectoryPicker from '@deepseek-ai/dsh-host-directory-picker-native'
 
 export const name = 'dsbot-engine'
-export const inject = ['webServer', 'connection']
+export const inject = ['webServer', 'connection', 'connection.authentication']
 
 const HTML_MIME = 'text/html; charset=utf-8'
 const MIME = {
@@ -220,20 +220,14 @@ export function apply(ctx, config) {
 
   const distDir = resolveDistDir(config)
   const authorizeIndex = (request) => {
-    let status = 401
-    let headers = new Headers()
-    let body
-    const allowed = ctx.connection.authorizeIndex(request, {
-      writeHead(nextStatus, nextHeaders) {
-        status = nextStatus
-        headers = new Headers(nextHeaders)
-      },
-      end(text) {
-        body = text
-      },
-    })
-    return allowed ? undefined : new Response(body, { status, headers })
+    try {
+      const admission = ctx.connection.authentication.authenticate(request)
+      return 'peer' in admission ? undefined : new Response(null, { status: admission.rejection, headers: SECURITY_HEADERS })
+    } catch (error) {
+      console.error('dsbot-engine authorizeIndex failed', error)
+      return new Response(null, { status: 401, headers: SECURITY_HEADERS })
+    }
   }
   const resource = createUiResource({ distDir, authorizeIndex })
-  ctx.effect(() => ctx.webServer.registerFallback({ resource }), 'dsbot-engine: ui dist fallback')
+  ctx.effect(() => ctx.webServer.registerFallback({ resource, auth: 'anonymous' }), 'dsbot-engine: ui dist fallback')
 }
