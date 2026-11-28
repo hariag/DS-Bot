@@ -681,7 +681,11 @@ export function install(rt) {
         continue
       }
       const dest = target.sessionId
-      if (!agents.has(dest)) agents.set(dest, await rt.resolveAgent(dest))
+      if (!agents.has(dest)) {
+        const agent = await rt.resolveAgent(dest)
+        await compactStartupGroupInbox(agent)
+        agents.set(dest, agent)
+      }
       const agent = agents.get(dest)
       const inInbox = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])].some(m =>
         m?.source?.exchangeId === args.exchangeId
@@ -691,7 +695,7 @@ export function install(rt) {
         active.add(dest)
         continue
       }
-      if (taken?.has(args.exchangeId) === true) {
+      if (taken?.has(args.exchangeId) === true || compactedStartupReceipts?.has(receiptKeyOf(args))) {
         forgetQueued(args.exchangeId)
         continue
       }
@@ -1379,43 +1383,70 @@ export function install(rt) {
     }
   }
 
-  async function compactGroupInboxes() {
-    if (stopped || rt.readOnly() !== undefined || typeof rt.resolveAgent !== 'function') return
-    for (const room of Object.values(rt.state?.rooms ?? {})) {
-      for (const sessionId of Object.values(room?.sessions ?? {})) {
-        if (typeof sessionId !== 'string' || sessionId === '') continue
-        const agent = await rt.resolveAgent(sessionId).catch(() => undefined)
-        const inbox = agent?.inbox
-        if (!inbox) continue
-        const all = [...(Array.isArray(inbox.nextStep) ? inbox.nextStep : []), ...(Array.isArray(inbox.nextTurn) ? inbox.nextTurn : [])]
-        const matches = all.filter(message => isCoalescableRoomMessage(message, room.id))
-        if (matches.length <= 1) continue
-        const keepId = matches.at(-1)?.id
-        let removed = 0
-        for (const [target, list] of [['next-step', inbox.nextStep], ['next-turn', inbox.nextTurn]]) {
-          if (!Array.isArray(list) || list.length === 0) continue
-          const drop = list.filter(message => message.id !== keepId && isCoalescableRoomMessage(message, room.id))
-          if (drop.length === 0) continue
-          if (typeof inbox.splice === 'function' && (drop.length === list.length || (drop.length === list.length - 1 && list.at(-1)?.id === keepId))) {
-            for (const message of inbox.splice(target, 0, drop.length, [])) {
-              removed += 1
-              if (message?.source?.exchangeId) forgetQueued(message.source.exchangeId)
-            }
-            continue
+  const startupGroupInboxes = new Map()
+  let compactedStartupReceipts
+  async function compactStartupGroupInbox(agent, signal) {
+    const sessionId = agent?.session?.id
+    const roomId = startupGroupInboxes.get(sessionId)
+    if (roomId === undefined || stopped || signal?.aborted || rt.readOnly() !== undefined) return
+    const owner = rt.groupOwners.get(sessionId)
+    const inbox = agent.inbox
+    if (!inbox) return
+    startupGroupInboxes.delete(sessionId)
+    if (owner?.roomId !== roomId || rt.roomOf(roomId)?.sessions?.[owner.botId] !== sessionId) return
+    const noteRemoval = message => {
+      if (!message.source?.exchangeId) return
+      compactedStartupReceipts?.add(receiptKeyOf(message.source))
+      forgetQueued(message.source.exchangeId)
+    }
+    try {
+      const all = [...(Array.isArray(inbox.nextStep) ? inbox.nextStep : []), ...(Array.isArray(inbox.nextTurn) ? inbox.nextTurn : [])]
+      const matches = all.filter(message => isCoalescableRoomMessage(message, roomId))
+      if (matches.length <= 1) return
+      const keepId = matches.at(-1)?.id
+      let removed = 0
+      for (const [target, list] of [['next-step', inbox.nextStep], ['next-turn', inbox.nextTurn]]) {
+        if (!Array.isArray(list) || list.length === 0) continue
+        const drop = list.filter(message => message.id !== keepId && isCoalescableRoomMessage(message, roomId))
+        if (drop.length === 0) continue
+        if (typeof inbox.splice === 'function' && (drop.length === list.length || (drop.length === list.length - 1 && list.at(-1)?.id === keepId))) {
+          for (const message of inbox.splice(target, 0, drop.length, [])) {
+            removed += 1
+            noteRemoval(message)
           }
-          if (typeof inbox.remove !== 'function') continue
-          for (const message of drop) {
-            if (inbox.remove(message.id) === true) {
-              removed += 1
-              if (message?.source?.exchangeId) forgetQueued(message.source.exchangeId)
-            }
-          }
+          continue
         }
-        if (removed > 0) {
-          if (agent.session) await ctx.sessions?.flush?.(agent.session).catch(() => {})
-          rt.warn('ds-bot: compacted %d superseded unread room messages in %s (%s)', removed, sessionId, room.name)
+        if (typeof inbox.remove !== 'function') continue
+        for (const message of drop) {
+          if (inbox.remove(message.id) === true) {
+            removed += 1
+            noteRemoval(message)
+          }
         }
       }
+      if (removed > 0) {
+        await ctx.sessions?.flush?.(agent.session).catch(() => {})
+        rt.warn('ds-bot: compacted %d superseded unread room messages in %s (%s)', removed, sessionId, rt.roomOf(roomId)?.name ?? roomId)
+      }
+    } catch (error) {
+      rt.warn('ds-bot: compacting group inbox %s failed: %s', sessionId, error)
+    }
+  }
+
+  // Cold members already have durable inboxes. Compact them after DSH restores
+  // the inbox and before it releases the Agent, without opening every room at startup.
+  ctx.on('agent/created', ({ agent, signal }) => compactStartupGroupInbox(agent, signal))
+
+  async function prepareStartupGroupInboxes() {
+    const agents = ctx.get?.('agents') ?? ctx.agents
+    for (const room of Object.values(rt.state?.rooms ?? {})) {
+      for (const sessionId of Object.values(room.sessions ?? {})) {
+        if (typeof sessionId === 'string' && sessionId !== '') startupGroupInboxes.set(sessionId, room.id)
+      }
+    }
+    for (const sessionId of startupGroupInboxes.keys()) {
+      const agent = agents?.get?.(sessionId)
+      if (agent !== undefined) await compactStartupGroupInbox(agent)
     }
   }
 
@@ -1805,6 +1836,7 @@ export function install(rt) {
     }
     const keptWorks = new Set()
     activeKeptWorks = keptWorks
+    compactedStartupReceipts = new Set()
     try {
       const { turns: noted, queued: dropped, silent: droppedSilent } = interrupted
       interrupted = { turns: {}, queued: {}, silent: {} }
@@ -1842,9 +1874,7 @@ export function install(rt) {
       }
       coord?.replaceAllDeliveries?.(queued)
       persist()
-      if (Object.keys(rt.state?.rooms ?? {}).length > 0) {
-        await compactGroupInboxes().catch(error => rt.warn('ds-bot: compacting group inboxes failed: %s', error))
-      }
+      if (Object.keys(rt.state?.rooms ?? {}).length > 0) await prepareStartupGroupInboxes()
       // Restore persisted silent notices before waking Sessions via resendQueued/resumeTurn,
       // preserving causal order without waking idle recipients (or wiping notes buffered
       // during the startup window before resumeAll ran).
@@ -1950,6 +1980,7 @@ export function install(rt) {
       await reconcileOrphanWorks(keptWorks).catch(error => rt.warn('ds-bot: reconciling orphan works failed: %s', error))
     } finally {
       activeKeptWorks = undefined
+      compactedStartupReceipts = undefined
     }
   }
 

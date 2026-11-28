@@ -127,6 +127,7 @@ test('apply registers core listeners and effects in dependency order', (t) => {
     'prompt bot-extra-folders 642',
     'on agent/inbox/discarded',
     'on session/event',
+    'on agent/created',
     'effect ds-bot: resume interrupted turns',
     'effect ds-bot: memory journal pool',
     'effect ds-bot: memory recovery',
